@@ -18,6 +18,8 @@ import { Result } from "better-result";
 
 import { closeDb, openDb, type Db } from "../core/db";
 import { JobQueue, openJobQueue, shutdownEmbeddedQueue } from "../core/queue";
+import { SourceScheduler } from "../core/scheduler";
+import { SourceManager, registryDiscoverer } from "../core/sources";
 import { ProbeFailed } from "../core/errors";
 import type { MediaInfo, Provider } from "../core/types";
 import { createRegistry } from "../providers/registry";
@@ -57,11 +59,18 @@ async function makeApp(provider: Provider = fakeProvider()) {
   db = openDb({ path: join(dir, "casatube.db") });
   queue = await openJobQueue({ db, queueDbPath: join(dir, "queue.db") });
   const watcher = createQueueWatcher(queue, { pollMs: 20, heartbeatMs: 100 });
+  const registry = createRegistry({ fallback: provider });
+  // Never started here: a scheduler that ticks during an HTTP test would make
+  // the job table move on its own.
+  const sources = new SourceManager({ db, queue, discover: registryDiscoverer(registry) });
   return createApp(
     {
+      db,
       queue,
-      registry: createRegistry({ fallback: provider }),
+      registry,
       watcher,
+      sources,
+      scheduler: new SourceScheduler({ manager: sources }),
       config: { ...loadConfig({}), dataDir: dir, dev: false },
     },
     BUNDLE,

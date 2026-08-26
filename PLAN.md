@@ -238,9 +238,16 @@ export default registerPlugin({
 });
 ```
 
-**Because `matches` is evaluated before execution**, the UI can do something
-useful: paste a URL and CasaTube shows which plugins *would* apply, what each
-would do, and a toggle for each.
+**Because `matches` is metadata, the UI can do something useful**: paste a URL
+and CasaTube shows which plugins *would* apply, what each would do, and a toggle
+for each. `setup()` is not called and no capability is handed over until a plugin
+is enabled.
+
+⚠️ **An earlier draft of this plan overstated it.** It said the manifest is read
+"before any of its code executes". That is not achievable: reading a module's
+default export means importing it, so **the top level does evaluate**. What is
+true — and what matters — is that nothing a plugin *does* runs: no hooks, no
+provider, no network. There is no parser that gets us the stronger claim.
 
 - **Global default** per plugin: on, off, or ask.
 - **Per-download override** in the download window — the recommendation comes
@@ -253,6 +260,11 @@ would do, and a toggle for each.
 `needs` lists what a plugin asks for: `network`, `library:read`,
 `library:write`, `cookies`, `subprocess`. The host injects exactly those and
 shows them at install time, the way a phone shows permissions.
+
+⚠️ **Today only `network` is actually withheld** — a plugin that did not ask for
+it receives a `fetch` that throws. The rest are declaration only: they are shown
+to the user, but nothing is held back for them, because the surface they would
+close is not injected yet. Stated plainly rather than implied.
 
 ⚠️ **Be honest about what this enforces.** Withholding a capability works for a
 *well-behaved* plugin: it simply is not handed `fetch`. It does **not** stop a

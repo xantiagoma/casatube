@@ -5,14 +5,29 @@
  * different database or a different registry — which is what makes an
  * end-to-end test possible without a real yt-dlp on the machine.
  */
+import type { Db } from "../core/db";
 import type { JobQueue } from "../core/queue";
+import type { SourceScheduler } from "../core/scheduler";
+import type { SourceManager } from "../core/sources";
 import type { ProviderRegistry } from "../providers/registry";
 import type { ServerConfig } from "./config";
 import type { QueueWatcher } from "./watcher";
 
 export interface AppContext {
+  /**
+   * The application database.
+   *
+   * The queue keeps its own handle and exposes only job operations, so the
+   * routes that read the other tables — notifications, analytics — would
+   * otherwise have to open a second connection to the same file to answer a
+   * `SELECT`.
+   */
+  db: Db;
   queue: JobQueue;
   registry: ProviderRegistry;
+  /** Subscriptions, and the timer that services them — PLAN §11, phase 4. */
+  sources: SourceManager;
+  scheduler: SourceScheduler;
   watcher: QueueWatcher;
   config: ServerConfig;
 }

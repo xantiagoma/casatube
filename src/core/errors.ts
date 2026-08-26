@@ -116,6 +116,18 @@ export class PathOutsideRoot extends TaggedError("PathOutsideRoot")<{
   root: string;
 }> {}
 
+/**
+ * `ffprobe` could not read a file we already hold.
+ *
+ * Distinct from ProbeFailed, which is about a remote source: this is a local
+ * subprocess on a file that exists, so a 502 would be a lie about where the
+ * fault is. Corrupt file, missing codec, or a mount that went away mid-read.
+ */
+export class LocalProbeFailed extends TaggedError("LocalProbeFailed")<{
+  path: string;
+  detail: string;
+}> {}
+
 export class NotFound extends TaggedError("NotFound")<{
   what: string;
   id: string;
@@ -152,7 +164,12 @@ export type ProviderError =
 
 export type WorkerError = StageFailed | Cancelled | Timeout | DiskFull | ProviderError;
 
-export type LibraryError = MountUnavailable | PathOutsideRoot | NotFound;
+export type LibraryError =
+  | MountUnavailable
+  | PathOutsideRoot
+  | NotFound
+  | LocalProbeFailed
+  | Timeout;
 
 export type QueueError = NotFound | InvalidTransition | LeaseLost;
 

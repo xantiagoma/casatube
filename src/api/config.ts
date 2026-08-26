@@ -27,6 +27,13 @@ export interface ServerConfig {
    * writes that happen to share our memory. See `events.ts`.
    */
   eventsPollMs: number;
+  /**
+   * How long a deleted item stays in `.trash/` before a purge may remove it.
+   *
+   * Deleting moves rather than unlinks, so this is the width of the undo
+   * window — the thing that makes a mistaken delete recoverable.
+   */
+  trashRetentionDays: number;
   /** Rebuild the client bundle on every page load. Off in the image. */
   dev: boolean;
 }
@@ -51,6 +58,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     cookiesFile: str(env.COOKIES_FILE),
     ytdlpBinary: str(env.YTDLP_BIN),
     eventsPollMs: int(env.EVENTS_POLL_MS, 750),
+    trashRetentionDays: int(env.TRASH_RETENTION_DAYS, 30),
     dev: env.NODE_ENV !== "production" && str(env.CASATUBE_DEV) !== undefined,
   };
 }

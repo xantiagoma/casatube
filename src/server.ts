@@ -21,13 +21,19 @@ import { Elysia } from "elysia";
 import { appDbPath, openDb, queueDbPath } from "./core/db";
 import { Worker } from "./worker/worker";
 import { openJobQueue } from "./core/queue";
+import { SourceScheduler } from "./core/scheduler";
+import { SourceManager, registryDiscoverer } from "./core/sources";
 import { createDefaultRegistry } from "./providers/registry";
 import { loadConfig, type ServerConfig } from "./api/config";
 import type { AppContext } from "./api/context";
 import { destinationRoutes } from "./api/destinations";
 import { eventRoutes } from "./api/events";
+import { notificationRoutes } from "./api/notifications";
+import { statsRoutes } from "./api/stats";
 import { jobRoutes } from "./api/jobs";
+import { libraryRoutes } from "./api/library";
 import { probeRoutes } from "./api/probe";
+import { sourceRoutes } from "./api/sources";
 import { createQueueWatcher } from "./api/watcher";
 import { buildClient, webRoutes, type ClientBundle } from "./api/web";
 
@@ -46,6 +52,10 @@ function apiRoutes(ctx: AppContext) {
     .use(jobRoutes(ctx))
     .use(probeRoutes(ctx))
     .use(destinationRoutes(ctx))
+    .use(libraryRoutes(ctx))
+    .use(sourceRoutes(ctx))
+    .use(statsRoutes(ctx))
+    .use(notificationRoutes(ctx))
     .use(eventRoutes(ctx));
 }
 
@@ -110,7 +120,18 @@ async function main(): Promise<StartedServer> {
     cookiesFile: config.cookiesFile,
   });
   const watcher = createQueueWatcher(queue, { pollMs: config.eventsPollMs });
-  const ctx: AppContext = { queue, registry, watcher, config };
+
+  // Automation. The manager writes through `queue.enqueue` like any other
+  // client, and the scheduler only decides *when* — so nothing here is a second
+  // path into the job table (PLAN §17 rule 3).
+  const sources = new SourceManager({ db, queue, discover: registryDiscoverer(registry) });
+  const scheduler = new SourceScheduler({
+    manager: sources,
+    log: (line) => console.log(`[casatube] ${line}`),
+    onError: (sourceId, error) => console.error(`[casatube] source ${sourceId}:`, error),
+  });
+
+  const ctx: AppContext = { db, queue, registry, watcher, config, sources, scheduler };
 
   const bundle = await buildClient({ dev: config.dev });
   if (bundle.error) console.error(`[casatube] client bundle failed:\n${bundle.error}`);
@@ -126,6 +147,7 @@ async function main(): Promise<StartedServer> {
     libraryDir: config.libraryDir,
   });
   void worker.start();
+  scheduler.start();
 
   const app = createApp(ctx, bundle);
   app.listen({ port: config.port, hostname: "0.0.0.0" });
@@ -136,6 +158,8 @@ async function main(): Promise<StartedServer> {
 
   const stop = async (): Promise<void> => {
     worker.stop();
+    scheduler.stop();
+    await scheduler.drain();
     watcher.stop();
     await app.stop();
     queue.close();
