@@ -19,6 +19,7 @@
 import { Elysia } from "elysia";
 
 import { appDbPath, openDb, queueDbPath } from "./core/db";
+import { Worker } from "./worker/worker";
 import { openJobQueue } from "./core/queue";
 import { createDefaultRegistry } from "./providers/registry";
 import { loadConfig, type ServerConfig } from "./api/config";
@@ -112,10 +113,17 @@ async function main(): Promise<StartedServer> {
   const bundle = await buildClient({ dev: config.dev });
   if (bundle.error) console.error(`[casatube] client bundle failed:\n${bundle.error}`);
 
-  // 📌 The worker starts here once `src/worker/` lands: claim a job, run the
-  // six stages, write progress back through `queue.update`. Nothing else in
-  // this file changes — the watcher polls the table, so the UI comes alive the
-  // moment something is writing to it, whatever process that is.
+  // The worker shares this process today, but nothing here assumes that: it
+  // talks to the queue through the database like any other client would, and
+  // the watcher polls the table rather than listening to it. That is what keeps
+  // PLAN §17 rule 3 true — no in-memory state welds the two together.
+  const worker = new Worker({
+    queue,
+    registry,
+    tempDir: config.tempDir,
+    libraryDir: config.libraryDir,
+  });
+  void worker.start();
 
   const app = createApp(ctx, bundle);
   app.listen({ port: config.port, hostname: "0.0.0.0" });
@@ -125,6 +133,7 @@ async function main(): Promise<StartedServer> {
   if (recovered > 0) console.log(`[casatube] recovered ${recovered} job(s) from the last run`);
 
   const stop = async (): Promise<void> => {
+    worker.stop();
     watcher.stop();
     await app.stop();
     queue.close();
