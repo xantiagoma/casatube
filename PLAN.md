@@ -705,6 +705,28 @@ plumbing to solve a problem we do not have.
 📌 Revisit if the browser ever needs to *stream* to the server. Nothing in the
 designs does.
 
+### Locking: we need limiters, not mutexes
+
+**Bun is single-threaded, so there are no shared-memory races here.** What a
+"mutex" would guard is the interleaving of `await`s, not concurrent access. That
+reframes the need: what this project wants is **concurrency limiters**, not
+mutual exclusion.
+
+| Case | Answer |
+|---|---|
+| Cap downloads at 3 | **bunqueue's own `concurrency`** — no library needed |
+| Don't swap the yt-dlp binary mid-download | The one genuine mutual-exclusion case, and it is ~20 lines |
+| Who owns a job after a restart | **Not a JS lock** — the expiring DB lease from §17. An in-memory mutex stops meaning anything the moment there are two processes |
+
+**Rejected:** `async-mutex` (no releases in 12 months) and especially
+`proper-lockfile` — file locks over network mounts (NFS, FUSE) are unreliable,
+and that is exactly where the library lives. It would give false confidence in
+the worst possible place.
+
+If a second case for limiting ever appears,
+[`p-limit`](https://www.npmjs.com/package/p-limit) is the maintained option. Not
+before.
+
 ### Bun is single-threaded — does that matter?
 
 **Mostly no, and it is worth being precise about why.**
