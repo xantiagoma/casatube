@@ -955,3 +955,28 @@ describe.skipIf(skipReason !== null)("live yt-dlp", () => {
     180_000,
   );
 });
+
+// --- Regressions from real use (2026-08-26) ---------------------------------
+
+test("enables a JavaScript runtime: without one YouTube deciphering degrades", () => {
+  const args = buildFetchArgs(plan(), {});
+  const i = args.indexOf("--js-runtimes");
+  expect(i).toBeGreaterThan(-1);
+  expect(args[i + 1]).toMatch(/^bun:/);
+});
+
+test("🔴 a failed subtitle must not take the video down with it", () => {
+  // Observed live: yt-dlp fetches subtitles first, so a 429 on a 440-byte .vtt
+  // aborted the whole job at 0% and the video was never attempted.
+  const args = buildFetchArgs(
+    plan({ subtitles: [{ id: "subs:en", language: "en", automatic: false }] }),
+    {},
+  );
+  expect(args).toContain("--write-subs");
+  expect(args).toContain("--no-abort-on-error");
+});
+
+test("no subtitles requested means no reason to soften error handling", () => {
+  const args = buildFetchArgs(plan({ subtitles: [] }), {});
+  expect(args).not.toContain("--no-abort-on-error");
+});

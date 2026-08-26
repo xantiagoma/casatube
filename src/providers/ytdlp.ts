@@ -767,6 +767,12 @@ export function buildFetchArgs(
     FILEPATH_TEMPLATE,
     "-P",
     workDir,
+    // YouTube needs a JavaScript runtime to decipher signatures. yt-dlp only
+    // enables deno by default, and without any runtime it warns and falls back
+    // to paths that cost extra requests — which is how a rate-limit starts.
+    // Bun is a supported runtime and is already in the image, so this costs
+    // nothing rather than the ~100 MB deno would add.
+    ...jsRuntimeArgs(),
     "-o",
     `${escapeOutputTemplate(plan.outputName)}.%(ext)s`,
     "-f",
@@ -774,9 +780,19 @@ export function buildFetchArgs(
     // Off by default in yt-dlp. Without it only the first audio survives, and a
     // multi-language file quietly becomes single-language.
     ...(plan.audio.length > 1 ? ["--audio-multistreams"] : []),
+    // 🔴 Subtitles are optional and must never take the video down with them.
+    //
+    // Observed in real use: yt-dlp fetches subtitles FIRST, so a 429 on a
+    // 440-byte .vtt aborted the whole job at 0% before the video began. The
+    // video was never even attempted.
+    //
+    // `--no-abort-on-error` keeps a failed subtitle as a warning. The sidecars
+    // that did arrive are collected afterwards by reading the directory, so a
+    // partial result is still a result.
     ...(manual.length > 0 ? ["--write-subs"] : []),
     ...(automatic.length > 0 ? ["--write-auto-subs"] : []),
     ...(subLanguages.length > 0 ? ["--sub-langs", subLanguages.join(",")] : []),
+    ...(manual.length + automatic.length > 0 ? ["--no-abort-on-error"] : []),
     ...(plan.sponsorblock
       ? [
           "--sponsorblock-remove",
@@ -788,6 +804,17 @@ export function buildFetchArgs(
     ...buildLanguageMetadataArgs(plan),
     plan.url,
   ];
+}
+
+/**
+ * Enable Bun as yt-dlp's JavaScript runtime when we can point at it.
+ *
+ * yt-dlp supports deno, node, quickjs and bun, but enables only deno by
+ * default. Bun ships in our image already, so this is free.
+ */
+function jsRuntimeArgs(): string[] {
+  const bun = process.env.BUN_BINARY ?? process.execPath;
+  return bun ? ["--js-runtimes", `bun:${bun}`] : [];
 }
 
 function defaultBinary(): string {
