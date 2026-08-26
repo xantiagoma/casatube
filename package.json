@@ -1,0 +1,27 @@
+{
+  "name": "casatube",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted media downloader that does not lose your work",
+  "scripts": {
+    "dev": "bun --watch src/server.ts",
+    "start": "bun src/server.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.0",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@elysiajs/eden": "^1.4.9",
+    "better-result": "^3.0.1",
+    "bunqueue": "^2.8.60",
+    "drizzle-orm": "^0.45.2",
+    "elysia": "^1.4.29"
+  }
+}

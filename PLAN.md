@@ -544,6 +544,9 @@ Everything by environment variable, so the image is the only artefact.
 | `COOKIES_FILE` | unset | See below |
 | `MEDIA_SERVER_URL` / `MEDIA_SERVER_TOKEN` | unset | Refresh hook after a job completes |
 | `LOG_LEVEL` | `info` | |
+| `PUID` / `PGID` | `1000` | Ownership of files written to the library — see §15 |
+| `UMASK` | `022` | Same |
+| `YTDLP_AUTO_UPDATE` | `false` | Run `yt-dlp -U` on start — see §15 |
 
 ### Cookies
 
@@ -584,7 +587,144 @@ Configuration by environment variables. Persistent state in one volume.
 
 ---
 
-## 15. Open tensions — decide, do not drift
+## 15. Policies
+
+Every one of these is configurable. What matters is the **default**, because the
+default is what happens at 3am when nobody is watching.
+
+### The destination is unavailable when a job finishes
+
+The library is usually a network mount, and it can be gone at exactly the wrong
+moment — after 800 MB have been downloaded.
+
+**Default: keep the file in the temp directory** and hold the job in a
+`waiting-for-destination` state, retrying the move on a schedule. It is never
+discarded and never silently orphaned — which is precisely what HomeTube did.
+
+⚠️ The temp directory therefore needs its own space check: a destination that
+stays down for a week must raise an alert, not quietly fill the disk.
+
+### Duplicates
+
+Before downloading anything, check whether this URL **at this configuration**
+(format, resolution, languages) already exists in the library.
+
+**Default: report "already have it" and do not download.** A different
+configuration is not a duplicate — 720p when 1080p is on disk is a real request.
+
+Always offer **force**, because the reason to re-download is usually that
+something went wrong with the first copy.
+
+### Retention
+
+**Default: never delete anything.** Neither job history nor temp files.
+
+- A **manual trigger** to clean up now.
+- An **optional duration** after which cleanup happens on its own.
+
+⚠️ Job history is what feeds the analytics charts. Deleting it changes what the
+user sees, so the UI has to say so before it happens.
+
+### Filenames
+
+Take the title from the source, strip what is illegal in a filename, and
+**show a preview of the resulting path before the job is queued** — so a bad name
+is caught before 800 MB, not after.
+
+A **manual override** is always available, as in HomeTube.
+
+Use [`filenamify`](https://www.npmjs.com/package/filenamify) rather than
+hand-rolling this: the naive version misses reserved Windows device names
+(`CON`, `NUL`), trailing dots, length limits, and Unicode look-alikes.
+
+### Notifications
+
+Persisted in the database and pushed to the browser live. Persisted because a
+notification you missed because the tab was closed is not a notification.
+
+### Backups
+
+**CasaTube does not back itself up.** The state is `DATA_DIR`; copying that
+directory is the backup, and that is what self-hosted tools generally expect.
+
+What it *will* offer is an **export**: download the databases as a file from
+Settings. Cheap to build, and it covers "I want a copy before I upgrade" without
+pretending to be a backup system.
+
+### Updating yt-dlp without rebuilding the image
+
+**Verified: `yt-dlp -U` self-updates inside a running container.** It is a Python
+script; it replaces itself.
+
+That matters because yt-dlp breaks when sites change, and waiting for a CasaTube
+release to fix a YouTube change would be absurd.
+
+- The image ships a **known-good pinned version**, and the tag records it.
+- Settings offers **"check and update yt-dlp"**, on demand.
+- Optionally, update on container start.
+
+⚠️ **The update does not survive re-creating the container** unless the binary
+lives on the volume. Decide deliberately: either accept that a `docker pull`
+resets to the pinned version, or keep yt-dlp in `DATA_DIR`. The first is more
+predictable; the second survives.
+
+### File ownership
+
+Files written to the library must be readable by the media server. Getting this
+wrong produces downloads that exist and cannot be played.
+
+**Support `PUID` / `PGID` / `UMASK`** — the linuxserver.io convention. This is
+not a guess: it is what the reference deployment already uses (`transmission`
+runs with `PUID=1000 PGID=1000`, `metube` with `UMASK=022`), so it is what a
+CasaOS user will expect.
+
+### Timeouts
+
+**Every operation touching the library mount takes a timeout.** A dead FUSE mount
+does not fail — it *hangs*, and an operation without a deadline waits forever.
+
+This is not hypothetical: on the reference deployment, reading 1 MB from a broken
+mount returned 0 bytes after 19 seconds rather than erroring, and a media manager
+sat in `importPending` indefinitely because of it.
+
+Timeouts belong on: listing the library, `stat`, the move at the end of a job,
+and disk-space checks.
+
+## 16. Runtime concerns
+
+### Realtime: SSE, not WebSockets
+
+Traffic is one-way — server to browser — for queue updates, progress and
+notifications. Actions go the other way as ordinary HTTP requests.
+
+`EventSource` **reconnects automatically**, which is the main thing a wrapper
+like [partysocket](https://www.npmjs.com/package/partysocket) exists to provide
+for WebSockets. Adopting WebSockets here would mean taking on bidirectional
+plumbing to solve a problem we do not have.
+
+📌 Revisit if the browser ever needs to *stream* to the server. Nothing in the
+designs does.
+
+### Bun is single-threaded — does that matter?
+
+**Mostly no, and it is worth being precise about why.**
+
+The heavy work is `yt-dlp` and `ffmpeg`, which are **separate processes**.
+`Bun.spawn` is async I/O: while they burn CPU, the JS thread is idle. It only
+orchestrates and parses progress lines. Adding
+[workers](https://bun.com/docs/runtime/workers) would parallelise a thread that
+is not the bottleneck.
+
+⚠️ **The real risk is elsewhere: `bun:sqlite` is synchronous.** A slow query
+blocks the event loop, and with it every SSE stream and HTTP response. Mitigation
+is indexing and keeping queries small — and the one plausible offender is
+analytics aggregation over a long job history, which is exactly where a worker
+would earn its place if it ever hurts.
+
+📌 So: no workers now. The trigger to add one is measured event-loop lag, not
+theory.
+
+## 17. Open tensions — decide, do not drift
 
 **Concurrent downloads.** The designs show a limit of 4. Default here is **1**,
 because parallel requests accelerate IP blocking (§4.3). Configurable, with the
@@ -603,7 +743,7 @@ exposed beyond it — at which point auth becomes blocking.
 
 ---
 
-## 16. Verification
+## 18. Verification
 
 "Done" means observed working, not "the tests pass". Each phase in §7 has a
 condition that can only be met by doing the thing.
@@ -633,7 +773,7 @@ version looked missing; a status endpoint excluded exactly the item type being
 verified. Before concluding something is absent or broken, confirm the check
 could have seen it.
 
-## 17. How this gets built
+## 19. How this gets built
 
 The reason this plan exists: the first attempt was orchestrated badly. Work was
 handed to parallel agents before the requirements were settled, and the brief
