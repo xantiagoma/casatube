@@ -540,7 +540,7 @@ Everything by environment variable, so the image is the only artefact.
 | `DATA_DIR` | `/data` | Database and state. One volume |
 | `TEMP_DIR` | `/data/tmp` | Downloads land here first |
 | `LIBRARY_DIR` | `/library` | Destination root. Often a network mount |
-| `MAX_CONCURRENT_DOWNLOADS` | `1` | Limits the **download stage** only — see §17 |
+| `MAX_CONCURRENT_DOWNLOADS` | `3` | Limits the **download stage** only — see §17 |
 | `COOKIES_FILE` | unset | See below |
 | `MEDIA_SERVER_URL` / `MEDIA_SERVER_TOKEN` | unset | Refresh hook after a job completes |
 | `LOG_LEVEL` | `info` | |
@@ -733,32 +733,57 @@ the "one image, one volume" property that makes this installable in one step.
 The reference designs label workers `node-01`, `node-02`, `node-03`. Slots are
 labelled the same way in the UI — visually identical, none of the cost.
 
-### The limit belongs on the download stage, not on the job
+### Three concurrent downloads, following metube
+
+**Default: `MAX_CONCURRENT_DOWNLOADS = 3`**, a rolling window — when one
+finishes, the next starts.
+
+This number is not reasoned from first principles, it is **copied from
+[metube](https://github.com/alexta69/metube)**, and that is the point:
+
+| | metube | HomeTube |
+|---|---|---|
+| Created | **2019** — seven years | 2025 — eleven months |
+| Stars / forks | **14,500 / 1,069** | 1,417 / 87 |
+| Concurrent downloads | **3** (`asyncio.Semaphore`, mode `limited`) | 1, by architecture |
+| Throttling flags | none | `--concurrent-fragments 1`, `--sleep-requests 1` |
+
+The two take opposite positions. HomeTube deliberately slows itself down;
+metube does not, and has not needed to across seven years and roughly ten times
+the users.
+
+An earlier draft of this plan argued for **1**, reasoning that connections
+multiply as `downloads × fragments` and that sixteen simultaneous connections
+from a home address stop looking like a person watching videos. That reasoning
+is sound in the abstract and **it lost to evidence**: metube's track record is a
+better instrument than my arithmetic. Santi called it.
+
+The throttling flags stay **available and off** — a lever for the day a site
+tightens, not a default penalty.
+
+### The limit applies to the download stage, not to the job
 
 Of the six stages, **only `download` touches the source**. `postprocess` is local
 ffmpeg; `move` is minutes of uploading to the library over the network. Neither
-is of any interest to YouTube.
+is of any interest to the source.
 
-A per-job limit stalls the entire queue while one job uploads — without
-protecting anything, because no request is being made to the source during it.
+A per-job limit stalls the queue while a job uploads, without protecting
+anything — no request is being made during it.
 
 ```
-MAX_CONCURRENT_DOWNLOADS = 1     # the scarce resource: IP reputation
+MAX_CONCURRENT_DOWNLOADS = 3     # the scarce resource: IP reputation
 all other stages         = free  # bounded only by CPU and the mount
 ```
 
-While one job uploads to the library, the next is already downloading.
-Throughput improves and the number of simultaneous connections to the source
-does not change — so the risk does not either.
+### Automated work is still spaced out
 
-### Automated work is throttled harder than manual
+**This is the one caution that survives**, and for a specific reason:
+**metube has no subscriptions.** Its seven years of evidence cover people
+queueing downloads by hand. They say nothing about a channel check discovering
+twenty new uploads and firing them in a burst.
 
-Two videos requested by hand are harmless. A subscription check that discovers
-twenty new uploads and fires them in a burst is the fastest way to get blocked.
-
-**Spacing between download starts**, more aggressive for automated jobs than for
-ones a human just asked for. A person waiting at the screen has earned the
-lower latency; a background sync has not.
+So: **manual jobs run at the full limit; automated ones are spaced.** Not
+generic caution — the one case the evidence does not cover.
 
 ### Built so it can become distributed later
 
