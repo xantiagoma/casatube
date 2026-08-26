@@ -320,7 +320,7 @@ but it should be a conscious one — the components become our code.
 |---|---|---|
 | **Bun + TypeScript** | One runtime for server, worker and build. Native SQLite, test runner, bundler | Node (extra tooling) |
 | **Elysia** | Bun-native, schema validation, ~20 endpoints need real routing | Hand-rolled `Bun.serve` |
-| **Drizzle ORM** | Schema as code = single source of truth for types; versioned migrations | Kysely (migrations by hand); raw SQL |
+| **Drizzle ORM** | Schema as code doubles as the type source; `drizzle-kit` **generates** migrations from the schema diff | Kysely (see below); raw SQL |
 | **bunqueue** | SQLite-backed, **no Redis**, brings priority/retries/DLQ/cron | BullMQ (needs Redis); own queue (rebuilding solved problems) |
 | **yt-dlp as external binary** | Updates independently of the app — and its freshness is exactly what breaks | yt-dlp as a Python library |
 | **React + shadcn/ui + Tailwind** | The designs are shadcn-shaped; component libraries build on it | Hand-written CSS |
@@ -328,7 +328,144 @@ but it should be a conscious one — the components become our code.
 
 ---
 
-## 10. Packaging
+### On Kysely, accurately
+
+An earlier draft of this plan said Kysely has no migrations. **That was wrong** —
+Kysely ships a real
+[migration system](https://kysely.dev/docs/migrations): `Migrator`, migration
+files, providers, up and down.
+
+The actual difference is who *writes* them. With Kysely you author each migration
+by hand and keep it in step with your types. With Drizzle the schema is declared
+once, `drizzle-kit` derives the migration from the diff, and `$inferSelect` makes
+that same schema the source of the TypeScript types.
+
+That single-source property is the reason for the choice, and it is aimed at a
+problem this project already had: in the first attempt, two modules had drifted
+into **two different definitions of `Preferences`** in the same folder. Kysely
+would type queries beautifully and still let that happen.
+
+Kysely remains a reasonable alternative if hand-written SQL migrations are
+preferred to generated ones.
+
+## 10. Data model
+
+The contract every module shares. It lives in the Drizzle schema; these are the
+inferred shapes.
+
+```ts
+type JobStatus =
+  | "queued" | "analyzing" | "downloading" | "processing"
+  | "moving" | "done" | "failed" | "cancelled";
+
+type StageName =
+  | "validate" | "analyze" | "download" | "postprocess" | "metadata" | "move";
+
+type Priority = "high" | "normal" | "low";
+
+interface Stage {
+  name: StageName;
+  status: "pending" | "running" | "done" | "failed" | "skipped";
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+}
+
+interface Job {
+  id: string;
+  url: string;
+  provider: string;          // which Provider claimed it
+  destination: string;       // library subfolder
+  title: string | null;      // cleaned, safe as a filename
+  status: JobStatus;         // derived from the running stage
+  stages: Stage[];
+  priority: Priority;
+  attempts: number;
+  maxAttempts: number;
+  paused: boolean;
+  progress: number;          // 0..100, accumulated across files
+  totalBytes: number | null;
+  doneBytes: number | null;
+  speed: number | null;      // bytes/s
+  eta: number | null;        // seconds
+  thumbnail: string | null;
+  duration: number | null;   // seconds
+  source: string | null;     // "youtube", "vimeo"…
+  log: string[];
+  error: string | null;
+  outputFile: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface Preferences {
+  originalOnly: boolean;        // exactly one audio track: the original
+  audioLanguages: string[];
+  subtitleLanguages: string[];  // ⚠️ independent of audio — R7
+  maxResolution: number;
+  sponsorblock: boolean;
+}
+
+interface Source {              // channel, playlist or watch target
+  id: string;
+  url: string;
+  name: string;
+  destination: string;
+  preferences: Preferences;
+  intervalMinutes: number;
+  enabled: boolean;
+  lastCheckedAt: string | null;
+}
+```
+
+**Seen-items are tracked per source.** Re-checking a source must not re-enqueue
+what it already saw, and adding a source must not enqueue its entire back
+catalogue — a channel with 800 videos would flood the queue and burn the IP
+budget. Adding a source marks current items as seen; only what appears *after*
+is enqueued, unless explicitly asked otherwise with a cap.
+
+## 11. Configuration
+
+Everything by environment variable, so the image is the only artefact.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `PORT` | `8520` | HTTP |
+| `DATA_DIR` | `/data` | Database and state. One volume |
+| `TEMP_DIR` | `/data/tmp` | Downloads land here first |
+| `LIBRARY_DIR` | `/library` | Destination root. Often a network mount |
+| `MAX_CONCURRENT` | `1` | See §13 — raising this raises blocking risk |
+| `COOKIES_FILE` | unset | See below |
+| `MEDIA_SERVER_URL` / `MEDIA_SERVER_TOKEN` | unset | Refresh hook after a job completes |
+| `LOG_LEVEL` | `info` | |
+
+### Cookies
+
+Some content needs a logged-in session — age-gated video, members-only
+uploads, and the *"Sign in to confirm you're not a bot"* challenge that appears
+once an IP looks suspicious.
+
+⚠️ **Cookies are credentials.** They belong on disk with restrictive permissions,
+never in the repository, never in a log line, and never echoed back through the
+API. They also **expire within hours**, and reusing them from a different IP than
+the one that created them is itself a signal — so treat them as a mitigation, not
+a fix.
+
+## 12. What this is not
+
+Naming non-goals now prevents scope drift later.
+
+- **Not a media server.** It downloads and organises; something else plays and
+  transcodes. The only integration is a refresh call.
+- **Not a torrent or debrid client.** Different pipeline entirely.
+- **Not multi-user.** One household, one library. No accounts, no per-user
+  quotas — that assumption is what makes deferring auth reasonable.
+- **Not a transcoder.** ffmpeg is used to remux, embed subtitles and fix
+  metadata. Re-encoding is out of scope.
+- **Not a scraper of arbitrary sites.** Support comes from providers; if no
+  provider handles a URL, it is refused clearly rather than half-attempted.
+
+## 13. Packaging
 
 **One Docker image, self-contained**: the app, **yt-dlp** and **ffmpeg** inside.
 No host dependencies. It must run on plain Docker, Docker Compose, or CasaOS.
@@ -341,7 +478,7 @@ Configuration by environment variables. Persistent state in one volume.
 
 ---
 
-## 11. Open tensions — decide, do not drift
+## 14. Open tensions — decide, do not drift
 
 **Concurrent downloads.** The designs show a limit of 4. Default here is **1**,
 because parallel requests accelerate IP blocking (§4.3). Configurable, with the
@@ -360,7 +497,37 @@ exposed beyond it — at which point auth becomes blocking.
 
 ---
 
-## 12. How this gets built
+## 15. Verification
+
+"Done" means observed working, not "the tests pass". Each phase in §7 has a
+condition that can only be met by doing the thing.
+
+**Unit tests** for pure logic — format and language selection above all, because
+it decides what lands in the library and it is where HomeTube's bugs live.
+
+**Integration tests** against a real SQLite file, not `:memory:`. The restart
+requirement (R2) is only meaningfully tested by closing and reopening the
+database; in memory, the test proves nothing.
+
+**End-to-end** against the real `yt-dlp` binary and a local HTTP server, so no
+network and no site is involved but the actual subprocess contract is exercised.
+That is how the two gotchas in §4.2 were found — reading the documentation would
+not have surfaced either.
+
+**Manual acceptance per phase**, and the two that matter most:
+
+- Start a download, **close the browser**, reopen it. The job finished. (R1)
+- Start a download, **`docker restart`** mid-flight. The job resumes and
+  completes. (R2)
+
+⚠️ **Watch out for instruments that lie.** Several checks during the first
+attempt reported the wrong thing: `grep -c` counted commented-out lines as
+enabled config; a container registry paginated its tag list so a published
+version looked missing; a status endpoint excluded exactly the item type being
+verified. Before concluding something is absent or broken, confirm the check
+could have seen it.
+
+## 16. How this gets built
 
 The reason this plan exists: the first attempt was orchestrated badly. Work was
 handed to parallel agents before the requirements were settled, and the brief
