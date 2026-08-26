@@ -1,0 +1,50 @@
+# Everything the image does not need. Keeping this tight matters twice:
+# a smaller build context, and no chance of a stray secret ending up in a layer.
+
+# Dependencies are installed inside the image, never copied from the host:
+# the host tree may be built for a different libc.
+node_modules/
+.bun/
+
+# VCS and tooling
+.git/
+.github/
+.gitignore
+.vscode/
+.idea/
+
+# Docs, plans and design assets (docs/mockups alone is several MB of PNG)
+docs/
+*.md
+LICENSE
+
+# Local state — never bake a database or a download into an image
+data/
+library/
+tmp/
+dist/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets and local config
+.env
+.env.*
+cookies.txt
+*.pem
+*.key
+
+# Tests do not ship. The image is the artefact, the test run is a gate.
+**/*.test.ts
+**/*.spec.ts
+**/__tests__/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Docker's own files (changing compose must not bust the build cache)
+Dockerfile
+docker-compose.yml
+docker-compose.*.yml
+.dockerignore

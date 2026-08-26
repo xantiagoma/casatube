@@ -404,6 +404,25 @@ Two moments, both of which remove a reason to leave CasaTube:
 2. **After downloading** — play the result in place, instead of switching to the
    media server to check whether it came out right.
 
+### Data ownership: TanStack Query owns it, SSE pushes to it
+
+**[TanStack Query](https://tanstack.com/query)** holds the data. Eden is the
+fetcher; pending, error, retry and revalidation come from the query rather than
+from hand-written flags in each component.
+
+**SSE is not the owner — it is a pusher.** An event updates the cache
+(`setQueryData` for a known change, `invalidateQueries` when that is simpler).
+The stream never keeps state of its own.
+
+That distinction buys something a raw `useState` + SSE arrangement loses: **if
+the stream drops, the query still holds the last good data and can refetch on
+reconnect.** With state living in the stream's own `useState`, a disconnect
+leaves a frozen table and nobody notices.
+
+Actions — enqueue, cancel, retry — are mutations that invalidate the affected
+query. The preview call is a disabled query fired when a URL is pasted, which is
+how it gets pending and error handling for free.
+
 ### The rule the frontend exists to respect
 
 **R3: the browser only observes.** This is a structural constraint, not a
