@@ -198,8 +198,10 @@ else
   RUNNING_AS_ROOT=0
   PUID="$(id -u)"
   PGID="$(id -g)"
-  APP_USER="$(id -un 2>/dev/null || echo "$PUID")"
-  APP_GROUP="$(id -gn 2>/dev/null || echo "$PGID")"
+  # busybox `id -un` on an unmapped uid prints the number *and* exits non-zero,
+  # so `|| echo` would concatenate two values. Take the first line, or fall back.
+  APP_USER="$(id -un 2>/dev/null | head -n1)"; [ -n "$APP_USER" ] || APP_USER="$PUID"
+  APP_GROUP="$(id -gn 2>/dev/null | head -n1)"; [ -n "$APP_GROUP" ] || APP_GROUP="$PGID"
   log "not running as root (uid $PUID) — PUID/PGID and ownership fixes are skipped"
 fi
 
@@ -262,6 +264,14 @@ fi
 # that runs and the one the updater rewrites, so it has to be writable by the
 # app user; seeding it from the pinned copy is what makes "restore the shipped
 # version" a `rm` away.
+# /usr/local/bin/yt-dlp is the wrapper that dispatches to YTDLP_BIN. Pointing
+# YTDLP_BIN back at it would be an infinite loop, so refuse it out loud.
+if [ "$YTDLP_BIN" = "/usr/local/bin/yt-dlp" ]; then
+  log "WARNING: YTDLP_BIN may not be /usr/local/bin/yt-dlp (that is the wrapper) — using /opt/yt-dlp/yt-dlp"
+  YTDLP_BIN="/opt/yt-dlp/yt-dlp"
+  export YTDLP_BIN
+fi
+
 ytdlp_dir="$(dirname "$YTDLP_BIN")"
 mkdir -p "$ytdlp_dir" 2>/dev/null || true
 
@@ -283,12 +293,6 @@ fi
 # Settings, not only at start.
 if [ "$RUNNING_AS_ROOT" -eq 1 ] && [ "$YTDLP_BIN" != "$YTDLP_PINNED" ]; then
   chown "$PUID:$PGID" "$ytdlp_dir" "$YTDLP_BIN"
-fi
-
-# One binary, one truth: `yt-dlp` on PATH is whatever YTDLP_BIN points at.
-if [ "$YTDLP_BIN" != "/usr/local/bin/yt-dlp" ]; then
-  ln -sfn "$YTDLP_BIN" /usr/local/bin/yt-dlp 2>/dev/null \
-    || log "WARNING: could not point /usr/local/bin/yt-dlp at $YTDLP_BIN"
 fi
 
 if is_true "$YTDLP_AUTO_UPDATE"; then
@@ -332,7 +336,19 @@ case "$status" in
 esac
 HEALTHCHECK
 
-RUN chmod 0755 /usr/local/bin/casatube-entrypoint /usr/local/bin/casatube-healthcheck
+# `yt-dlp` on PATH is a two-line wrapper rather than a symlink: it resolves
+# YTDLP_BIN at call time, so pointing YTDLP_BIN into the data volume needs no
+# write to /usr/local/bin — which a container started with `--user` cannot do.
+# The updater still sees the real binary (it resolves its own path), so `-U`
+# through the wrapper rewrites the right file.
+COPY <<'WRAPPER' /usr/local/bin/yt-dlp
+#!/bin/sh
+exec "${YTDLP_BIN:-/opt/yt-dlp/yt-dlp}" "$@"
+WRAPPER
+
+RUN chmod 0755 /usr/local/bin/casatube-entrypoint \
+               /usr/local/bin/casatube-healthcheck \
+               /usr/local/bin/yt-dlp
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD ["/usr/local/bin/casatube-healthcheck"]

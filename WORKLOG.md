@@ -5,6 +5,24 @@ session with none of this context. Newest first.
 
 ---
 
+## Pending — run when the UI lands
+
+**[React Doctor](https://www.react.doctor/docs/overview/quickstart)** over the
+frontend, once it exists:
+
+```bash
+npx react-doctor@latest                      # full scan
+npx react-doctor@latest --verbose --scope changed
+```
+
+Scans for security risks, performance regressions, over-complex components and
+hooks, and repeated JSX. It auto-detects the framework and React version.
+
+📌 Worth running **before** the shadcn/Tailwind reskin, not after: fixing a
+structural problem is cheaper while the components are still plain.
+
+---
+
 ## 2026-08-26 — Worker done, R2 proven
 
 **166 tests, 0 failures.** The acceptance test for the whole project passes:

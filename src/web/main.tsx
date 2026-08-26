@@ -4,14 +4,31 @@
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "./components/App";
+
+const client = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // The server is one hop away and the queue changes constantly; there is
+      // no snapshot of it worth reusing without checking.
+      staleTime: 0,
+      // A queue view that silently stopped updating is worse than one that
+      // reloads on focus.
+      refetchOnWindowFocus: true,
+      retry: 1,
+    },
+  },
+});
 
 const container = document.getElementById("root");
 if (!container) throw new Error("index.html has no #root — the bundle and the page disagree");
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    <QueryClientProvider client={client}>
+      <App />
+    </QueryClientProvider>
   </StrictMode>,
 );

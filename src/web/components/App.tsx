@@ -4,10 +4,15 @@
  * Deliberately one page. The router and the ten screens PLAN §8 describes come
  * later; what has to be true first is that a URL goes in and the queue can be
  * watched moving, because that is the thing the project exists to do.
+ *
+ * Note the shape of the two hooks: `useJobStream` pushes into the cache and
+ * reports only whether it is connected, and `useJobs` reads that cache and
+ * polls when it is not. Neither owns the other.
  */
 import { AddJobForm } from "./AddJobForm";
 import { QueueList } from "./QueueList";
-import { useQueue } from "../data/useQueue";
+import { useJobs } from "../data/queries";
+import { useJobStream } from "../data/stream";
 import { useTheme } from "./useTheme";
 
 const CONNECTION_LABEL: Record<string, string> = {
@@ -23,7 +28,8 @@ const THEME_LABEL: Record<string, string> = {
 };
 
 export function App(): React.JSX.Element {
-  const queue = useQueue();
+  const { connection, problem } = useJobStream();
+  const query = useJobs(connection === "live");
   const { theme, cycle } = useTheme();
 
   return (
@@ -31,9 +37,9 @@ export function App(): React.JSX.Element {
       <header className="header">
         <h1>CasaTube</h1>
         <div className="spacer" />
-        <span className={`conn ${queue.connection}`} title={queue.problem ?? undefined}>
+        <span className={`conn ${connection}`} title={problem ?? undefined}>
           <span className="dot" />
-          {CONNECTION_LABEL[queue.connection] ?? queue.connection}
+          {CONNECTION_LABEL[connection] ?? connection}
         </span>
         <button type="button" className="small" onClick={cycle}>
           {THEME_LABEL[theme]}
@@ -45,13 +51,14 @@ export function App(): React.JSX.Element {
 
       <AddJobForm />
 
-      {queue.connection === "reconnecting" && (
+      {connection === "reconnecting" && (
         <div className="note warn">
-          Lost the connection to the server. Retrying — nothing in the queue is affected.
+          Lost the live connection — falling back to refreshing every few seconds. Nothing in the queue is
+          affected.
         </div>
       )}
 
-      <QueueList jobs={queue.jobs} at={queue.at} connection={queue.connection} />
+      <QueueList query={query} connection={connection} />
     </div>
   );
 }

@@ -70,3 +70,33 @@ export function normalise<T>(response: { data: T | null; error: unknown }): Acti
   }
   return { ok: true, value: response.data };
 }
+
+/**
+ * A failed request, as an exception.
+ *
+ * React Query owns pending/error state, and it decides both by whether the
+ * query function **threw**. So the boundary between "Eden's `{ data, error }`"
+ * and "React Query's world" is exactly here: `normalise` for anywhere that
+ * wants to branch on a value, `unwrap` for anything React Query calls.
+ */
+export class ApiRequestError extends Error {
+  readonly failure: ApiFailure;
+
+  constructor(failure: ApiFailure) {
+    super(failure.message);
+    this.name = "ApiRequestError";
+    this.failure = failure;
+  }
+}
+
+/** The failure behind an unknown error, when there is one. */
+export function failureOf(error: unknown): ApiFailure | null {
+  return error instanceof ApiRequestError ? error.failure : null;
+}
+
+/** Eden's response, or a throw. What every `queryFn` and `mutationFn` returns. */
+export function unwrap<T>(response: { data: T | null; error: unknown }): T {
+  const result = normalise(response);
+  if (!result.ok) throw new ApiRequestError(result.error);
+  return result.value;
+}

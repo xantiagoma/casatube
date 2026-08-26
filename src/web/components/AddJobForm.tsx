@@ -1,23 +1,29 @@
 /**
  * Paste a URL, get a job.
  *
- * Two rules shape this form:
+ * Three rules shape this form:
  *
  * 🔴 **R7 — audio and subtitle languages are independent.** They are two
  * separate fields and neither is ever derived from the other. HomeTube couples
  * them, which is why asking for English audio silently changes which subtitles
  * you get (PLAN §4.1). Two inputs is the fix, and it has to stay two inputs.
  *
- * ⚠️ **Preview is optional and separate.** It costs a network round trip to the
- * source and spends the IP budget (PLAN §4.3), so it happens only when asked
- * for — and never as a precondition of queueing, because a slow source must not
- * be able to stop a job from being recorded.
+ * ⚠️ **Preview is separate from queueing.** It costs a round trip to the source
+ * and spends the IP budget (PLAN §4.3), so it fires on a deliberate act — the
+ * button, or an actual paste — and never per keystroke. And it is never a
+ * precondition of queueing: a slow source must not be able to stop a job from
+ * being recorded.
+ *
+ * The only `useState` here is what the user has typed. Pending, error and
+ * result all come from the mutation and the query — the form owns the form, the
+ * data layer owns everything else.
  */
-import { useState, type FormEvent } from "react";
+import { useState, type ClipboardEvent, type FormEvent } from "react";
 
 import { DEFAULT_PREFERENCES, type Preferences } from "../../core/types";
+import { failureOf } from "../data/client";
 import { formatDuration } from "../data/format";
-import { enqueue, probe, useAction, type EnqueueOutcome, type ProbeResult } from "../data/useQueue";
+import { useEnqueue, useProbe } from "../data/queries";
 
 /** `en, es-419  pt-BR` → `["en","es-419","pt-BR"]`. Commas or spaces, either way. */
 function parseLanguages(raw: string): string[] {
@@ -29,6 +35,11 @@ function parseLanguages(raw: string): string[] {
 
 const RESOLUTIONS = [2160, 1440, 1080, 720, 480, 360] as const;
 
+function messageOf(error: Error | null): string | null {
+  if (!error) return null;
+  return failureOf(error)?.message ?? error.message;
+}
+
 export function AddJobForm(): React.JSX.Element {
   const [url, setUrl] = useState("");
   const [destination, setDestination] = useState("");
@@ -39,11 +50,11 @@ export function AddJobForm(): React.JSX.Element {
   const [sponsorblock, setSponsorblock] = useState(DEFAULT_PREFERENCES.sponsorblock);
   const [embedSubtitles, setEmbedSubtitles] = useState(DEFAULT_PREFERENCES.embedSubtitles);
 
-  const [preview, setPreview] = useState<ProbeResult | null>(null);
-  const [outcome, setOutcome] = useState<EnqueueOutcome | null>(null);
-
-  const submit = useAction(enqueue);
-  const look = useAction(probe);
+  const enqueue = useEnqueue();
+  // Disabled until asked. The key carries the URL, so editing the field drops
+  // the old preview rather than leaving a stale title beside a different video.
+  const preview = useProbe(url);
+  const info = preview.data?.info ?? null;
 
   const preferences = (): Preferences => ({
     originalOnly,
@@ -55,40 +66,52 @@ export function AddJobForm(): React.JSX.Element {
     embedSubtitles,
   });
 
-  const send = async (force: boolean): Promise<void> => {
-    const result = await submit.run({
-      url,
-      destination,
-      preferences: preferences(),
-      force,
-      // Carried over from the preview when there is one, so the row has a title
-      // before the worker has looked at it.
-      title: preview?.info.title,
-      thumbnail: preview?.info.thumbnail,
-      duration: preview?.info.duration,
-      source: preview?.info.source,
-    });
-    if (result.ok) {
-      setOutcome(result.value);
-      if (result.value.outcome === "queued") {
-        setUrl("");
-        setPreview(null);
-      }
-    }
+  const send = (force: boolean): void => {
+    enqueue.mutate(
+      {
+        url,
+        destination,
+        preferences: preferences(),
+        force,
+        // Carried over from the preview when there is one, so the row has a
+        // title before the worker has looked at it.
+        title: info?.title,
+        thumbnail: info?.thumbnail,
+        duration: info?.duration,
+        source: info?.source,
+      },
+      {
+        onSuccess: (result) => {
+          // Clearing on `duplicate` would take away the URL the user needs in
+          // order to press "download it again anyway".
+          if (result.outcome === "queued") setUrl("");
+        },
+      },
+    );
   };
 
   const onSubmit = (event: FormEvent): void => {
     event.preventDefault();
-    void send(false);
+    send(false);
   };
 
-  const onPreview = async (): Promise<void> => {
-    setOutcome(null);
-    const result = await look.run(url);
-    setPreview(result.ok ? result.value : null);
+  /**
+   * A paste is a deliberate act — unlike typing — so it is a fair moment to
+   * spend one probe. The value has not landed in state yet at this point, so
+   * the field is left to update and the refetch is queued behind it.
+   */
+  const onPaste = (event: ClipboardEvent<HTMLInputElement>): void => {
+    const pasted = event.clipboardData.getData("text").trim();
+    if (pasted === "") return;
+    setUrl(pasted);
+    event.preventDefault();
+    queueMicrotask(() => void preview.refetch());
   };
 
-  const busy = submit.pending || look.pending;
+  const busy = enqueue.isPending || preview.isFetching;
+  const outcome = enqueue.data ?? null;
+  const enqueueError = messageOf(enqueue.error);
+  const previewError = messageOf(preview.error);
 
   return (
     <form className="card" onSubmit={onSubmit}>
@@ -103,9 +126,10 @@ export function AddJobForm(): React.JSX.Element {
             inputMode="url"
             placeholder="https://www.youtube.com/watch?v=…"
             value={url}
+            onPaste={onPaste}
             onChange={(event) => {
               setUrl(event.target.value);
-              setOutcome(null);
+              enqueue.reset();
             }}
             required
           />
@@ -200,15 +224,15 @@ export function AddJobForm(): React.JSX.Element {
 
       <div className="actions">
         <button type="submit" className="primary" disabled={busy || url.trim() === ""}>
-          {submit.pending ? "Queueing…" : "Download"}
+          {enqueue.isPending ? "Queueing…" : "Download"}
         </button>
-        <button type="button" disabled={busy || url.trim() === ""} onClick={() => void onPreview()}>
-          {look.pending ? "Looking…" : "Preview first"}
+        <button type="button" disabled={busy || url.trim() === ""} onClick={() => void preview.refetch()}>
+          {preview.isFetching ? "Looking…" : "Preview first"}
         </button>
       </div>
 
-      {submit.error && <div className="note error">{submit.error.message}</div>}
-      {look.error && <div className="note error">{look.error.message}</div>}
+      {enqueueError && <div className="note error">{enqueueError}</div>}
+      {previewError && <div className="note error">{previewError}</div>}
 
       {/* The two outcomes of `enqueue`, kept visibly apart — that distinction is
           the whole reason the server returns `outcome` instead of just a job. */}
@@ -229,43 +253,41 @@ export function AddJobForm(): React.JSX.Element {
           ) : null}
           .
           <div className="actions">
-            <button type="button" className="small" disabled={busy} onClick={() => void send(true)}>
+            <button type="button" className="small" disabled={busy} onClick={() => send(true)}>
               Download it again anyway
             </button>
           </div>
         </div>
       )}
 
-      {preview && (
+      {info && (
         <div className="preview">
-          {preview.info.thumbnail && <img src={preview.info.thumbnail} alt="" />}
+          {info.thumbnail && <img src={info.thumbnail} alt="" />}
           <div style={{ minWidth: 0 }}>
-            <strong style={{ overflowWrap: "anywhere" }}>{preview.info.title}</strong>
+            <strong style={{ overflowWrap: "anywhere" }}>{info.title}</strong>
             <dl>
               <dt>Source</dt>
               <dd>
-                {preview.info.source}
-                {preview.info.uploader ? ` · ${preview.info.uploader}` : ""}
+                {info.source}
+                {info.uploader ? ` · ${info.uploader}` : ""}
               </dd>
               <dt>Length</dt>
-              <dd>{formatDuration(preview.info.duration)}</dd>
+              <dd>{formatDuration(info.duration)}</dd>
               <dt>Audio</dt>
               <dd>
-                {preview.info.audioTracks.length === 0
+                {info.audioTracks.length === 0
                   ? "—"
                   : [
                       ...new Set(
-                        preview.info.audioTracks.map(
-                          (track) => `${track.language}${track.isOriginal ? " (original)" : ""}`,
-                        ),
+                        info.audioTracks.map((track) => `${track.language}${track.isOriginal ? " (original)" : ""}`),
                       ),
                     ].join(", ")}
               </dd>
               <dt>Subtitles</dt>
               <dd>
-                {preview.info.subtitles.length === 0
+                {info.subtitles.length === 0
                   ? "—"
-                  : [...new Set(preview.info.subtitles.map((track) => track.language))].join(", ")}
+                  : [...new Set(info.subtitles.map((track) => track.language))].join(", ")}
               </dd>
             </dl>
           </div>

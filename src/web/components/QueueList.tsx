@@ -1,23 +1,29 @@
 /**
  * The queue, live.
  *
- * Every row comes from the last SSE snapshot — nothing here is local state, so
- * there is no way for the screen to remember something the server has forgotten
- * (R3).
+ * Every row comes from the React Query cache, which the SSE stream keeps
+ * current. Nothing here is local state, so there is no way for the screen to
+ * remember something the server has forgotten (R3) — and when the stream drops,
+ * the last good snapshot is still on screen with the query refreshing it,
+ * rather than a frozen table nobody notices.
  */
-import type { Job } from "../../core/types";
+import type { UseQueryResult } from "@tanstack/react-query";
+
 import { formatClock } from "../data/format";
-import type { ConnectionState } from "../data/useQueue";
+import { failureOf } from "../data/client";
+import type { QueueSnapshot } from "../data/queries";
+import type { ConnectionState } from "../data/stream";
 import { JobCard } from "./JobCard";
 
 interface QueueListProps {
-  jobs: Job[];
-  at: string | null;
+  query: UseQueryResult<QueueSnapshot, Error>;
   connection: ConnectionState;
 }
 
-export function QueueList({ jobs, at, connection }: QueueListProps): React.JSX.Element {
+export function QueueList({ query, connection }: QueueListProps): React.JSX.Element {
+  const jobs = query.data?.jobs ?? [];
   const active = jobs.filter((job) => job.status !== "done" && job.status !== "cancelled").length;
+  const error = query.error ? (failureOf(query.error)?.message ?? query.error.message) : null;
 
   return (
     <section>
@@ -26,16 +32,19 @@ export function QueueList({ jobs, at, connection }: QueueListProps): React.JSX.E
         <span className="meta">
           {jobs.length} job{jobs.length === 1 ? "" : "s"}
           {active > 0 ? ` · ${active} not finished` : ""}
-          {at ? ` · updated ${formatClock(at)}` : ""}
+          {query.data ? ` · updated ${formatClock(query.data.at)}` : ""}
+          {/* Only worth showing when the push is down; otherwise every snapshot
+              would flash a spinner for something that is working perfectly. */}
+          {connection !== "live" && query.isFetching ? " · refreshing" : ""}
         </span>
       </div>
 
-      {jobs.length === 0 ? (
-        <p className="empty">
-          {connection === "live"
-            ? "Nothing queued yet. Paste a URL above and it will show up here."
-            : "Waiting for the server…"}
-        </p>
+      {error && <div className="note error">Could not read the queue: {error}</div>}
+
+      {query.isPending ? (
+        <p className="empty">Loading the queue…</p>
+      ) : jobs.length === 0 ? (
+        <p className="empty">Nothing queued yet. Paste a URL above and it will show up here.</p>
       ) : (
         <div className="jobs">
           {jobs.map((job) => (

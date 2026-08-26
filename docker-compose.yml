@@ -1,0 +1,115 @@
+# CasaTube — Docker Compose deployment.
+#
+#   docker compose up -d          # start (pulls or builds)
+#   docker compose logs -f        # watch
+#   docker compose down           # stop; the volumes survive
+#
+# Full reference, including every environment variable: docs/DEPLOY.md
+
+services:
+  casatube:
+    # ⚠️ The tag carries the yt-dlp release date as well as the app version
+    # (PLAN §14). Pinning only the app version silently pins a stale yt-dlp,
+    # and a stale yt-dlp is a downloader that stops working when YouTube moves.
+    # Build the tag with scripts in docs/DEPLOY.md § Building the image.
+    image: casatube:${CASATUBE_VERSION:-0.1.0}-ytdlp-${YTDLP_VERSION:-2026.08.19}
+
+    # Remove the `build:` block when pulling a published image instead.
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        YTDLP_VERSION: ${YTDLP_VERSION:-2026.08.19}
+
+    container_name: casatube
+    restart: unless-stopped
+
+    ports:
+      - "${CASATUBE_PORT:-8520}:8520"
+
+    environment:
+      # ── Identity: files written to the library must be readable by the media
+      # server. This is the linuxserver.io convention the rest of the
+      # deployment already uses (transmission, metube) — PLAN §15.
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      UMASK: ${UMASK:-022}
+      TZ: ${TZ:-America/Bogota}
+
+      # ── Paths inside the container. Change the volumes below, not these.
+      DATA_DIR: /data
+      TEMP_DIR: /data/tmp
+      LIBRARY_DIR: /library
+
+      # ── Behaviour
+      PORT: 8520
+      MAX_CONCURRENT_DOWNLOADS: ${MAX_CONCURRENT_DOWNLOADS:-3}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # ── yt-dlp
+      # false: the container always starts on the version the tag names.
+      # true:  `yt-dlp -U` runs on every start.
+      YTDLP_AUTO_UPDATE: ${YTDLP_AUTO_UPDATE:-false}
+      # Default (/opt/yt-dlp/yt-dlp) lives in the image: an update is lost when
+      # the container is recreated. Point it into /data to make updates
+      # survive — and to take responsibility for the version. See
+      # docs/DEPLOY.md § Updating yt-dlp.
+      YTDLP_BIN: ${YTDLP_BIN:-/opt/yt-dlp/yt-dlp}
+
+      # ── Optional
+      # COOKIES_FILE: /data/cookies.txt      # ⚠️ credentials — chmod 600
+      # MEDIA_SERVER_URL: http://jellyfin:8096
+      # MEDIA_SERVER_TOKEN: ${MEDIA_SERVER_TOKEN}
+
+    volumes:
+      # State: both SQLite databases, temp downloads, yt-dlp's own config and
+      # cache. This one directory is the backup (PLAN §15).
+      - ${CASATUBE_DATA:-./data}:/data
+
+      # The library. Usually a network mount — see docs/DEPLOY.md § A library on
+      # a network mount for the NFS/SMB variants and why `:z`/`nocopy` matter.
+      - ${CASATUBE_LIBRARY:-./library}:/library
+
+    # The image declares its own HEALTHCHECK (it asks the server whether it is
+    # answering). Overridden here only to name the start period explicitly:
+    # migrations and queue recovery run before the first request is served.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/casatube-healthcheck"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+    # yt-dlp and ffmpeg are separate processes and the temp directory can fill
+    # with partial downloads; neither is a reason to let the container eat the
+    # host. Raise if 1080p merges start being killed.
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 2g
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ── A library on a network mount ─────────────────────────────────────────────
+# Prefer mounting on the *host* and bind-mounting it above: a host mount is
+# visible to `df`, survives a compose recreate, and fails in one obvious place.
+#
+# If you would rather Compose own the mount, declare it as a named volume and
+# point CASATUBE_LIBRARY at it:
+#
+# volumes:
+#   library:
+#     driver: local
+#     driver_opts:
+#       type: nfs
+#       o: "addr=192.168.1.10,nfsvers=4,rw,soft,timeo=100,retrans=3"
+#       device: ":/export/media"
+#
+# ⚠️ `soft` with a timeout is deliberate. A `hard` NFS mount that goes away does
+# not return an error — it hangs, forever, and takes the operation with it
+# (PLAN §15 § Timeouts). CasaTube puts deadlines on library operations, but the
+# mount options are the other half of that.

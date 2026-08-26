@@ -1,14 +1,16 @@
 /**
  * One row of the queue.
  *
- * Presentation only: it receives a `Job` and two callbacks, and knows nothing
- * about how either reaches the server. That is what makes the later skin a
- * rewrite of this file alone.
+ * It takes a `Job` and renders it. The two buttons call mutations from the data
+ * layer and read their pending and error state straight off them — no local
+ * flags, so there is nothing here that can disagree with the server about what
+ * is happening. That is what makes the later skin a rewrite of this file alone.
  */
 import { useState } from "react";
 
 import type { Job } from "../../core/types";
-import { cancelJob, retryJob, useAction } from "../data/useQueue";
+import { failureOf } from "../data/client";
+import { useCancelJob, useRetryJob } from "../data/queries";
 import { formatBytes, formatDuration, formatPercent, formatRelative, formatSpeed } from "../data/format";
 import { isTerminal, statusLook } from "./status";
 import { StageTrack } from "./StageTrack";
@@ -30,8 +32,9 @@ function percentOf(job: Job): number {
 
 export function JobCard({ job }: { job: Job }): React.JSX.Element {
   const [showLog, setShowLog] = useState(false);
-  const cancel = useAction(cancelJob);
-  const retry = useAction(retryJob);
+  // React Query owns pending and error for both buttons; nothing is tracked here.
+  const cancel = useCancelJob();
+  const retry = useRetryJob();
 
   const look = statusLook(job.status);
   const percent = percentOf(job);
@@ -51,20 +54,20 @@ export function JobCard({ job }: { job: Job }): React.JSX.Element {
             <button
               type="button"
               className="small danger"
-              disabled={cancel.pending}
-              onClick={() => void cancel.run(job.id)}
+              disabled={cancel.isPending}
+              onClick={() => cancel.mutate(job.id)}
             >
-              {cancel.pending ? "Cancelling…" : "Cancel"}
+              {cancel.isPending ? "Cancelling…" : "Cancel"}
             </button>
           )}
           {(job.status === "failed" || job.status === "cancelled") && (
             <button
               type="button"
               className="small"
-              disabled={retry.pending}
-              onClick={() => void retry.run(job.id)}
+              disabled={retry.isPending}
+              onClick={() => retry.mutate(job.id)}
             >
-              {retry.pending ? "Retrying…" : "Retry"}
+              {retry.isPending ? "Retrying…" : "Retry"}
             </button>
           )}
           {job.log.length > 0 && (
@@ -120,8 +123,8 @@ export function JobCard({ job }: { job: Job }): React.JSX.Element {
         </div>
       )}
 
-      {cancel.error && <div className="note error">{cancel.error.message}</div>}
-      {retry.error && <div className="note error">{retry.error.message}</div>}
+      {cancel.error && <div className="note error">{failureOf(cancel.error)?.message ?? cancel.error.message}</div>}
+      {retry.error && <div className="note error">{failureOf(retry.error)?.message ?? retry.error.message}</div>}
 
       {showLog && (
         <pre className="note" style={{ maxHeight: 240, overflow: "auto", whiteSpace: "pre-wrap" }}>
