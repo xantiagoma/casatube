@@ -69,10 +69,29 @@ flowchart TB
     style B stroke-dasharray: 5 5
 ```
 
-**Download to local disk, move at the end.** The destination is typically a
-network mount. Writing there during a download is slow and leaves partial files
-visible to the media server. Measured on the reference deployment: **28 Mbps** to
-the remote host, and writes are not visible immediately (write-back cache).
+**Download to a working directory, move when complete.** This holds regardless
+of how storage is arranged, for reasons that have nothing to do with networks:
+
+- A partially written file must never be visible to the media server, which
+  would happily index a broken video.
+- A failed or cancelled download leaves nothing behind in the library.
+- The publish step is a single move, so a file either exists complete or does
+  not exist.
+
+**How expensive that move is depends entirely on the deployment**, and all of
+these are supported:
+
+| Layout | The move is |
+|---|---|
+| Temp and library on the same filesystem | a **rename** — instant |
+| Fast SSD for temp, large HDD for the library | a local copy — fast |
+| Library on a network mount (rclone, Taildrive, NFS…) | an upload — minutes |
+
+The reference deployment is the last of these, which is where the numbers in
+this plan come from: **28 Mbps** to the remote host, and writes not visible
+immediately because of the write-back cache. That case is supported and
+informs the timeouts, but it is **not the assumption** — same-machine is
+probably the common one.
 
 ---
 
