@@ -14,6 +14,8 @@
   },
   "devDependencies": {
     "@types/bun": "^1.4.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
     "drizzle-kit": "^0.31.10",
     "typescript": "^7.0.2"
   },
@@ -24,6 +26,8 @@
     "drizzle-orm": "^0.45.2",
     "elysia": "^1.4.29",
     "filenamify": "^7.0.2",
-    "ohash": "^2.0.12"
+    "ohash": "^2.0.12",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   }
 }

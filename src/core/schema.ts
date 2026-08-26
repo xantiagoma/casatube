@@ -11,7 +11,7 @@
  */
 import { sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import type { Preferences, Stage } from "./types";
+import type { DownloadPlan, Preferences, Stage } from "./types";
 
 const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
 
@@ -20,8 +20,14 @@ export const jobs = sqliteTable(
   {
     id: text("id").primaryKey(),
     url: text("url").notNull(),
-    /** Which provider claimed this URL. */
-    provider: text("provider").notNull(),
+    /**
+     * Which provider claimed this URL.
+     *
+     * Null until the `validate` stage resolves it: at enqueue time nobody has
+     * asked yet, and requiring it there would mean resolving a provider before
+     * the job is durable — work done outside the thing that survives a restart.
+     */
+    provider: text("provider"),
     /** Library subfolder, never an absolute path. */
     destination: text("destination").notNull(),
     /** Cleaned and safe as a filename; null until analysed. */
@@ -64,6 +70,16 @@ export const jobs = sqliteTable(
     thumbnail: text("thumbnail"),
     duration: integer("duration"),
     source: text("source"),
+
+    /**
+     * What `analyze` decided: formats, tracks, language tags.
+     *
+     * Durable because it is a decision about this job, not a working value. A
+     * resume that skipped `analyze` would otherwise lose it and silently
+     * download nothing — and re-probing on every resume would spend IP budget
+     * to recompute something that has not changed.
+     */
+    plan: text("plan", { mode: "json" }).$type<DownloadPlan | null>(),
 
     /** Preferences resolved for this job, serialised. */
     preferences: text("preferences", { mode: "json" }).$type<Preferences>().notNull(),

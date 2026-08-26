@@ -5,6 +5,38 @@ session with none of this context. Newest first.
 
 ---
 
+## 2026-08-26 — Worker done, R2 proven
+
+**166 tests, 0 failures.** The acceptance test for the whole project passes:
+
+> Start a job, interrupt it **mid-download**, close both database files, shut
+> the embedded queue manager down, boot again against the same paths — the job
+> recovers with its bytes intact, is claimable again, and completes.
+
+Nothing in that test uses `:memory:`. R1 needs no test: the browser is not
+involved in the worker at all, which makes it true by construction.
+
+### Two design faults that only surfaced by running it
+
+Both were mine, and neither would have been caught by reading the code.
+
+**`jobs.provider` was `NOT NULL`, but nobody knows the provider at enqueue
+time** — it is resolved in `validate`. Requiring it earlier would mean resolving
+a provider *before the job is durable*, which is work done outside the thing
+that survives a restart. Now nullable, recorded by `validate`.
+
+**The plan lived only in a variable.** On resume, `analyze` is already `done` so
+it is skipped — and the plan went with the dead process. The job then
+"downloaded" nothing and reported success. Now `jobs.plan` is a column: it is a
+*decision about the job*, not a working value, and re-probing on every resume
+would spend IP budget recomputing something that has not changed.
+
+📌 The second one is the more interesting failure: the pipeline was correct, the
+persistence was correct, and the seam between them lost the work silently. That
+is exactly the shape of the bug this project exists to eliminate.
+
+---
+
 ## 2026-08-26 — Phase 1 core landed
 
 **164 tests, 0 failures** (5 skipped: they need the network). `tsc` clean.

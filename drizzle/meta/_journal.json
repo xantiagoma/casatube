@@ -15,6 +15,20 @@
       "when": 1787723462199,
       "tag": "0001_odd_apocalypse",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787724577906,
+      "tag": "0002_greedy_trauma",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1787724639784,
+      "tag": "0003_unusual_wong",
+      "breakpoints": true
     }
   ]
 }

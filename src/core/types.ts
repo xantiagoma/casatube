@@ -90,8 +90,13 @@ export type Notification = typeof notifications.$inferSelect;
 
 export interface EnqueueInput {
   url: string;
-  /** Which provider claimed the URL. */
-  provider: string;
+  /**
+   * Which provider claimed the URL — optional, and usually absent.
+   *
+   * Resolving a provider before the job is durable would mean doing work
+   * outside the thing that survives a restart. The `validate` stage records it.
+   */
+  provider?: string;
   /** Library subfolder, never an absolute path. */
   destination: string;
   preferences?: Partial<Preferences>;
@@ -127,6 +132,8 @@ export type JobPatch = Partial<
     Job,
     | "status"
     | "title"
+    | "provider"
+    | "plan"
     | "stages"
     | "progress"
     | "totalBytes"

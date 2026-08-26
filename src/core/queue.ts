@@ -244,7 +244,7 @@ export class JobQueue {
       .values({
         id,
         url: input.url,
-        provider: input.provider,
+        provider: input.provider ?? null,
         destination: input.destination,
         title: input.title ?? null,
         status: "queued",
