@@ -321,7 +321,7 @@ but it should be a conscious one — the components become our code.
 | **Bun + TypeScript** | One runtime for server, worker and build. Native SQLite, test runner, bundler | Node (extra tooling) |
 | **Elysia** | Bun-native, schema validation, ~20 endpoints need real routing | Hand-rolled `Bun.serve` |
 | **Drizzle ORM** | Schema as code doubles as the type source; `drizzle-kit` **generates** migrations from the schema diff | Kysely (see below); raw SQL |
-| **bunqueue** | SQLite-backed, **no Redis**, brings priority/retries/DLQ/cron | BullMQ (needs Redis); own queue (rebuilding solved problems) |
+| **Own queue over Drizzle/SQLite** | The queue *is* the project — R1 and R2 live in it. Small, ours, fully tested | bunqueue (see below); BullMQ (needs Redis); effect-mq (no SQLite) |
 | **yt-dlp as external binary** | Updates independently of the app — and its freshness is exactly what breaks | yt-dlp as a Python library |
 | **React + shadcn/ui + Tailwind** | The designs are shadcn-shaped; component libraries build on it | Hand-written CSS |
 | **SSE** | One-way server→browser is all we need | WebSockets |
@@ -424,6 +424,37 @@ without the runtime, if stricter validation is wanted before that.
 ⚠️ **Accepted cost of `better-result`**: three major versions and 27 releases in
 twelve months. The API moves. Acceptable for a library this small, but it is not
 frozen.
+
+### On the queue, and why it is ours
+
+An earlier draft picked [bunqueue](https://github.com/egeominotti/bunqueue) and
+dismissed writing our own as "rebuilding solved problems". Looking at it properly
+inverts that:
+
+| | |
+|---|---|
+| Version | 2.8.60 |
+| First published | **7 months ago** |
+| Releases in 12 months | **277** — roughly five a week |
+| Surface | MCP server, CLI, client/server split, benchmarks |
+
+It is not a small embeddable queue; it is a job-queue *product*, young and moving
+fast. **R1 and R2 — a job surviving the browser and surviving a restart — are the
+reason this project exists.** Resting them on the fastest-moving dependency in
+the stack is backwards.
+
+What we actually need is narrow: atomic claim of the next job, ordering by
+priority, retry with growing backoff, terminal states, and **returning in-flight
+jobs to the queue on startup**. In the first attempt that was ~250 lines with 25
+tests, including restart recovery exercised against a real database file.
+
+Drizzle already provides the schema and migrations, so these are simply more
+tables — rather than a second system with its own error idiom sitting next to
+`better-result`.
+
+⚠️ **What we give up**: a dead-letter queue and cron scheduling, both of which
+bunqueue provides. Cron we need anyway for source polling (§7 phase 4) and will
+build; a DLQ is, for us, just a terminal `failed` state that is queryable.
 
 ## 11. Data model
 
