@@ -471,6 +471,45 @@ would type queries beautifully and still let that happen.
 Kysely remains a reasonable alternative if hand-written SQL migrations are
 preferred to generated ones.
 
+### Utilities, from xtandard
+
+Picked from [xantiagoma/xtandard](https://github.com/xantiagoma/xtandard),
+Santi's own list of libraries he has used and trusts. Only what earns its place
+here — adopting the whole list would be its own problem.
+
+| Library | Where it earns its place |
+|---|---|
+| [cockatiel](https://github.com/connor4312/cockatiel) | Retry, backoff and **circuit breaker**. `RateLimited` and `Blocked` (§10) need more than a retry loop: when a source starts refusing us, the correct move is to stop asking for a while — that is a circuit breaker, and writing one correctly is not trivial |
+| [ohash](https://github.com/unjs/ohash) | Stable hash of `{url + resolved configuration}` — the key duplicate detection compares (§15) |
+| [ufo](https://github.com/unjs/ufo) | URL parsing and normalisation for provider `supports()` and plugin `matches` — the place where hand-rolled parsing quietly gets hosts and query strings wrong |
+| [drizzle-cursor](https://github.com/xantiagoma/drizzle-cursor) | Cursor pagination for the library listing, which is the one query that grows without bound |
+| [drizzle-audit](https://github.com/xantiagoma/drizzle-audit) | The deletion audit record §18 asks for, without hand-rolling it |
+| [xbytes](https://github.com/Zak-Olyarnik/xbytes) | Sizes and speeds in the UI |
+| [es-toolkit](https://github.com/toss/es-toolkit) | General utilities |
+| [@total-typescript/ts-reset](https://github.com/total-typescript/ts-reset) | Fixes TypeScript's lying built-in types |
+| [Sonner](https://sonner.emilkowal.ski/) | Toasts for the notification surface (§15) |
+| [`@xtandard/lib/tanstack`](https://github.com/xantiagoma/xtandard/blob/main/docs/TANSTACK.md) | nuqs-style URL state — see below |
+
+**On URL state.** The Library screen filters by media type, source, resolution,
+tags and sort order. TanStack's own `useSearch` treats search as **route-contract
+state**, which is right for loaders and awkward for a reusable filter component
+that should not know which route it is on. `@xtandard/lib/tanstack` rebuilds the
+nuqs model — per-key parsers, component-owned keys — on top of TanStack
+navigation. That is exactly the shape these filters have.
+
+**Considered and not adopted:**
+
+- [permix](https://www.npmjs.com/package/permix) — a real authorisation library,
+  aimed at users and roles. Plugin capabilities (§5) are a much smaller thing,
+  and §5 is explicit that they are a UI contract rather than a security
+  boundary. Revisit if authentication ever lands.
+- The [sync/async-adaptive
+  pattern](https://github.com/xantiagoma/xtandard/blob/main/docs/sync-async-adaptive.md) —
+  elegant, and it does not apply here. This codebase is async end to end
+  (subprocesses, database, network), and the microtask savings are irrelevant
+  next to an 800 MB download. The one place it would fit is synchronous hooks —
+  a regex URL rewrite — where the cost does not matter either.
+
 ## 10. Errors
 
 Failure is normal here, not exceptional: a site changes, a format disappears, a
