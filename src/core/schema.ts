@@ -11,6 +11,7 @@
  */
 import { sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import type { Preferences, Stage } from "./types";
 
 const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
 
@@ -28,7 +29,7 @@ export const jobs = sqliteTable(
 
     status: text("status").notNull().default("queued"),
     /** Stage records, serialised. Derived status comes from these. */
-    stages: text("stages", { mode: "json" }).notNull().default(sql`'[]'`),
+    stages: text("stages", { mode: "json" }).$type<Stage[]>().notNull().default(sql`'[]'`),
 
     priority: text("priority").notNull().default("normal"),
     attempts: integer("attempts").notNull().default(0),
@@ -44,6 +45,15 @@ export const jobs = sqliteTable(
      */
     claimedBy: text("claimed_by"),
     leaseUntil: text("lease_until"),
+    /**
+     * Not claimable before this instant — how a backoff-delayed retry is
+     * expressed.
+     *
+     * Without it, claim eligibility would depend on the *other* database's
+     * `delayed` state, which is the one place R2's correctness would lean on the
+     * mirror. Keeping it here makes the queue self-contained.
+     */
+    notBefore: text("not_before"),
 
     progress: integer("progress").notNull().default(0),
     totalBytes: integer("total_bytes"),
@@ -56,7 +66,7 @@ export const jobs = sqliteTable(
     source: text("source"),
 
     /** Preferences resolved for this job, serialised. */
-    preferences: text("preferences", { mode: "json" }).notNull(),
+    preferences: text("preferences", { mode: "json" }).$type<Preferences>().notNull(),
     /**
      * Stable hash of url + resolved configuration.
      * Duplicate detection compares this, not the URL: 720p when 1080p is on
@@ -64,7 +74,7 @@ export const jobs = sqliteTable(
      */
     fingerprint: text("fingerprint").notNull(),
 
-    log: text("log", { mode: "json" }).notNull().default(sql`'[]'`),
+    log: text("log", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
     error: text("error"),
     /** Absolute path once the file has been moved into the library. */
     outputFile: text("output_file"),
@@ -74,7 +84,7 @@ export const jobs = sqliteTable(
   },
   (t) => [
     // The claim query: eligible jobs, best priority first, oldest first.
-    index("jobs_claim_idx").on(t.status, t.paused, t.priority, t.createdAt),
+    index("jobs_claim_idx").on(t.status, t.paused, t.notBefore, t.priority, t.createdAt),
     index("jobs_fingerprint_idx").on(t.fingerprint),
     index("jobs_lease_idx").on(t.leaseUntil),
   ],
@@ -87,7 +97,7 @@ export const sources = sqliteTable(
     url: text("url").notNull(),
     name: text("name").notNull(),
     destination: text("destination").notNull(),
-    preferences: text("preferences", { mode: "json" }).notNull(),
+    preferences: text("preferences", { mode: "json" }).$type<Preferences>().notNull(),
     /**
      * ⚠️ Conservative by design. Polling many channels often is the fastest
      * way to burn the IP budget (PLAN §4.3).

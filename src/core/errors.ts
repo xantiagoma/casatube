@@ -99,6 +99,15 @@ export class NotFound extends TaggedError("NotFound")<{
 
 // --- Queue ------------------------------------------------------------------
 
+/**
+ * This worker no longer holds the lease — it lapsed and someone else took the
+ * job. Distinct from NotFound: the job exists, we just stopped owning it.
+ */
+export class LeaseLost extends TaggedError("LeaseLost")<{
+  jobId: string;
+  workerId: string;
+}> {}
+
 export class InvalidTransition extends TaggedError("InvalidTransition")<{
   jobId: string;
   from: string;
@@ -119,7 +128,7 @@ export type WorkerError = StageFailed | Cancelled | Timeout | DiskFull | Provide
 
 export type LibraryError = MountUnavailable | PathOutsideRoot | NotFound;
 
-export type QueueError = NotFound | InvalidTransition;
+export type QueueError = NotFound | InvalidTransition | LeaseLost;
 
 /**
  * Should the system slow down because of this error?

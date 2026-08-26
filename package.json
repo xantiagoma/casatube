@@ -22,6 +22,8 @@
     "better-result": "^3.0.1",
     "bunqueue": "^2.8.60",
     "drizzle-orm": "^0.45.2",
-    "elysia": "^1.4.29"
+    "elysia": "^1.4.29",
+    "filenamify": "^7.0.2",
+    "ohash": "^2.0.12"
   }
 }

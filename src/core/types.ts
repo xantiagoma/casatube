@@ -57,11 +57,13 @@ export const DEFAULT_PREFERENCES: Preferences = {
 };
 
 type JobRow = typeof jobs.$inferSelect;
-/** Serialised columns are typed properly here rather than as `unknown`. */
-export type Job = Omit<JobRow, "stages" | "preferences" | "log" | "status" | "priority"> & {
-  stages: Stage[];
-  preferences: Preferences;
-  log: string[];
+/**
+ * The row, with its two string unions narrowed.
+ *
+ * `stages`, `preferences` and `log` are already typed by the schema itself via
+ * `.$type<>()`, so they need no help here.
+ */
+export type Job = Omit<JobRow, "status" | "priority"> & {
   status: JobStatus;
   priority: Priority;
 };
@@ -72,6 +74,82 @@ export type Source = Omit<typeof sources.$inferSelect, "preferences"> & {
 
 export type Notification = typeof notifications.$inferSelect;
 
+// --- Queue contract ---------------------------------------------------------
+// What the API layer hands the queue and gets back. These live here rather than
+// in `queue.ts` because the HTTP layer speaks them too, and a second definition
+// of the same shape is exactly the drift this file exists to prevent.
+
+export interface EnqueueInput {
+  url: string;
+  /** Which provider claimed the URL. */
+  provider: string;
+  /** Library subfolder, never an absolute path. */
+  destination: string;
+  preferences?: Partial<Preferences>;
+  priority?: Priority;
+  maxAttempts?: number;
+  title?: string | null;
+  source?: string | null;
+  thumbnail?: string | null;
+  duration?: number | null;
+  /**
+   * Re-download even when a finished job with the same fingerprint exists.
+   * Always offered, because the usual reason to ask again is that something
+   * went wrong with the first copy (PLAN §15).
+   */
+  force?: boolean;
+}
+
+/**
+ * ⚠️ Wider than a bare `Job`, deliberately.
+ *
+ * "Already have it" is not an error — PLAN §15 says *report* it — but it is
+ * also not the same answer as "queued". Folding it into one shape would make
+ * the two indistinguishable at the call site, which is precisely what the UI
+ * has to tell apart to render "already downloaded" instead of "queued".
+ */
+export type EnqueueResult =
+  | { outcome: "queued"; job: Job }
+  | { outcome: "duplicate"; job: Job };
+
+/** Fields a worker may write back. `url` and `preferences` are not among them. */
+export type JobPatch = Partial<
+  Pick<
+    Job,
+    | "status"
+    | "title"
+    | "stages"
+    | "progress"
+    | "totalBytes"
+    | "doneBytes"
+    | "speed"
+    | "eta"
+    | "thumbnail"
+    | "duration"
+    | "source"
+    | "error"
+    | "outputFile"
+    | "priority"
+    | "attempts"
+    | "claimedBy"
+    | "leaseUntil"
+    | "notBefore"
+  >
+> & {
+  /** Appended to the log rather than replacing it. */
+  appendLog?: string[];
+};
+
+export interface JobFilter {
+  status?: JobStatus | JobStatus[];
+  paused?: boolean;
+  claimedBy?: string;
+  fingerprint?: string;
+  url?: string;
+  limit?: number;
+  offset?: number;
+}
+
 // --- Provider-neutral media vocabulary --------------------------------------
 // ⚠️ PLAN §5: getting this vocabulary right is the main design risk. It must
 // describe media without leaking any single tool's flags or format syntax.
@@ -79,7 +157,16 @@ export type Notification = typeof notifications.$inferSelect;
 export interface AudioTrack {
   /** Opaque to everything above the provider. */
   id: string;
-  /** ISO 639-2/B, three letters. `und` when genuinely unknown — never guessed. */
+  /**
+   * **As the provider stated it**, not normalised: `en-US`, `es-419`, `pt-BR`.
+   *
+   * Normalisation to a container tag happens in exactly one place —
+   * `selection.toLanguageTag()` — which maps to ISO 639-2/B and to `und` when
+   * genuinely unknown. Never guessed.
+   *
+   * Providers must pass this through raw. Normalising here would discard the
+   * region before anything could use it, and do the work twice.
+   */
   language: string;
   /** The track the source marks as original, if any. */
   isOriginal: boolean;
@@ -89,6 +176,7 @@ export interface AudioTrack {
 
 export interface SubtitleTrack {
   id: string;
+  /** As the provider stated it — see {@link AudioTrack.language}. */
   language: string;
   /** Machine-generated captions rather than authored subtitles. */
   automatic: boolean;
