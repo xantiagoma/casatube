@@ -1,0 +1,1 @@
+CREATE INDEX `jobs_created_idx` ON `jobs` (`created_at`);

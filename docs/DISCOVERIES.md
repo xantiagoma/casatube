@@ -54,6 +54,25 @@ chmod +x /tmp/yt-dlp && YTDLP_BIN=/tmp/yt-dlp bun src/server.ts
 📌 The failure is loud in the test output and silent in the app: a probe just
 returns `ProbeFailed`. Check the version before blaming the code.
 
+## Elysia's `t.UnionEnum` applies a default you did not ask for
+
+`t.UnionEnum([...])` sets `default: values[0]`, and query coercion applies it.
+So an **optional** `?level=` arrives as `"info"` and silently filters the list.
+
+Nothing errors. It was caught only because a seeded `error` notification
+vanished from the HTTP response while the store still returned it — the two
+disagreed, and the store was right.
+
+```ts
+t.Optional(t.UnionEnum(["info", "success", "warning", "error"], { default: undefined }))
+```
+
+Verified against Elysia 1.4.29.
+
+📌 Same shape as the Eden date trap above: a framework being helpful at runtime
+in a way the types do not describe. Both were found by noticing that two layers
+disagreed, not by a failing test.
+
 ## Elysia's `fail()` needs a literal union of status codes
 
 With a plain `number`, Elysia collapses the response type and **the success

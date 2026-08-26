@@ -20,6 +20,7 @@ import { Elysia } from "elysia";
 
 import { appDbPath, openDb, queueDbPath } from "./core/db";
 import { Worker } from "./worker/worker";
+import { createPluginRuntime, pluginsDir } from "./core/plugin-runtime";
 import { openJobQueue } from "./core/queue";
 import { SourceScheduler } from "./core/scheduler";
 import { SourceManager, registryDiscoverer } from "./core/sources";
@@ -119,6 +120,12 @@ async function main(): Promise<StartedServer> {
     binary: config.ytdlpBinary,
     cookiesFile: config.cookiesFile,
   });
+  // Plugins load before the worker starts: a plugin may register a provider in
+  // setup(), and a provider that appears after the first job is claimed would
+  // never be asked about it.
+  const plugins = createPluginRuntime({ dir: pluginsDir(config.dataDir), registry });
+  await plugins.load();
+
   const watcher = createQueueWatcher(queue, { pollMs: config.eventsPollMs });
 
   // Automation. The manager writes through `queue.enqueue` like any other
@@ -155,6 +162,7 @@ async function main(): Promise<StartedServer> {
   console.log(`[casatube] listening on http://localhost:${config.port}`);
   console.log(`[casatube] data dir ${config.dataDir}, library ${config.libraryDir}`);
   if (recovered > 0) console.log(`[casatube] recovered ${recovered} job(s) from the last run`);
+  console.log(`[casatube] ${plugins.list().length} plugin(s) loaded`);
 
   const stop = async (): Promise<void> => {
     worker.stop();

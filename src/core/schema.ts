@@ -102,6 +102,10 @@ export const jobs = sqliteTable(
     // The claim query: eligible jobs, best priority first, oldest first.
     index("jobs_claim_idx").on(t.status, t.paused, t.notBefore, t.priority, t.createdAt),
     index("jobs_fingerprint_idx").on(t.fingerprint),
+    // Analytics filters by date over the whole history, and retention defaults
+    // to never deleting. Without this the scan grows for ever — and bun:sqlite
+    // is synchronous, so that scan is time no SSE stream is being served.
+    index("jobs_created_idx").on(t.createdAt),
     index("jobs_lease_idx").on(t.leaseUntil),
   ],
 );
