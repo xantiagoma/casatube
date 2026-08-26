@@ -540,7 +540,7 @@ Everything by environment variable, so the image is the only artefact.
 | `DATA_DIR` | `/data` | Database and state. One volume |
 | `TEMP_DIR` | `/data/tmp` | Downloads land here first |
 | `LIBRARY_DIR` | `/library` | Destination root. Often a network mount |
-| `MAX_CONCURRENT` | `1` | See §13 — raising this raises blocking risk |
+| `MAX_CONCURRENT_DOWNLOADS` | `1` | Limits the **download stage** only — see §17 |
 | `COOKIES_FILE` | unset | See below |
 | `MEDIA_SERVER_URL` / `MEDIA_SERVER_TOKEN` | unset | Refresh hook after a job completes |
 | `LOG_LEVEL` | `info` | |
@@ -724,11 +724,74 @@ would earn its place if it ever hurts.
 📌 So: no workers now. The trigger to add one is measured event-loop lag, not
 theory.
 
-## 17. Open tensions — decide, do not drift
+## 17. Concurrency
 
-**Concurrent downloads.** The designs show a limit of 4. Default here is **1**,
-because parallel requests accelerate IP blocking (§4.3). Configurable, with the
-consequence stated in the UI where it is set.
+**One container, one process, N slots.** Not distributed workers. SQLite cannot
+be shared over a network, so distribution would force Postgres or Redis and cost
+the "one image, one volume" property that makes this installable in one step.
+
+The reference designs label workers `node-01`, `node-02`, `node-03`. Slots are
+labelled the same way in the UI — visually identical, none of the cost.
+
+### The limit belongs on the download stage, not on the job
+
+Of the six stages, **only `download` touches the source**. `postprocess` is local
+ffmpeg; `move` is minutes of uploading to the library over the network. Neither
+is of any interest to YouTube.
+
+A per-job limit stalls the entire queue while one job uploads — without
+protecting anything, because no request is being made to the source during it.
+
+```
+MAX_CONCURRENT_DOWNLOADS = 1     # the scarce resource: IP reputation
+all other stages         = free  # bounded only by CPU and the mount
+```
+
+While one job uploads to the library, the next is already downloading.
+Throughput improves and the number of simultaneous connections to the source
+does not change — so the risk does not either.
+
+### Automated work is throttled harder than manual
+
+Two videos requested by hand are harmless. A subscription check that discovers
+twenty new uploads and fires them in a burst is the fastest way to get blocked.
+
+**Spacing between download starts**, more aggressive for automated jobs than for
+ones a human just asked for. A person waiting at the screen has earned the
+lower latency; a background sync has not.
+
+### Built so it can become distributed later
+
+Not "keep it modular" — these are specific, and each costs nothing today:
+
+1. **Jobs are claimed, never assigned.** A worker pulls the next eligible job;
+   nothing routes a job to a particular worker. Assignment is the decision that
+   cannot be undone later.
+2. **Worker identity is data, not implied.** Record `claimedBy` on the job.
+   Today it reads `slot-2`; distributed it would read a hostname. The UI renders
+   it identically — which is what the designs already show.
+3. **The worker and the API share no in-memory state.** They communicate through
+   the database. A JS variable the API reads from the worker is a permanent weld
+   between two processes that might one day be two machines.
+4. **Leases that expire, not locks.** A claimed job carries a lease timestamp; if
+   the worker dies, the lease lapses and the job returns to the queue. Locally
+   that covers a crash. Distributed it covers a dead machine. Same mechanism,
+   written once.
+5. **Only the destination is shared.** Temp paths are worker-local and never
+   stored as if every worker could see them. This is the assumption that
+   silently breaks distribution, and it is invisible until you try.
+6. **No SQLite-specific SQL.** Go through Drizzle, which speaks Postgres too, so
+   the database is a swap rather than a rewrite.
+
+⚠️ **What we are still choosing to defer**, so it stays a decision: distribution
+would need Postgres or Redis, and a way to move finished files between machines.
+The six rules above make it *possible*, not *free*.
+
+📌 The genuinely interesting reason to distribute is not throughput — it is that
+machines in different places have **different residential IPs**, which multiplies
+the download budget before blocking (§4.3). Worth remembering when the time comes.
+
+## 18. Open tensions — decide, do not drift
 
 **Deleting from the library.** The designs include a delete button. That library
 is served by a media server, over a network mount — **deletion is not
@@ -743,7 +806,7 @@ exposed beyond it — at which point auth becomes blocking.
 
 ---
 
-## 18. Verification
+## 19. Verification
 
 "Done" means observed working, not "the tests pass". Each phase in §7 has a
 condition that can only be met by doing the thing.
@@ -773,7 +836,7 @@ version looked missing; a status endpoint excluded exactly the item type being
 verified. Before concluding something is absent or broken, confirm the check
 could have seen it.
 
-## 19. How this gets built
+## 20. How this gets built
 
 The reason this plan exists: the first attempt was orchestrated badly. Work was
 handed to parallel agents before the requirements were settled, and the brief

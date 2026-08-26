@@ -7,8 +7,8 @@ Target UI for CasaTube. Provided by Santi; the working name in them is
 |---|---|---|
 | `01-dashboard.png` | Dashboard | Sidebar navigation, quick-download card, active queue, storage and analytics summaries. Light **and** dark. |
 | `02-queue.png` | Queue | **Batch add** (many URLs, validate before enqueue), priority column, retry counter `n/3`, and the **Job Inspector**: Details / Tasks / Logs, with the six-stage pipeline and per-job log output. Also watch folders and smart rules. |
-| `03-library.png` | Library | Collections tree, tags, favourites, filters. Detail panel with path, source, resolution, duration, captions, notes, transcript. ⚠️ Includes a **Delete** action — see PLAN.md §17. |
-| `04-settings.png` | Settings | Download defaults, output formats, storage paths, cookies, integrations, ffmpeg health, scheduler, notifications, API access. ⚠️ Shows **Max Concurrent Downloads: 4** — see PLAN.md §17. |
+| `03-library.png` | Library | Collections tree, tags, favourites, filters. Detail panel with path, source, resolution, duration, captions, notes, transcript. ⚠️ Includes a **Delete** action — see PLAN.md §18. |
+| `04-settings.png` | Settings | Download defaults, output formats, storage paths, cookies, integrations, ffmpeg health, scheduler, notifications, API access. ⚠️ Shows **Max Concurrent Downloads: 4** — see PLAN.md §18. |
 | `05-downloads.png` | Downloads | Active / Completed / Failed / Scheduled tabs, pause-resume-cancel, ETA, per-job history timeline. |
 
 ## What these imply that the plan already accounts for
