@@ -177,7 +177,65 @@ and verified** before the next begins.
 
 ---
 
-## 8. Stack, and why
+## 8. Frontend
+
+The reference designs are shadcn-shaped — sidebar shell, cards, data tables,
+inspector panels. That makes the component stack a consequence of the designs,
+not a preference:
+
+**shadcn/ui + Tailwind + Radix** as the base, with two component registries on
+top:
+
+- **[Dice UI](https://diceui.com)** — installed through the shadcn CLI
+  (`shadcn add @diceui/…`). Its
+  [media-player](https://diceui.com/docs/components/base/media-player) is the
+  one we specifically want: video and audio, custom controls, seeking, speed,
+  captions, fullscreen, PiP, HLS.
+- **[reui.io](https://reui.io)** — second source for anything Dice UI does not
+  cover.
+
+### Where the media player earns its place
+
+Two moments, both of which remove a reason to leave CasaTube:
+
+1. **Before downloading** — `probe()` returns metadata and formats, so the user
+   can preview and confirm they are queueing the right thing.
+2. **After downloading** — play the result in place, instead of switching to the
+   media server to check whether it came out right.
+
+### The rule the frontend exists to respect
+
+**R3: the browser only observes.** This is a structural constraint, not a
+guideline:
+
+- A **data layer** (API client + SSE subscription) is the only thing that talks
+  to the server. Presentation components receive props and render.
+- Reloading the page rebuilds the entire state from the server. Nothing lives
+  only in the browser.
+- Reskinning must be possible without touching the data layer. The first attempt
+  at this project was thrown away partly because that separation was not
+  enforced early.
+
+### Decided up front, because retrofitting is expensive
+
+**Light and dark.** Both appear in the designs. Theme tokens from the first
+component, honouring `prefers-color-scheme` plus an explicit toggle. Bolting
+dark mode on later means revisiting every component.
+
+**Mobile.** Santi uses an iPad. The queue and the download form must be usable
+on a small screen; the dense inspector panels can degrade to full-screen views.
+
+**English strings, inline. No i18n yet.** If localisation is ever wanted, the
+answer is i18n — not rewriting the UI in another language.
+
+### Risk worth naming
+
+The shadcn registry model **copies components into the repository** rather than
+adding a dependency. That means we own them: no automatic upstream fixes, and
+updates are a manual re-copy. It is the accepted trade-off of this ecosystem,
+but it should be a conscious one — the components become our code.
+
+## 9. Stack, and why
 
 | Choice | Why | Alternative rejected |
 |---|---|---|
@@ -191,7 +249,7 @@ and verified** before the next begins.
 
 ---
 
-## 9. Packaging
+## 10. Packaging
 
 **One Docker image, self-contained**: the app, **yt-dlp** and **ffmpeg** inside.
 No host dependencies. It must run on plain Docker, Docker Compose, or CasaOS.
@@ -204,7 +262,7 @@ Configuration by environment variables. Persistent state in one volume.
 
 ---
 
-## 10. Open tensions — decide, do not drift
+## 11. Open tensions — decide, do not drift
 
 **Concurrent downloads.** The designs show a limit of 4. Default here is **1**,
 because parallel requests accelerate IP blocking (§4.3). Configurable, with the
@@ -223,7 +281,7 @@ exposed beyond it — at which point auth becomes blocking.
 
 ---
 
-## 11. How this gets built
+## 12. How this gets built
 
 The reason this plan exists: the first attempt was orchestrated badly. Work was
 handed to parallel agents before the requirements were settled, and the brief
