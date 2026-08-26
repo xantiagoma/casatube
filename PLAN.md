@@ -437,9 +437,13 @@ January 2026) and releases often. Santi's call, explicitly: *«me importa 5 lo d
 
 **Two integration questions to settle in phase 1**, neither of them objections:
 
-1. **One database or two?** bunqueue persists to SQLite and Drizzle owns our
-   schema. Find out whether it can share our database file — if not, we run two,
-   and the backup story has to cover both.
+1. ~~One database or two?~~ **Settled: two is fine.** bunqueue keeps its own
+   SQLite file, Drizzle keeps ours. Both live in `DATA_DIR`, so one volume still
+   holds everything and a backup that copies the directory covers both.
+   ⚠️ Consequence: a job's queue state and its `Job` row are in **separate
+   databases**, so they cannot be updated in one transaction. They can drift —
+   the queue can hold an entry whose `Job` row says otherwise. Reconciliation on
+   startup has to cover that, not just in-flight statuses.
 2. **R2 still has to be proven.** Persistence is not the same as resumption.
    Adopting a queue library does not discharge the requirement: we still verify
    that a `docker restart` mid-download returns the job to the queue and it
