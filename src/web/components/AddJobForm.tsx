@@ -44,8 +44,8 @@ export function AddJobForm(): React.JSX.Element {
   const [url, setUrl] = useState("");
   const [destination, setDestination] = useState("");
   const [originalOnly, setOriginalOnly] = useState(DEFAULT_PREFERENCES.originalOnly);
-  const [audioLanguages, setAudioLanguages] = useState(DEFAULT_PREFERENCES.audioLanguages.join(", "));
-  const [subtitleLanguages, setSubtitleLanguages] = useState(DEFAULT_PREFERENCES.subtitleLanguages.join(", "));
+  const [audioLanguages, setAudioLanguages] = useState(() => DEFAULT_PREFERENCES.audioLanguages.join(", "));
+  const [subtitleLanguages, setSubtitleLanguages] = useState(() => DEFAULT_PREFERENCES.subtitleLanguages.join(", "));
   const [maxResolution, setMaxResolution] = useState(DEFAULT_PREFERENCES.maxResolution);
   const [sponsorblock, setSponsorblock] = useState(DEFAULT_PREFERENCES.sponsorblock);
   const [embedSubtitles, setEmbedSubtitles] = useState(DEFAULT_PREFERENCES.embedSubtitles);
