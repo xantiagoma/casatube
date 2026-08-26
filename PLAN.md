@@ -200,6 +200,51 @@ the Obsidian and VS Code model, and it is deliberately chosen over running
 slow startup, and a supply-chain surface that activates on load rather than on
 build.
 
+### Plugins declare themselves, and the user chooses
+
+A plugin is not a black box that quietly runs on everything. It **declares** what
+it is for, and that declaration is static metadata — readable **before any of its
+code executes**.
+
+```ts
+export default registerPlugin({
+  name: "adfly-bypass",
+  description: "Resolves adf.ly and similar shortener links to their target",
+  matches: ["adf.ly", "*.adfly.com", "sh.st"],   // hosts it claims
+  hooks: [{ at: "url:resolve", kind: "transform", before: "provider:resolve" }],
+  needs: ["network"],                             // capabilities requested
+  setup({ on, fetch, log }) {
+    on("url:resolve", async (url) => resolve(url));
+  },
+});
+```
+
+**Because `matches` is evaluated before execution**, the UI can do something
+useful: paste a URL and CasaTube shows which plugins *would* apply, what each
+would do, and a toggle for each.
+
+- **Global default** per plugin: on, off, or ask.
+- **Per-download override** in the download window — the recommendation comes
+  from `matches`, the decision stays with the user.
+- **Ordering is explicit** (`before` / `after`), so two transforming hooks at the
+  same point have a defined sequence rather than whatever load order produced.
+
+### Capabilities are declared — and that is a UI contract, not a sandbox
+
+`needs` lists what a plugin asks for: `network`, `library:read`,
+`library:write`, `cookies`, `subprocess`. The host injects exactly those and
+shows them at install time, the way a phone shows permissions.
+
+⚠️ **Be honest about what this enforces.** Withholding a capability works for a
+*well-behaved* plugin: it simply is not handed `fetch`. It does **not** stop a
+malicious one, because an in-process TypeScript module can import Bun and Node
+APIs directly. Bun has no Deno-style permission flags to fall back on.
+
+So the declaration is real UX and real documentation — you can see that a
+notifier asks only for `network`, and be suspicious of one asking for `cookies` —
+but it is **not a security boundary**. Making it one needs process isolation, and
+that is worth doing only when third-party plugins are actually distributed.
+
 ⚠️ **A plugin runs in-process with CasaTube's own privileges.** It can read the
 filesystem and see cookies. Acceptable for a self-hosted tool whose plugins you
 write yourself; **it stops being acceptable if third-party plugins are ever
