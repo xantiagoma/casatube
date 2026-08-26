@@ -25,31 +25,14 @@ ARG YTDLP_VERSION=2026.08.19
 FROM oven/bun:${BUN_VERSION}-alpine AS bun
 
 
-# ─── deps ─────────────────────────────────────────────────────────────────────
-# Full install (dev included) — needed if a frontend build step exists.
-FROM bun AS deps
-WORKDIR /app
-COPY package.json bun.lock ./
-RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun install --frozen-lockfile
-
-
-# ─── build ────────────────────────────────────────────────────────────────────
-# The frontend (src/web) is built here *if* package.json defines a `build`
-# script. It does not yet — that part of the app is still being written — so
-# today this stage produces an empty dist/ and costs nothing. When the script
-# lands, the image picks it up with no change here.
-FROM deps AS build
-WORKDIR /app
-COPY tsconfig.json ./
-COPY src ./src
-COPY drizzle ./drizzle
-RUN mkdir -p dist \
- && if grep -q '"build"[[:space:]]*:' package.json; then \
-        echo "build script found — building frontend"; bun run build; \
-    else \
-        echo "no build script in package.json — skipping frontend build"; \
-    fi
+# ─── the frontend is NOT built here ───────────────────────────────────────────
+# `src/api/web.ts` bundles the browser client with `Bun.build` at startup and
+# keeps it in memory, by decision: `bun src/server.ts` is the whole story, and
+# there is no dist/ that can go stale against the source. So the image ships the
+# sources and pays a few hundred milliseconds once, on boot.
+#
+# 📌 If a `build` script is ever added to package.json, a builder stage goes
+# here (full `bun install`, `bun run build`) and its output gets copied below.
 
 
 # ─── prod-deps ────────────────────────────────────────────────────────────────
@@ -128,7 +111,6 @@ COPY --from=ytdlp     /yt-dlp            /opt/yt-dlp/yt-dlp.pinned
 
 WORKDIR /app
 COPY --from=prod-deps /app/node_modules ./node_modules
-COPY --from=build     /app/dist         ./dist
 COPY package.json tsconfig.json ./
 COPY drizzle ./drizzle
 COPY src ./src

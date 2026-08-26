@@ -264,9 +264,11 @@ describe("GET /api/events", () => {
     while (!text.includes("\n\n")) {
       const chunk = await reader!.read();
       if (chunk.done) break;
-      // ⚠️ Elysia's SSE stream yields already-decoded strings here, not bytes —
-      // handing one to `TextDecoder` throws. Accept either.
-      text += typeof chunk.value === "string" ? chunk.value : decoder.decode(chunk.value, { stream: true });
+      // ⚠️ Elysia's SSE stream yields already-decoded strings here, not the
+      // bytes the DOM types promise — handing one to `TextDecoder` throws.
+      // Accept either, and take the type at its word only when it is right.
+      const value: unknown = chunk.value;
+      text += typeof value === "string" ? value : decoder.decode(value as Uint8Array, { stream: true });
     }
     await reader!.cancel();
 

@@ -24,7 +24,8 @@
   --warn: #b45309;
   --danger: #b42318;
   --busy: #2563eb;
-  --idle: #8a94a3;
+  /* Dim, but it labels a status badge — it has to clear 4.5:1 on the card. */
+  --idle: #6b7280;
 
   --radius: 10px;
   --gap: 12px;
@@ -47,7 +48,7 @@
     --warn: #d29922;
     --danger: #f85149;
     --busy: #5b8cff;
-    --idle: #58616e;
+    --idle: #97a1b0;
     --shadow: none;
 
     color-scheme: dark;
@@ -67,7 +68,7 @@
   --warn: #d29922;
   --danger: #f85149;
   --busy: #5b8cff;
-  --idle: #58616e;
+  --idle: #97a1b0;
   --shadow: none;
 
   color-scheme: dark;

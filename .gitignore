@@ -5,3 +5,7 @@ dist/
 *.db-wal
 .env
 .DS_Store
+
+# compose defaults land here on a plain `docker compose up`
+/data/
+/library/

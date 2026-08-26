@@ -49,16 +49,20 @@ export function App(): React.JSX.Element {
         </p>
       </header>
 
-      <AddJobForm />
+      {/* One landmark around everything that is not the header, so a screen
+          reader can skip straight to the part that changes. */}
+      <main>
+        <AddJobForm />
 
-      {connection === "reconnecting" && (
-        <div className="note warn">
-          Lost the live connection — falling back to refreshing every few seconds. Nothing in the queue is
-          affected.
-        </div>
-      )}
+        {connection === "reconnecting" && (
+          <div className="note warn">
+            Lost the live connection — falling back to refreshing every few seconds. Nothing in the queue
+            is affected.
+          </div>
+        )}
 
-      <QueueList query={query} connection={connection} />
+        <QueueList query={query} connection={connection} />
+      </main>
     </div>
   );
 }

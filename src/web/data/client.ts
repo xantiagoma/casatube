@@ -16,9 +16,22 @@ import type { App } from "../../server";
  * Same origin, always. The server serves this bundle, so there is no
  * deployment where the API is somewhere else — and a configurable base URL
  * would be a setting nobody sets correctly.
+ *
+ * 🔴 **`parseDate: false` is not a preference.** Eden's default reviver walks
+ * every response and turns anything that looks like an ISO-8601 string into a
+ * `Date` — including `createdAt`, `updatedAt` and the snapshot's `at`. The
+ * server sends strings and the types say `string`, so the default makes the
+ * runtime quietly disagree with the compiler on every timestamp in the app.
+ *
+ * It cost an afternoon to find: the queue table rendered once and then froze
+ * with the indicator still reading "Live". The frames were arriving and being
+ * discarded, because the guard in `stream.ts` checks `typeof at === "string"`
+ * and every frame was failing it. Nothing logged, nothing threw — the stream
+ * looked healthy and delivered nothing.
  */
 export const api = treaty<App>(
   typeof window === "undefined" ? "http://localhost:8520" : window.location.origin,
+  { parseDate: false },
 );
 
 /** What a component gets back from an action: never a thrown exception. */

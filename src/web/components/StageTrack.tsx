@@ -12,7 +12,10 @@ export function StageTrack({ stages }: { stages: Stage[] }): React.JSX.Element {
   const byName = new Map(stages.map((stage) => [stage.name, stage]));
 
   return (
-    <div className="stages" aria-label="Pipeline stages">
+    // `role="group"` is not decoration: a bare <div> may not carry an
+    // aria-label, so without a role the label is dropped and the six pips
+    // reach a screen reader as six unexplained words.
+    <div className="stages" role="group" aria-label="Pipeline stages">
       {STAGE_ORDER.map((name) => {
         // A job created before a stage existed simply has no record for it;
         // `pending` is the honest reading of that, not an error.

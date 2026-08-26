@@ -78,7 +78,14 @@ export function JobCard({ job }: { job: Job }): React.JSX.Element {
         </div>
       </div>
 
-      <div className={`bar ${barTone}`} role="progressbar" aria-valuenow={Math.round(percent)} aria-valuemin={0} aria-valuemax={100}>
+      <div
+        className={`bar ${barTone}`}
+        role="progressbar"
+        aria-label={`Download progress for ${job.title ?? job.url}`}
+        aria-valuenow={Math.round(percent)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+      >
         <span style={{ width: `${percent}%` }} />
       </div>
 
