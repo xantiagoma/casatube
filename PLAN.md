@@ -321,7 +321,7 @@ but it should be a conscious one — the components become our code.
 | **Bun + TypeScript** | One runtime for server, worker and build. Native SQLite, test runner, bundler | Node (extra tooling) |
 | **Elysia** | Bun-native, schema validation, ~20 endpoints need real routing | Hand-rolled `Bun.serve` |
 | **Drizzle ORM** | Schema as code doubles as the type source; `drizzle-kit` **generates** migrations from the schema diff | Kysely (see below); raw SQL |
-| **Own queue over Drizzle/SQLite** | The queue *is* the project — R1 and R2 live in it. Small, ours, fully tested | bunqueue (see below); BullMQ (needs Redis); effect-mq (no SQLite) |
+| **bunqueue** | SQLite-backed, **no Redis**. Brings priority, retries with backoff, DLQ, cron and idempotency already built | BullMQ (needs Redis); effect-mq (**no SQLite**); writing our own |
 | **yt-dlp as external binary** | Updates independently of the app — and its freshness is exactly what breaks | yt-dlp as a Python library |
 | **React + shadcn/ui + Tailwind** | The designs are shadcn-shaped; component libraries build on it | Hand-written CSS |
 | **SSE** | One-way server→browser is all we need | WebSockets |
@@ -425,36 +425,30 @@ without the runtime, if stricter validation is wanted before that.
 twelve months. The API moves. Acceptable for a library this small, but it is not
 frozen.
 
-### On the queue, and why it is ours
+### On the queue
 
-An earlier draft picked [bunqueue](https://github.com/egeominotti/bunqueue) and
-dismissed writing our own as "rebuilding solved problems". Looking at it properly
-inverts that:
+**Decided: bunqueue.** Writing our own was considered and rejected — it would
+mean rebuilding priority ordering, backoff, a dead-letter queue and cron, all of
+which bunqueue already ships, on the way to a first working download.
 
-| | |
-|---|---|
-| Version | 2.8.60 |
-| First published | **7 months ago** |
-| Releases in 12 months | **277** — roughly five a week |
-| Surface | MCP server, CLI, client/server split, benchmarks |
+Noted for the record, since it was weighed: the package is young (first published
+January 2026) and releases often. Santi's call, explicitly: *«me importa 5 lo de
+7 meses de vida»*. The trade is fewer days spent on plumbing.
 
-It is not a small embeddable queue; it is a job-queue *product*, young and moving
-fast. **R1 and R2 — a job surviving the browser and surviving a restart — are the
-reason this project exists.** Resting them on the fastest-moving dependency in
-the stack is backwards.
+**Two integration questions to settle in phase 1**, neither of them objections:
 
-What we actually need is narrow: atomic claim of the next job, ordering by
-priority, retry with growing backoff, terminal states, and **returning in-flight
-jobs to the queue on startup**. In the first attempt that was ~250 lines with 25
-tests, including restart recovery exercised against a real database file.
+1. **One database or two?** bunqueue persists to SQLite and Drizzle owns our
+   schema. Find out whether it can share our database file — if not, we run two,
+   and the backup story has to cover both.
+2. **R2 still has to be proven.** Persistence is not the same as resumption.
+   Adopting a queue library does not discharge the requirement: we still verify
+   that a `docker restart` mid-download returns the job to the queue and it
+   completes. That is the acceptance test either way.
 
-Drizzle already provides the schema and migrations, so these are simply more
-tables — rather than a second system with its own error idiom sitting next to
-`better-result`.
-
-⚠️ **What we give up**: a dead-letter queue and cron scheduling, both of which
-bunqueue provides. Cron we need anyway for source polling (§7 phase 4) and will
-build; a DLQ is, for us, just a terminal `failed` state that is queryable.
+**Keep it behind a narrow interface** — `enqueue`, `claimNext`, `update`,
+`recoverOnStart`. Not because we expect to swap it, but because the queue is
+where R1 and R2 live, and a seam there costs nothing today and keeps the option
+open if it ever becomes necessary.
 
 ## 11. Data model
 
