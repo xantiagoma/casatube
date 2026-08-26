@@ -22,6 +22,7 @@ import {
   parseDownloadLine,
   parseFilePathLine,
   parsePostProcessLine,
+  isMediaFile,
   ProgressAccumulator,
   translateInfo,
   translateListing,
@@ -81,6 +82,7 @@ function plan(overrides: Partial<DownloadPlan> = {}): DownloadPlan {
     subtitles: [],
     languageTags: { "140-en": "eng" },
     sponsorblock: false,
+    subtitleMode: "sidecar",
     outputName: "A Video",
     ...overrides,
   };
@@ -157,7 +159,7 @@ describe("progress lines", () => {
     );
     expect(parsed).toEqual({
       status: "downloading",
-      key: "139",
+      key: "jNQXAC9IVRw.f139.m4a",
       doneBytes: 64512,
       totalBytes: 117526,
       speed: 1824650.79,
@@ -176,7 +178,7 @@ describe("progress lines", () => {
   test("a filename containing the separator survives, because it is last", () => {
     const parsed = parseDownloadLine("CT-DL|downloading|10|20|NA|NA|NA|140|we|ird.m4a");
     expect(parsed?.filename).toBe("we|ird.m4a");
-    expect(parsed?.key).toBe("140");
+    expect(parsed?.key).toBe("we|ird.m4a");
   });
 
   test("parses postprocess lines and ignores anything else", () => {
@@ -194,7 +196,7 @@ describe("progress lines", () => {
 describe("ProgressAccumulator", () => {
   test("sums across files instead of restarting at 0% on each one", () => {
     const acc = new ProgressAccumulator();
-    const feed = (line: string) => acc.update(parseDownloadLine(line)!);
+    const feed = (line: string) => acc.update(parseDownloadLine(line)!)!;
 
     // File 1: the video, 1000 bytes.
     feed("CT-DL|downloading|500|1000|NA|100|5|137|v.mp4");
@@ -231,7 +233,7 @@ describe("ProgressAccumulator", () => {
     ];
     let previous = -1;
     for (const line of lines) {
-      const update = acc.update(parseDownloadLine(line)!);
+      const update = acc.update(parseDownloadLine(line)!)!;
       expect(update.doneBytes!).toBeGreaterThanOrEqual(previous);
       previous = update.doneBytes!;
     }
@@ -242,10 +244,42 @@ describe("ProgressAccumulator", () => {
     const acc = new ProgressAccumulator();
     acc.update(parseDownloadLine("CT-DL|finished|1000|1000|NA|100|NA|137|v.mp4")!);
     // yt-dlp says eta=2 for this file; 200 bytes remain overall at 100 B/s.
-    const update = acc.update(parseDownloadLine("CT-DL|downloading|0|200|NA|100|2|140-en|a.m4a")!);
+    const update = acc.update(parseDownloadLine("CT-DL|downloading|0|200|NA|100|2|140-en|a.m4a")!)!;
     expect(update.eta).toBe(2);
-    const slower = acc.update(parseDownloadLine("CT-DL|downloading|0|200|NA|10|2|140-en|a.m4a")!);
+    const slower = acc.update(parseDownloadLine("CT-DL|downloading|0|200|NA|10|2|140-en|a.m4a")!)!;
     expect(slower.eta).toBe(20);
+  });
+
+  test("the subtitle file yt-dlp downloads FIRST does not put the bar at 100%", () => {
+    // Verified against the real binary: with --write-subs the .vtt arrives
+    // before the video and reports format_id NA. Counting it would show a
+    // finished download before a single video byte had moved.
+    const acc = new ProgressAccumulator();
+    expect(acc.update(parseDownloadLine("CT-DL|downloading|440|NA|NA|NA|NA|NA|/w/zoo.en.vtt")!)).toBeNull();
+    expect(acc.update(parseDownloadLine("CT-DL|finished|440|440|NA|2075|NA|NA|/w/zoo.en.vtt")!)).toBeNull();
+    expect(acc.fileCount()).toBe(0);
+
+    const first = acc.update(parseDownloadLine("CT-DL|downloading|1024|195278|NA|900|0|160|/w/zoo.mp4")!)!;
+    expect(first.percent).toBeCloseTo(0.52, 1);
+    expect(first.totalBytes).toBe(195278);
+  });
+
+  test("isMediaFile keeps media and rejects sidecars", () => {
+    expect(isMediaFile("/w/zoo.mp4")).toBe(true);
+    expect(isMediaFile("/w/zoo.f139.m4a")).toBe(true);
+    expect(isMediaFile(undefined)).toBe(true);
+    expect(isMediaFile("/w/zoo.en.vtt")).toBe(false);
+    expect(isMediaFile("/w/zoo.es-419.SRT")).toBe(false);
+  });
+
+  test("two files that share a format id are still counted separately", () => {
+    // yt-dlp reports format_id NA for anything that is not a media format, so
+    // the filename is what identifies a file.
+    const acc = new ProgressAccumulator();
+    acc.update(parseDownloadLine("CT-DL|finished|100|100|NA|10|NA|NA|/w/a.mp4")!);
+    acc.update(parseDownloadLine("CT-DL|finished|300|300|NA|10|NA|NA|/w/b.mp4")!);
+    expect(acc.fileCount()).toBe(2);
+    expect(acc.snapshot()).toEqual({ doneBytes: 400, totalBytes: 400 });
   });
 });
 
@@ -496,8 +530,10 @@ describe("classifyError", () => {
         "ERROR: [youtube] 6SJNVb0GnPI: This video has been removed for violating YouTube's policy on hate speech. Learn more about combating hate speech in your country.",
       ),
     ).toBe("Blocked");
-    // aaaaaaaaaaa
+    // aaaaaaaaaaa, both wordings — the same URL produced each of them on the
+    // same binary within minutes, depending on which player client answered.
     expect(tagOf("ERROR: [youtube] aaaaaaaaaaa: Video unavailable")).toBe("Blocked");
+    expect(tagOf("ERROR: [youtube] aaaaaaaaaaa: This video is unavailable")).toBe("Blocked");
     // sJL6WA-aGkQ
     expect(
       tagOf(
@@ -845,6 +881,55 @@ describe.skipIf(skipReason !== null)("live yt-dlp", () => {
       );
       expect(Result.isError(result)).toBe(true);
       expect(Result.isError(result) && result.error._tag).toBe("AuthRequired");
+    },
+    180_000,
+  );
+
+  test(
+    "a real fetch lands a real file, with a monotonic bar",
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), "casatube-live-"));
+      try {
+        const provider = createYtdlpProvider();
+        const ctx = fakeContext(dir);
+        // 144p, video-only, ~190 KB, plus one subtitle sidecar. No merge, so
+        // this works on a machine without ffmpeg.
+        const livePlan = plan({
+          url: LIVE_URL,
+          video: { id: "160", height: 144 },
+          audio: [],
+          languageTags: {},
+          subtitles: [{ id: "subs:en", language: "en", automatic: false }],
+          // A literal % in the title: it must not be read as a template field.
+          outputName: "Me at the zoo (100% real)",
+        });
+
+        const result = await provider.fetch(livePlan, {
+          ...ctx,
+          signal: AbortSignal.timeout(150_000),
+        });
+
+        if (Result.isError(result)) {
+          throw new Error(`fetch failed: ${result.error._tag} ${JSON.stringify(result.error)}`);
+        }
+        expect(result.value.file).toBe(join(dir, "Me at the zoo (100% real).mp4"));
+        expect(await Bun.file(result.value.file).exists()).toBe(true);
+        expect(result.value.subtitleFiles).toEqual([
+          join(dir, "Me at the zoo (100% real).en.vtt"),
+        ]);
+
+        // The bar only ever went forward, and it did not start at 100% because
+        // the subtitle file happened to arrive first.
+        const percents = ctx.updates.map((u) => u.percent ?? 0);
+        expect(percents.length).toBeGreaterThan(3);
+        expect(percents[0]!).toBeLessThan(50);
+        expect(percents.at(-1)).toBe(100);
+        for (let i = 1; i < percents.length; i++) {
+          expect(percents[i]!).toBeGreaterThanOrEqual(percents[i - 1]!);
+        }
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
     },
     180_000,
   );

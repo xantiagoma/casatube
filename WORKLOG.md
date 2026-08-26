@@ -5,7 +5,62 @@ session with none of this context. Newest first.
 
 ---
 
-## 2026-08-26 — Foundation laid, phase 1 starting
+## 2026-08-26 — Phase 1 core landed
+
+**164 tests, 0 failures** (5 skipped: they need the network). `tsc` clean.
+
+Built: `selection.ts`, `db.ts`, `queue.ts`, `providers/ytdlp.ts`,
+`providers/registry.ts`. Still missing for phase 1: **the worker** — the
+six-stage pipeline that joins them.
+
+### 🔴 The root cause of HomeTube's language bug, finally
+
+We knew HomeTube tags audio `por` and `pan` when it is English and Spanish. We
+did not know why. Now we do:
+
+> `FFmpegMergerPP` (`postprocessor/ffmpeg.py:822`) merges with `-c copy` and
+> `-map` and **writes no language metadata at all**. The tag on the output is
+> whatever the DASH fragment happened to carry.
+
+So it is not a mislabelling bug — **nobody was labelling anything**. The fix is
+to pass the tags explicitly from `plan.languageTags`:
+`--postprocessor-args "Merger+ffmpeg_o:-metadata:s:a:0 language=eng …"`, where
+stream index N corresponds to `plan.audio[N]` because the merger maps in
+selector order.
+
+### More traps found, all verified against the real binary
+
+- **The two-pipe trap is caused by `--quiet`.** Without `-q`, both download and
+  post-process progress go to stdout; with `-q`, post-process moves to stderr
+  (`YoutubeDL.py:664`). We use `-q --progress` and read both pipes.
+- **With formats to merge and no ffmpeg, yt-dlp exits 0**, warns, and
+  `--print after_move:%(filepath)s` names a file it never wrote. So `fetch`
+  checks the file exists before returning Ok, and does not pass `--no-warnings`.
+- **`--write-subs` downloads subtitles first.** A 440-byte `.vtt` finishes
+  instantly and is reported through the same progress template, so the bar hit
+  **100% before the video began**. Sidecars are excluded from the byte budget,
+  and progress accumulates by filename rather than `format_id`.
+- **`--audio-multistreams` is off by default**: without it a `v+a1+a2` selector
+  silently keeps one audio track.
+- Confirmed: `--color no` exits 2 and the message never says "option".
+
+### Contracts extended after the agents reported gaps
+
+`FetchFailed` and `ProviderCancelled` (reporting a cancellation as a failure was
+a lie); `AudioTrack.approxBytes` so the progress total does not grow mid-job;
+`ProgressUpdate.stage` so 100% during merging is distinguishable from done;
+`Preferences.embedSubtitles` — the designs expose it as a toggle, so it belongs
+to the user, not to the plan.
+
+⚠️ **`isOriginal` inference, worth knowing**: when no format carries the
+`original` marker and there is exactly **one** audio language, the provider marks
+that track original — otherwise `originalOnly` would have no candidate on the
+common case of a video with no dubs. With two or more languages and no marker,
+**none** is marked. Never all.
+
+---
+
+## 2026-08-26 — Foundation laid
 
 ### State
 

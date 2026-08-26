@@ -435,6 +435,7 @@ export function buildDownloadPlan(
     subtitles,
     languageTags: buildLanguageTags(audio, subtitles),
     sponsorblock: preferences.sponsorblock,
+    subtitleMode: preferences.embedSubtitles ? "embed" : "sidecar",
     outputName: toOutputName(info.title, info.externalId),
   });
 }

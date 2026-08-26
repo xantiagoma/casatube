@@ -54,6 +54,30 @@ export class FormatUnavailable extends TaggedError("FormatUnavailable")<{
   wanted: string;
 }> {}
 
+/**
+ * The download itself failed, as opposed to the metadata lookup.
+ *
+ * Distinct from ProbeFailed because they happen at different stages and mean
+ * different things to a retry: a probe failure may be permanent, a fetch
+ * failure is often worth another attempt.
+ */
+export class FetchFailed extends TaggedError("FetchFailed")<{
+  url: string;
+  detail: string;
+  exitCode?: number;
+}> {}
+
+/**
+ * The caller aborted through the signal.
+ *
+ * Lives in ProviderError as well as WorkerError because a provider is where the
+ * abort is actually observed, and reporting it as a failure would be a lie —
+ * cancelling is a normal outcome, not a fault.
+ */
+export class ProviderCancelled extends TaggedError("ProviderCancelled")<{
+  url: string;
+}> {}
+
 // --- Worker -----------------------------------------------------------------
 
 export class StageFailed extends TaggedError("StageFailed")<{
@@ -119,6 +143,8 @@ export class InvalidTransition extends TaggedError("InvalidTransition")<{
 export type ProviderError =
   | UnsupportedUrl
   | ProbeFailed
+  | FetchFailed
+  | ProviderCancelled
   | Blocked
   | RateLimited
   | AuthRequired

@@ -145,6 +145,11 @@ export const bunSpawner: Spawner = async (req) => {
 
 // --- Structured progress ----------------------------------------------------
 
+/** Files yt-dlp writes beside the media: subtitles today, thumbnails if ever asked for. */
+const SIDECAR_EXTENSIONS = new Set([
+  ".vtt", ".srt", ".ass", ".ssa", ".ttml", ".srv1", ".srv2", ".srv3", ".json3", ".lrc", ".sbv",
+]);
+
 const DL_TAG = "CT-DL";
 const PP_TAG = "CT-PP";
 const FILE_TAG = "CT-FILE";
@@ -164,7 +169,13 @@ const FILEPATH_TEMPLATE = `after_move:${FILE_TAG}|%(filepath)s`;
 
 export interface DownloadProgressLine {
   status: string;
-  /** Key for per-file bookkeeping: the format id, or the filename as fallback. */
+  /**
+   * Key for per-file bookkeeping.
+   *
+   * The filename, not the format id: subtitle sidecars come through this same
+   * template with `format_id` set to `NA`, so keying on the id would collide
+   * two different files into one counter.
+   */
   key: string;
   doneBytes: number;
   totalBytes?: number;
@@ -192,7 +203,7 @@ export function parseDownloadLine(line: string): DownloadProgressLine | null {
   const done = num(parts[2]) ?? 0;
   const total = num(parts[3]) ?? num(parts[4]);
   const filename = text(parts.slice(8).join("|"));
-  const key = text(parts[7]) ?? filename ?? "single";
+  const key = filename ?? text(parts[7]) ?? "single";
   return {
     status,
     key,
@@ -222,6 +233,25 @@ export function parseFilePathLine(line: string): string | null {
 }
 
 /**
+ * Is this file part of what the progress bar is measuring?
+ *
+ * ⚠️ Verified against the real binary: with `--write-subs`, yt-dlp downloads
+ * the **subtitle file first**, and reports it through the same
+ * `--progress-template`. A 440-byte `.vtt` completes instantly, so a naive
+ * accumulator shows 100% before the video has started a single byte — the same
+ * lie as the per-file reset, from the other direction.
+ *
+ * Sidecars are excluded from the byte budget instead of being special-cased in
+ * the bar. Their `format_id` is `NA`, so the extension is what identifies them.
+ */
+export function isMediaFile(filename: string | undefined): boolean {
+  if (!filename) return true;
+  const dot = filename.lastIndexOf(".");
+  if (dot === -1) return true;
+  return !SIDECAR_EXTENSIONS.has(filename.slice(dot).toLowerCase());
+}
+
+/**
  * Sums progress across the several files one download produces.
  *
  * yt-dlp counts bytes per file and starts again at zero for the next one. Per
@@ -238,7 +268,15 @@ export function parseFilePathLine(line: string): string | null {
 export class ProgressAccumulator {
   private readonly files = new Map<string, { done: number; total: number }>();
 
-  update(line: DownloadProgressLine): ProgressUpdate {
+  /**
+   * Folds one line into the running totals.
+   *
+   * Returns `null` for a file that is not part of the media byte budget — see
+   * `isMediaFile`. Those lines are real progress, they are just progress on
+   * something else.
+   */
+  update(line: DownloadProgressLine): ProgressUpdate | null {
+    if (!isMediaFile(line.filename)) return null;
     const finished = line.status === "finished";
     // On `finished` the byte count is authoritative; before that a missing
     // total is better approximated by what has already arrived than by zero.
@@ -335,11 +373,14 @@ export function classifyError({ stderr, url, wanted }: ClassifyInput): ProviderE
   // 3. Gone, geo-blocked, or DRM. Real messages, reproduced 2026-08-26:
   //      6SJNVb0GnPI -> "This video has been removed for violating YouTube's
   //                      policy on hate speech."
-  //      aaaaaaaaaaa -> "Video unavailable"
+  //      aaaaaaaaaaa -> "Video unavailable" AND, minutes later on the same
+  //                      binary, "This video is unavailable". The wording
+  //                      depends on which player client answered, so the
+  //                      pattern has to tolerate both.
   //      sJL6WA-aGkQ -> "The uploader has not made this video available in your
   //                      country"
   if (
-    /video unavailable/.test(t) ||
+    /video (?:is )?unavailable/.test(t) ||
     /has been removed/.test(t) ||
     /no longer available/.test(t) ||
     /this video has been terminated/.test(t) ||
@@ -755,10 +796,6 @@ function defaultBinary(): string {
 
 // --- The provider -----------------------------------------------------------
 
-const SUBTITLE_FILE_EXTENSIONS = new Set([
-  ".vtt", ".srt", ".ass", ".ssa", ".ttml", ".srv1", ".srv2", ".srv3", ".json3", ".lrc", ".sbv",
-]);
-
 async function listSidecarSubtitles(workDir: string, outputName: string): Promise<string[]> {
   const { readdir } = await import("node:fs/promises");
   const { join, extname } = await import("node:path");
@@ -769,7 +806,7 @@ async function listSidecarSubtitles(workDir: string, outputName: string): Promis
     return [];
   }
   return names
-    .filter((n) => n.startsWith(`${outputName}.`) && SUBTITLE_FILE_EXTENSIONS.has(extname(n)))
+    .filter((n) => n.startsWith(`${outputName}.`) && SIDECAR_EXTENSIONS.has(extname(n)))
     .sort()
     .map((n) => join(workDir, n));
 }
@@ -857,7 +894,9 @@ export function createYtdlpProvider(options: YtdlpOptions = {}): Provider {
       const handleLine = (line: string, stream: "out" | "err") => {
         const download = parseDownloadLine(line);
         if (download) {
-          ctx.onProgress(progress.update(download));
+          const update = progress.update(download);
+          if (update) ctx.onProgress(update);
+          else if (download.status === "finished") ctx.log(`sidecar: ${download.filename}`);
           return;
         }
         const post = parsePostProcessLine(line);
@@ -929,8 +968,3 @@ export function createYtdlpProvider(options: YtdlpOptions = {}): Provider {
     },
   };
 }
-
-/** Convenience for callers that just want the built-in with defaults. */
-export const ytdlpProvider: Provider = createYtdlpProvider();
-
-export type { ProviderContext };

@@ -46,6 +46,14 @@ export interface Preferences {
   subtitleLanguages: string[];
   maxResolution: number;
   sponsorblock: boolean;
+  /**
+   * Embed subtitles in the container, or write them alongside as files.
+   *
+   * The reference designs expose this as a toggle, so it belongs to the user
+   * rather than to the plan. Sidecars are the default: every media server reads
+   * them and they can be replaced without touching the video.
+   */
+  embedSubtitles: boolean;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -54,6 +62,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   subtitleLanguages: ["en"],
   maxResolution: 1080,
   sponsorblock: true,
+  embedSubtitles: false,
 };
 
 type JobRow = typeof jobs.$inferSelect;
@@ -172,6 +181,14 @@ export interface AudioTrack {
   isOriginal: boolean;
   bitrate?: number;
   codec?: string;
+  /**
+   * Approximate size, so the total can be seeded before the track starts.
+   *
+   * Without it the progress total grows as each file begins and the percentage
+   * dips — audio is a few percent of a 1080p download, so it is a small dip
+   * rather than a reset, but it is still the bar telling a small lie.
+   */
+  approxBytes?: number;
 }
 
 export interface SubtitleTrack {
@@ -222,6 +239,14 @@ export interface DownloadPlan {
    */
   languageTags: Record<string, string>;
   sponsorblock: boolean;
+  /**
+   * Embedded in the container, or written alongside as separate files.
+   *
+   * Sidecars are easier to replace later and every media server reads them;
+   * embedded travels with the file. The plan has to say which, because the
+   * provider cannot guess.
+   */
+  subtitleMode: "embed" | "sidecar";
   /** Safe filename, without extension. */
   outputName: string;
 }
@@ -242,6 +267,14 @@ export interface ProviderContext {
 }
 
 export interface ProgressUpdate {
+  /**
+   * Which stage this reading describes.
+   *
+   * Without it, "100%" during post-processing is indistinguishable from "done"
+   * — the UI needs to say *merging* rather than leaving a full bar sitting
+   * there while ffmpeg works.
+   */
+  stage?: StageName;
   percent?: number;
   doneBytes?: number;
   totalBytes?: number;
