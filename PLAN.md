@@ -40,28 +40,33 @@ folder. Every one had to be finished by hand.
 
 ## 3. Architecture
 
-```
-                    ┌──────────────────────────────┐
-  Browser  ──SSE──▶ │  Elysia HTTP server          │
-  (observes only)   │  /api/jobs /sources /library │
-                    └──────────────┬───────────────┘
-                                   │ enqueue
-                    ┌──────────────▼───────────────┐
-                    │  bunqueue (SQLite-backed)    │
-                    │  priority · retries · DLQ    │
-                    └──────────────┬───────────────┘
-                                   │ claim
-                    ┌──────────────▼───────────────┐
-                    │  Worker: 6-stage pipeline    │
-                    │  via a Provider (see §5)     │
-                    └──────────────┬───────────────┘
-                                   │
-      local temp  ────────────────▶│ move only when complete
-                                   ▼
-                          destination library
-                                   │
-                                   ▼
-                       media server refresh hook
+```mermaid
+flowchart TB
+    subgraph B["Browser — observes only"]
+        UI["React UI<br/>reload rebuilds state from server"]
+    end
+
+    subgraph C["CasaTube — one Docker image"]
+        API["Elysia HTTP API"]
+        Q[("bunqueue · SQLite<br/>priority · retries · DLQ")]
+        W["Worker<br/>six-stage pipeline"]
+        P["Provider<br/>yt-dlp first, not assumed"]
+    end
+
+    TMP["Local temp disk"]
+    LIB["Destination library<br/>network mount"]
+    MS["Media server"]
+
+    UI -->|"POST /api/jobs"| API
+    API -.->|"SSE: state changes"| UI
+    API -->|enqueue| Q
+    Q -->|claim| W
+    W --> P
+    P -->|"writes here first"| TMP
+    TMP -->|"move only when complete"| LIB
+    W -->|"refresh on completion"| MS
+
+    style B stroke-dasharray: 5 5
 ```
 
 **Download to local disk, move at the end.** The destination is typically a
@@ -151,13 +156,44 @@ vocabulary right is the main design risk of this project.
 
 Six stages, each with its own state, so the UI can show where a job actually is:
 
-```
-validate → analyze → download → postprocess → metadata → move
+```mermaid
+flowchart LR
+    V["validate"] --> A["analyze"] --> D["download"]
+    D --> P["postprocess"] --> M["metadata"] --> MV["move"]
 ```
 
 The global status is derived from the running stage. Every stage records when it
 started, when it finished, and its error if it failed. Per-job logs are kept and
 exposed — when something fails at 3am, the log is the whole story.
+
+**The status machine is where R1 and R2 live:**
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued
+    queued --> analyzing
+    analyzing --> downloading
+    downloading --> processing
+    processing --> moving
+    moving --> done
+    done --> [*]
+
+    analyzing --> failed
+    downloading --> failed
+    processing --> failed
+    moving --> failed
+
+    failed --> queued: retry while attempts < maxAttempts
+    failed --> [*]: attempts exhausted
+    queued --> cancelled
+    cancelled --> [*]
+
+    note left of queued
+        On startup, every in-flight status
+        returns here — that is R2.
+        Progress is kept so the download resumes.
+    end note
+```
 
 ---
 
@@ -193,6 +229,49 @@ top:
   captions, fullscreen, PiP, HLS.
 - **[reui.io](https://reui.io)** — second source for anything Dice UI does not
   cover.
+
+### Talking to the backend: Eden Treaty
+
+**[Eden](https://elysiajs.com/eden/overview) is how the frontend calls the API** —
+not `fetch`, not a hand-written client. Eden Treaty derives a fully typed client
+from the server's own type:
+
+```ts
+import { treaty } from "@elysiajs/eden";
+import type { App } from "../server";
+
+const api = treaty<App>("");
+const { data, error } = await api.jobs.post({ url, destination, preferences });
+```
+
+Why it matters here: the API surface is large (jobs, sources, library, stats,
+scheduler, settings) and **still moving**. With Eden, renaming a route or
+changing a payload becomes a **compile error in the frontend** instead of a
+runtime 404 found by clicking around. The `Job` shape flows from Drizzle's schema
+through Elysia to the React components with no hand-maintained duplicate.
+
+⚠️ **Consequence to accept up front**: Eden requires the frontend to import the
+server's *type*. Server and web must live in the same TypeScript project so the
+type is reachable. That rules out splitting them into separate repositories
+later without giving up Eden or publishing the types as a package.
+
+### Routing: TanStack Router
+
+Ten or so screens, most of them with state that belongs in the URL.
+
+**[TanStack Router](https://tanstack.com/router)**, chosen for one concrete
+reason: **typed and validated search params**. The Library screen filters by
+media type, source, resolution, tags and sort order; the Queue filters by status;
+the Downloads screen has tabs. All of that belongs in the URL so a view can be
+shared, bookmarked and survive a reload — and TanStack Router types and validates
+those params instead of leaving them as untyped strings.
+
+Rejected: **React Router v7**, whose centre of gravity has moved to the
+framework/SSR mode — we serve a plain SPA from Elysia and would carry weight we
+do not use. **Wouter**, too minimal once search-param typing matters.
+
+⚠️ **Integration detail**: client-side routing means Elysia needs a catch-all
+serving `index.html` for any non-`/api` path, or a deep link reloads into a 404.
 
 ### Where the media player earns its place
 
