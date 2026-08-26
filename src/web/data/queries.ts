@@ -21,11 +21,12 @@ import type { DestinationFolder } from "../../api/destinations";
 import type { MediaOptions, Suggestion } from "../../api/options";
 import type { Job, MediaInfo, Preferences, Priority } from "../../core/types";
 import { api, unwrap } from "./client";
+import { keys } from "./keys";
 
 /** One key for the queue. Everything that changes a job invalidates it. */
-export const JOBS_KEY = ["jobs"] as const;
-export const DESTINATIONS_KEY = ["destinations"] as const;
-export const probeKey = (url: string): readonly unknown[] => ["probe", url] as const;
+export const JOBS_KEY = keys.jobs;
+export const DESTINATIONS_KEY = keys.destinations;
+export const probeKey = (url: string): readonly unknown[] => keys.probe(url);
 
 export interface QueueSnapshot {
   at: string;
@@ -190,5 +191,27 @@ export function useCreateDestination() {
   return useMutation<{ path: string; created: boolean }, Error, string>({
     mutationFn: async (path) => unwrap(await api.api.destinations.post({ path })),
     onSuccess: () => void client.invalidateQueries({ queryKey: DESTINATIONS_KEY }),
+  });
+}
+
+// --- Defaults ---------------------------------------------------------------
+
+export interface JobDefaults {
+  preferences: Preferences;
+  resolved: Preferences;
+}
+
+/**
+ * What a fresh form starts from.
+ *
+ * From the server rather than a constant in the bundle: the defaults are the
+ * ones the worker will apply if the form sends nothing, and a second copy of
+ * them in the browser is a copy free to be wrong.
+ */
+export function useJobDefaults(): UseQueryResult<JobDefaults, Error> {
+  return useQuery({
+    queryKey: keys.jobDefaults,
+    queryFn: async () => unwrap(await api.api.jobs.defaults.get()),
+    staleTime: Infinity,
   });
 }

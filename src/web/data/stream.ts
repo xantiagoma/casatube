@@ -60,13 +60,16 @@ export function useJobStream(): StreamState {
 
   useEffect(() => {
     const controller = new AbortController();
+    // The signal is read on every loop turn and every frame; reaching through
+    // the controller each time is a property lookup in a hot path for nothing.
+    const { signal } = controller;
     let attempt = 0;
 
     const run = async (): Promise<void> => {
-      while (!controller.signal.aborted) {
+      while (!signal.aborted) {
         try {
-          const stream = await api.api.events.get({ fetch: { signal: controller.signal } });
-          if (controller.signal.aborted) return;
+          const stream = await api.api.events.get({ fetch: { signal } });
+          if (signal.aborted) return;
           if (!stream.data) throw new Error("the server did not open the stream");
 
           attempt = 0;
@@ -78,17 +81,17 @@ export function useJobStream(): StreamState {
           void client.invalidateQueries({ queryKey: JOBS_KEY });
 
           for await (const frame of stream.data) {
-            if (controller.signal.aborted) return;
+            if (signal.aborted) return;
             const snapshot = snapshotOf(frame);
             if (!snapshot) continue; // heartbeat, or something newer than this build
             client.setQueryData<QueueSnapshot>(JOBS_KEY, snapshot);
           }
         } catch (cause) {
-          if (controller.signal.aborted) return;
+          if (signal.aborted) return;
           setProblem(cause instanceof Error ? cause.message : String(cause));
         }
 
-        if (controller.signal.aborted) return;
+        if (signal.aborted) return;
         // The stream ended — a restart, a dropped connection, a sleeping
         // laptop. The queue is unaffected by all of them (R1, R2); only this
         // view needs putting back together.

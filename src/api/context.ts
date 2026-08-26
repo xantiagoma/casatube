@@ -6,6 +6,7 @@
  * end-to-end test possible without a real yt-dlp on the machine.
  */
 import type { Db } from "../core/db";
+import type { PluginRuntime } from "../core/plugin-runtime";
 import type { JobQueue } from "../core/queue";
 import type { SourceScheduler } from "../core/scheduler";
 import type { SourceManager } from "../core/sources";
@@ -29,5 +30,13 @@ export interface AppContext {
   sources: SourceManager;
   scheduler: SourceScheduler;
   watcher: QueueWatcher;
+  /**
+   * The loaded plugins, when the process has any.
+   *
+   * Optional because `createApp` must stand up without one — the routes fall
+   * back to an empty runtime, which lists nothing and is exactly what a caller
+   * that never loaded plugins should see.
+   */
+  plugins?: PluginRuntime;
   config: ServerConfig;
 }

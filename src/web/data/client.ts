@@ -102,11 +102,6 @@ export class ApiRequestError extends Error {
   }
 }
 
-/** The failure behind an unknown error, when there is one. */
-export function failureOf(error: unknown): ApiFailure | null {
-  return error instanceof ApiRequestError ? error.failure : null;
-}
-
 /** Eden's response, or a throw. What every `queryFn` and `mutationFn` returns. */
 export function unwrap<T>(response: { data: T | null; error: unknown }): T {
   const result = normalise(response);

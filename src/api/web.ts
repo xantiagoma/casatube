@@ -14,6 +14,12 @@
  */
 import { Elysia } from "elysia";
 import { basename, resolve } from "node:path";
+/**
+ * Tailwind v4 has no config file and no separate CLI step here: the plugin
+ * compiles `styles.css` inside the same `Bun.build` that produces the bundle,
+ * so `bun src/server.ts` remains the whole story (see the note above).
+ */
+import tailwind from "bun-plugin-tailwind";
 
 import type { AppContext } from "./context";
 
@@ -52,6 +58,7 @@ export async function buildClient(options: { dev?: boolean } = {}): Promise<Clie
     built = await Bun.build({
       entrypoints: [ENTRYPOINT],
       target: "browser",
+      plugins: [tailwind],
       minify: !dev,
       sourcemap: dev ? "inline" : "none",
       // Absolute, because the catch-all serves this HTML at arbitrary depths:

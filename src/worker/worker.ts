@@ -30,6 +30,16 @@ export interface WorkerOptions {
   leaseMs?: number;
   pollMs?: number;
   now?: () => Date;
+  /**
+   * Told when a job ends, so the bell has something in it.
+   *
+   * Optional and never awaited for correctness: a notification that fails to
+   * write must not fail the download it was reporting on.
+   */
+  notifier?: {
+    completed(job: Job): Promise<void>;
+    failed(job: Job, error: string): Promise<void>;
+  };
 }
 
 const nowIso = (now: () => Date) => now().toISOString();
@@ -42,7 +52,7 @@ export class Worker {
   constructor(o: WorkerOptions) {
     this.#o = {
       workerId: `slot-1`, leaseMs: 60_000, pollMs: 1_000,
-      now: () => new Date(), ...o,
+      now: () => new Date(), notifier: undefined as never, ...o,
     };
   }
 
@@ -127,7 +137,10 @@ export class Worker {
             await queue.defer(job.id, wait);
           }
           await queue.update(job.id, { error: detail });
-          await queue.retry(job.id);
+          const failed = await queue.retry(job.id);
+          if (this.#o.notifier && Result.isOk(failed) && failed.value.status === "failed") {
+            void this.#o.notifier.failed(failed.value, detail);
+          }
           return;
         }
 
@@ -138,10 +151,13 @@ export class Worker {
         await queue.update(job.id, { stages });
       }
 
-      await queue.update(job.id, {
+      const finished = await queue.update(job.id, {
         status: "done", progress: 100,
         outputFile: downloaded ? await this.#finalPath(job, downloaded.file) : null,
       });
+      if (this.#o.notifier && Result.isOk(finished)) {
+        void this.#o.notifier.completed(finished.value);
+      }
       await rm(workDir, { recursive: true, force: true });
     } catch (err) {
       if (controller.signal.aborted) {

@@ -5,7 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <title>CasaTube</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <!--
+      The theme, before first paint. Without this the page renders light for a
+      frame and then flips, which on an iPad at night is the difference between
+      "an app" and "a torch". `main.tsx` takes over from here.
+    -->
+    <script>
+      try {
+        var choice = localStorage.getItem("casatube.theme");
+        var dark = choice === "dark" || (choice !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+        if (dark) document.documentElement.classList.add("dark");
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      } catch (e) {
+        /* A theme that cannot be read is not a reason to fail to load. */
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

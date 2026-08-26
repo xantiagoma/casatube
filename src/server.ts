@@ -21,6 +21,7 @@ import { Elysia } from "elysia";
 import { appDbPath, openDb, queueDbPath } from "./core/db";
 import { Worker } from "./worker/worker";
 import { createPluginRuntime, pluginsDir } from "./core/plugin-runtime";
+import { NotificationStore, createJobNotifier } from "./core/notifications";
 import { openJobQueue } from "./core/queue";
 import { SourceScheduler } from "./core/scheduler";
 import { SourceManager, registryDiscoverer } from "./core/sources";
@@ -33,6 +34,7 @@ import { notificationRoutes } from "./api/notifications";
 import { statsRoutes } from "./api/stats";
 import { jobRoutes } from "./api/jobs";
 import { libraryRoutes } from "./api/library";
+import { pluginRoutes } from "./api/plugins";
 import { probeRoutes } from "./api/probe";
 import { sourceRoutes } from "./api/sources";
 import { createQueueWatcher } from "./api/watcher";
@@ -57,6 +59,17 @@ function apiRoutes(ctx: AppContext) {
     .use(sourceRoutes(ctx))
     .use(statsRoutes(ctx))
     .use(notificationRoutes(ctx))
+    /**
+     * Plugins. `ctx.plugins` is optional, so an app assembled without a runtime
+     * still answers here — with an empty list, which is the truthful answer for
+     * a process that loaded none. Constructing one costs nothing: the runtime
+     * reads the disk in `load()`, never in its constructor.
+     */
+    .use(
+      pluginRoutes(
+        ctx.plugins ?? createPluginRuntime({ dir: pluginsDir(ctx.config.dataDir), registry: ctx.registry }),
+      ),
+    )
     .use(eventRoutes(ctx));
 }
 
@@ -138,7 +151,7 @@ async function main(): Promise<StartedServer> {
     onError: (sourceId, error) => console.error(`[casatube] source ${sourceId}:`, error),
   });
 
-  const ctx: AppContext = { db, queue, registry, watcher, config, sources, scheduler };
+  const ctx: AppContext = { db, queue, registry, watcher, config, sources, scheduler, plugins };
 
   const bundle = await buildClient({ dev: config.dev });
   if (bundle.error) console.error(`[casatube] client bundle failed:\n${bundle.error}`);
@@ -147,9 +160,15 @@ async function main(): Promise<StartedServer> {
   // talks to the queue through the database like any other client would, and
   // the watcher polls the table rather than listening to it. That is what keeps
   // PLAN §17 rule 3 true — no in-memory state welds the two together.
+  const notifier = createJobNotifier(
+    new NotificationStore({ db }),
+    (cause) => console.error("[casatube] notification write failed", cause),
+  );
+
   const worker = new Worker({
     queue,
     registry,
+    notifier,
     tempDir: config.tempDir,
     libraryDir: config.libraryDir,
   });

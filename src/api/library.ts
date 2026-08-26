@@ -21,6 +21,7 @@
  */
 import { Elysia, t } from "elysia";
 import { Result } from "better-result";
+import { join } from "node:path";
 
 import {
   DEFAULT_TRASH_RETENTION_DAYS,
@@ -110,6 +111,53 @@ export function libraryRoutes(ctx: AppContext) {
        * the difference between a page and a stall, which is why the listing
        * never does it and this route does it one item at a time.
        */
+      /**
+       * Stream a file so the browser can play it without leaving CasaTube.
+       *
+       * `Bun.file` gives a lazy handle, so returning it streams rather than
+       * loading the file into memory — a 4 GB video would otherwise be a 4 GB
+       * allocation. Range requests are what let a player seek, and every video
+       * element sends them, so a route without range support plays only from
+       * the start and cannot scrub.
+       */
+      .get(
+        "/file",
+        async ({ query, request, set }) => {
+          const path = safeDestination(query.path, config.libraryDir);
+          if (Result.isError(path)) return fail(path.error);
+
+          const found = await library.item(path.value);
+          if (Result.isError(found)) return fail(found.error);
+
+          const absolute = join(config.libraryDir, path.value);
+          const file = Bun.file(absolute);
+          const size = found.value.size;
+
+          const range = request.headers.get("range");
+          const match = range ? /bytes=(\d*)-(\d*)/.exec(range) : null;
+          if (!match) {
+            set.headers["accept-ranges"] = "bytes";
+            set.headers["content-length"] = String(size);
+            return new Response(file);
+          }
+
+          const start = match[1] ? Number(match[1]) : 0;
+          const end = match[2] ? Number(match[2]) : size - 1;
+          if (!(start >= 0 && end < size && start <= end)) {
+            set.status = 416;
+            set.headers["content-range"] = `bytes */${size}`;
+            return new Response(null, { status: 416 });
+          }
+
+          set.status = 206;
+          set.headers["accept-ranges"] = "bytes";
+          set.headers["content-range"] = `bytes ${start}-${end}/${size}`;
+          set.headers["content-length"] = String(end - start + 1);
+          return new Response(file.slice(start, end + 1));
+        },
+        { query: t.Object({ path: t.String() }) },
+      )
+
       .get(
         "/item",
         async ({ query }) => {

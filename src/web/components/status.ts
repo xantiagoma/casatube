@@ -29,11 +29,6 @@ export function statusLook(status: JobStatus): StatusLook {
   return LOOKS[status] ?? { label: status, tone: "idle" };
 }
 
-/** Statuses a worker is actively holding — the ones worth animating. */
-export function isActive(status: JobStatus): boolean {
-  return status === "analyzing" || status === "downloading" || status === "processing" || status === "moving";
-}
-
 export function isTerminal(status: JobStatus): boolean {
   return status === "done" || status === "failed" || status === "cancelled";
 }

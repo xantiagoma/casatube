@@ -5,8 +5,12 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { RouterProvider } from "@tanstack/react-router";
 
-import { App } from "./components/App";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { ThemeProvider } from "./data/theme";
+import { router } from "./router";
+import "./styles.css";
 
 const client = new QueryClient({
   defaultOptions: {
@@ -28,7 +32,11 @@ if (!container) throw new Error("index.html has no #root — the bundle and the 
 createRoot(container).render(
   <StrictMode>
     <QueryClientProvider client={client}>
-      <App />
+      <ThemeProvider>
+        <TooltipProvider delayDuration={200}>
+          <RouterProvider router={router} />
+        </TooltipProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

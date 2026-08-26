@@ -86,3 +86,22 @@ what moves post-process progress to stderr; `--color no` does not exist
 (`--color never`); yt-dlp exits 0 when it cannot merge and then names a file it
 never wrote; and `--write-subs` downloads a tiny subtitle first, which drives a
 naive progress bar to 100% before the video starts.
+
+## Three that cost time building the UI (2026-08-26)
+
+**TypeScript 7 removed `baseUrl`.** Path aliases are now resolved relative to
+the `tsconfig.json` itself. An alias that worked yesterday silently stops
+resolving, and the error points at the import rather than the config.
+
+**shadcn's `CardHeader` is a grid, not a flex row.** So `flex-row
+justify-between` on it is inert — nothing errors, the layout simply ignores you.
+Use `CardAction` for the right-hand slot.
+
+**Dice UI's media-player root carries `size-full`**, which stretches it into a
+tall black band unless you pass `h-auto`.
+
+⚠️ Also fixed while there: an upstream listener leak in Dice UI's
+`media-player.tsx`. `timeupdate`, `volumechange`, `error` and `fullscreenchange`
+were added with inline arrow functions and "removed" with freshly created ones —
+so four listeners leaked per mount. Worth knowing that vendored components are
+now our code: nobody upstream will fix that for us.

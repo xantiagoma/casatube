@@ -143,5 +143,24 @@ export function jobRoutes(ctx: AppContext) {
         return retried.value;
       })
 
+      /**
+       * Hold a job without losing it.
+       *
+       * Paused is a column, so it outlives the process and the claim query
+       * simply skips it — a paused job is not a job in a special place, it is
+       * one the queue declines to hand out.
+       */
+      .post("/:id/pause", async ({ params }) => {
+        const paused = await queue.pause(params.id);
+        if (Result.isError(paused)) return fail(paused.error);
+        return paused.value;
+      })
+
+      .post("/:id/resume", async ({ params }) => {
+        const resumed = await queue.resume(params.id);
+        if (Result.isError(resumed)) return fail(resumed.error);
+        return resumed.value;
+      })
+
   );
 }

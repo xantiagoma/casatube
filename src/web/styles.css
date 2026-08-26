@@ -1,678 +1,197 @@
 /*
- * Plain CSS, on purpose and for now.
+ * The design system, as tokens.
  *
- * PLAN §8 ends at shadcn/Tailwind, and that is a later phase. What matters
- * today is that the queue is legible while the design system is not there yet
- * — and that everything visual is tokens, so replacing this file is the whole
- * job when it is.
+ * Tailwind v4: no config file, everything is CSS. `@theme inline` maps the
+ * shadcn variable names onto Tailwind utilities, so `bg-card` and
+ * `text-muted-foreground` mean the same thing in both themes and a component
+ * never names a colour twice.
  *
- * Light and dark are decided here rather than retrofitted (PLAN §8): the system
- * preference is the default, and an explicit `data-theme` on <html> overrides
- * it in either direction.
+ * 🔴 Light and dark are decided here, not retrofitted (PLAN §8). The palette
+ * follows the reference designs: a blue accent in light, violet in dark.
+ *
+ * The `dark` variant keys off a class on <html>, which `useTheme` sets after
+ * resolving `system` against `prefers-color-scheme`. Resolving in JS rather
+ * than in a media query is what lets an explicit choice win in both directions
+ * with one selector instead of three.
  */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@source "./";
+
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --surface-2: #f0f2f5;
-  --border: #dfe3e8;
-  --text: #16191d;
-  --text-dim: #5b6572;
-  --accent: #2563eb;
-  --accent-text: #ffffff;
-  --ok: #17803d;
-  --warn: #b45309;
-  --danger: #b42318;
-  --busy: #2563eb;
-  /* Dim, but it labels a status badge — it has to clear 4.5:1 on the card. */
-  --idle: #6b7280;
+  --radius: 0.75rem;
 
-  --radius: 10px;
-  --gap: 12px;
-  --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 1px 3px rgb(16 24 40 / 10%);
+  --background: oklch(0.976 0.002 247);
+  --foreground: oklch(0.21 0.03 258);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.03 258);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.03 258);
+  --primary: oklch(0.55 0.21 262);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.968 0.005 247);
+  --secondary-foreground: oklch(0.28 0.03 258);
+  --muted: oklch(0.968 0.005 247);
+  --muted-foreground: oklch(0.55 0.02 257);
+  --accent: oklch(0.958 0.012 262);
+  --accent-foreground: oklch(0.37 0.09 262);
+  --destructive: oklch(0.58 0.22 27);
+  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.6 0.14 155);
+  --success-foreground: oklch(0.99 0 0);
+  --warning: oklch(0.72 0.16 70);
+  --warning-foreground: oklch(0.24 0.05 70);
+  --border: oklch(0.923 0.007 255);
+  --input: oklch(0.923 0.007 255);
+  --ring: oklch(0.55 0.21 262);
+
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.32 0.02 258);
+  --sidebar-accent: oklch(0.958 0.012 262);
+  --sidebar-accent-foreground: oklch(0.42 0.15 262);
+  --sidebar-border: oklch(0.93 0.006 255);
+
+  --chart-1: oklch(0.55 0.21 262);
+  --chart-2: oklch(0.65 0.16 195);
+  --chart-3: oklch(0.62 0.15 155);
+  --chart-4: oklch(0.74 0.15 75);
+  --chart-5: oklch(0.62 0.2 20);
 
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0e1116;
-    --surface: #161b22;
-    --surface-2: #1c2230;
-    --border: #2a313c;
-    --text: #e8ecf2;
-    --text-dim: #97a1b0;
-    --accent: #5b8cff;
-    --accent-text: #08101f;
-    --ok: #3fb950;
-    --warn: #d29922;
-    --danger: #f85149;
-    --busy: #5b8cff;
-    --idle: #97a1b0;
-    --shadow: none;
+.dark {
+  --background: oklch(0.16 0.014 265);
+  --foreground: oklch(0.95 0.005 260);
+  --card: oklch(0.21 0.017 265);
+  --card-foreground: oklch(0.95 0.005 260);
+  --popover: oklch(0.23 0.017 265);
+  --popover-foreground: oklch(0.95 0.005 260);
+  --primary: oklch(0.63 0.2 292);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.27 0.018 265);
+  --secondary-foreground: oklch(0.92 0.005 260);
+  --muted: oklch(0.26 0.017 265);
+  --muted-foreground: oklch(0.68 0.015 260);
+  --accent: oklch(0.3 0.04 285);
+  --accent-foreground: oklch(0.92 0.03 292);
+  --destructive: oklch(0.63 0.2 25);
+  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.68 0.15 155);
+  --success-foreground: oklch(0.15 0.02 155);
+  --warning: oklch(0.78 0.15 75);
+  --warning-foreground: oklch(0.2 0.04 70);
+  --border: oklch(0.31 0.018 265);
+  --input: oklch(0.31 0.018 265);
+  --ring: oklch(0.63 0.2 292);
 
-    color-scheme: dark;
-  }
-}
+  --sidebar: oklch(0.185 0.015 265);
+  --sidebar-foreground: oklch(0.85 0.01 260);
+  --sidebar-accent: oklch(0.3 0.045 288);
+  --sidebar-accent-foreground: oklch(0.93 0.03 292);
+  --sidebar-border: oklch(0.28 0.018 265);
 
-:root[data-theme="dark"] {
-  --bg: #0e1116;
-  --surface: #161b22;
-  --surface-2: #1c2230;
-  --border: #2a313c;
-  --text: #e8ecf2;
-  --text-dim: #97a1b0;
-  --accent: #5b8cff;
-  --accent-text: #08101f;
-  --ok: #3fb950;
-  --warn: #d29922;
-  --danger: #f85149;
-  --busy: #5b8cff;
-  --idle: #97a1b0;
-  --shadow: none;
+  --chart-1: oklch(0.68 0.19 292);
+  --chart-2: oklch(0.7 0.15 200);
+  --chart-3: oklch(0.7 0.15 155);
+  --chart-4: oklch(0.78 0.15 75);
+  --chart-5: oklch(0.68 0.2 20);
 
   color-scheme: dark;
 }
 
-* {
-  box-sizing: border-box;
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  -webkit-text-size-adjust: 100%;
-}
+@layer base {
+  * {
+    border-color: var(--border);
+  }
 
-.shell {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 20px 16px 64px;
-}
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
 
-/* --- Header --------------------------------------------------------------- */
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family:
+      ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    /* The iPad is the target: nothing may scroll the page sideways. */
+    overflow-x: hidden;
+  }
 
-.header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--gap);
-  margin-bottom: 20px;
-}
+  /* Touch targets on the iPad, without making the desktop feel like a toy. */
+  @media (pointer: coarse) {
+    button,
+    [role="tab"],
+    a {
+      touch-action: manipulation;
+    }
+  }
 
-.header h1 {
-  font-size: 20px;
-  margin: 0;
-  letter-spacing: -0.01em;
-}
-
-.header .spacer {
-  flex: 1;
-}
-
-.tagline {
-  color: var(--text-dim);
-  font-size: 13px;
-  margin: 2px 0 0;
-  width: 100%;
-}
-
-/* --- Connection indicator ------------------------------------------------- */
-
-.conn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text-dim);
-  white-space: nowrap;
-}
-
-.conn .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--idle);
-}
-
-.conn.live .dot {
-  background: var(--ok);
-}
-
-.conn.connecting .dot,
-.conn.reconnecting .dot {
-  background: var(--warn);
-  animation: pulse 1.1s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  50% {
-    opacity: 0.25;
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 28%, transparent);
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .conn .dot {
-    animation: none;
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  &::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
   }
-}
-
-/* --- Cards and controls --------------------------------------------------- */
-
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 16px;
-  margin-bottom: 20px;
-}
-
-.card h2 {
-  font-size: 15px;
-  margin: 0 0 12px;
-}
-
-.grid {
-  display: grid;
-  gap: var(--gap);
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
-label {
-  display: block;
-  font-size: 13px;
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-
-.hint {
-  display: block;
-  font-weight: 400;
-  color: var(--text-dim);
-  font-size: 12px;
-  margin-top: 3px;
-}
-
-input[type="text"],
-input[type="url"],
-input[type="number"],
-select {
-  width: 100%;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-2);
-  color: var(--text);
-  font: inherit;
-  font-size: 14px;
-}
-
-input:focus-visible,
-select:focus-visible,
-button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.check {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  margin: 0;
-}
-
-.check input {
-  margin-top: 2px;
-  accent-color: var(--accent);
-}
-
-button {
-  font: inherit;
-  font-size: 14px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text);
-  padding: 9px 14px;
-  cursor: pointer;
-}
-
-button:hover:not(:disabled) {
-  border-color: var(--accent);
-}
-
-button:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-text);
-  font-weight: 600;
-}
-
-button.small {
-  padding: 5px 10px;
-  font-size: 13px;
-}
-
-button.danger:hover:not(:disabled) {
-  border-color: var(--danger);
-  color: var(--danger);
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-top: 14px;
-}
-
-/* --- Messages ------------------------------------------------------------- */
-
-.note {
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-size: 13px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  margin-top: 12px;
-}
-
-.note.ok {
-  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
-}
-
-.note.warn {
-  border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
-}
-
-.note.error {
-  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
-}
-
-.note code {
-  font-size: 12px;
-  word-break: break-all;
-}
-
-/* --- Queue ---------------------------------------------------------------- */
-
-.queue-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-
-.queue-head h2 {
-  margin: 0;
-  font-size: 15px;
-}
-
-.queue-head .meta {
-  color: var(--text-dim);
-  font-size: 12px;
-}
-
-.jobs {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.job {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 14px;
-}
-
-.job-top {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  flex-wrap: wrap;
-}
-
-.job-title {
-  font-weight: 600;
-  overflow-wrap: anywhere;
-  margin: 0;
-  font-size: 15px;
-}
-
-.job-url {
-  color: var(--text-dim);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  margin: 2px 0 0;
-}
-
-.job-buttons {
-  margin-left: auto;
-  display: flex;
-  gap: 6px;
-}
-
-.badge {
-  display: inline-block;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid currentcolor;
-  white-space: nowrap;
-}
-
-.badge.idle {
-  color: var(--idle);
-}
-
-.badge.busy {
-  color: var(--busy);
-}
-
-.badge.ok {
-  color: var(--ok);
-}
-
-.badge.warn {
-  color: var(--warn);
-}
-
-.badge.danger {
-  color: var(--danger);
-}
-
-/* --- Progress ------------------------------------------------------------- */
-
-.bar {
-  height: 8px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  overflow: hidden;
-  margin: 12px 0 6px;
-}
-
-.bar > span {
-  display: block;
-  height: 100%;
-  background: var(--busy);
-  transition: width 0.35s ease;
-}
-
-.bar.done > span {
-  background: var(--ok);
-}
-
-.bar.failed > span {
-  background: var(--danger);
-}
-
-.numbers {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-  font-size: 12px;
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
-}
-
-/* --- The six stages ------------------------------------------------------- */
-
-.stages {
-  display: flex;
-  gap: 6px;
-  margin-top: 12px;
-  flex-wrap: wrap;
-}
-
-.stage {
-  flex: 1 1 90px;
-  min-width: 88px;
-}
-
-.stage .pip {
-  height: 4px;
-  border-radius: 999px;
-  background: var(--border);
-}
-
-.stage .name {
-  font-size: 11px;
-  color: var(--text-dim);
-  margin-top: 4px;
-  display: block;
-  text-transform: capitalize;
-}
-
-.stage.running .pip {
-  background: var(--busy);
-}
-
-.stage.running .name {
-  color: var(--busy);
-  font-weight: 600;
-}
-
-.stage.done .pip {
-  background: var(--ok);
-}
-
-.stage.failed .pip {
-  background: var(--danger);
-}
-
-.stage.failed .name {
-  color: var(--danger);
-  font-weight: 600;
-}
-
-.stage.skipped .pip {
-  background: repeating-linear-gradient(90deg, var(--border) 0 4px, transparent 4px 8px);
-}
-
-/* --- Empty state ---------------------------------------------------------- */
-
-.empty {
-  text-align: center;
-  padding: 32px 16px;
-  color: var(--text-dim);
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-}
-
-/* --- Preview -------------------------------------------------------------- */
-
-.preview {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  margin-top: 12px;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-2);
-}
-
-.preview img {
-  width: 120px;
-  border-radius: 6px;
-  display: block;
-}
-
-.preview dl {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-dim);
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 2px 10px;
-}
-
-.preview dt {
-  font-weight: 600;
-}
-
-.preview dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-/* --- Choosing what to download -------------------------------------------- */
-/*
- * The options a probe found. Rows rather than a `<select multiple>`: multiple
- * selects are unusable with a thumb — the iPad is a target (PLAN §8) — and they
- * cannot carry the badge that says which audio track is the original or whether
- * a subtitle was written by a person.
- */
-
-.picker {
-  display: grid;
-  gap: var(--gap);
-  margin-top: 14px;
-}
-
-.field {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px 12px 12px;
-  margin: 0;
-  min-width: 0;
-}
-
-.field legend,
-.field-title {
-  font-size: 13px;
-  font-weight: 600;
-  padding: 0 4px;
-}
-
-.field legend .hint {
-  font-weight: 400;
-  max-width: 46ch;
-}
-
-.option-list {
-  display: grid;
-  gap: 6px;
-  /* Long lists happen: a YouTube video can carry eighty auto-translated
-     caption tracks. Scroll the list rather than the page. */
-  max-height: 260px;
-  overflow-y: auto;
-}
-
-.option {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 400;
-  margin: 0;
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: var(--surface-2);
-  cursor: pointer;
-}
-
-.option:hover {
-  outline: 1px solid var(--border);
-}
-
-.option.disabled {
-  cursor: default;
-  opacity: 0.75;
-}
-
-.option input {
-  margin-top: 3px;
-  accent-color: var(--accent);
-  /* A checkbox is the tap target; 16px is the smallest that is not a fight. */
-  width: 16px;
-  height: 16px;
-  flex: none;
-}
-
-.option-body {
-  min-width: 0;
-}
-
-.option-label {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.option .hint {
-  margin-top: 1px;
-}
-
-.tag {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  white-space: nowrap;
-}
-
-.tag.ok {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
-}
-
-.tag.warn {
-  color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
-}
-
-/* An input with its buttons beside it — the new-folder field. */
-.row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-
-.row input {
-  flex: 1 1 160px;
-  width: auto;
-}
-
-/* --- Small screens -------------------------------------------------------- */
-
-@media (max-width: 600px) {
-  .shell {
-    padding: 14px 12px 48px;
+  &::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 9999px;
   }
-
-  .job-buttons {
-    margin-left: 0;
-    width: 100%;
-  }
-
-  .preview img {
-    width: 84px;
-  }
-
-  /* The lists are the reason to be on this screen; give them the height. */
-  .option-list {
-    max-height: none;
+  &::-webkit-scrollbar-track {
+    background: transparent;
   }
 }
