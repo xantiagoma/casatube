@@ -122,7 +122,12 @@ frequent channel polling both accelerate blocking.
 
 ---
 
-## 5. Providers: the plugin seam
+## 5. Extension: providers, hooks and plugins
+
+Two different extension points, and telling them apart is what keeps this
+coherent.
+
+### Providers answer "how do I get media from this URL?"
 
 yt-dlp is the first provider, **not the assumption**. Everything above the
 provider works in terms of jobs and media, never in terms of yt-dlp flags.
@@ -132,25 +137,78 @@ interface Provider {
   name: string;
   /** Can this provider handle the URL? */
   supports(url: string): boolean;
-  /** Metadata + available formats, without downloading. */
-  probe(url: string, signal: AbortSignal): Promise<MediaInfo>;
-  /** Download, reporting progress. Writes to a working directory. */
-  fetch(plan: DownloadPlan, ctx: ProviderContext): Promise<FetchResult>;
+  /** Metadata and available formats, without downloading. */
+  probe(url: string, signal: AbortSignal): Promise<Result<MediaInfo, ProviderError>>;
+  /** Download, reporting progress, into a working directory. */
+  fetch(plan: DownloadPlan, ctx: ProviderContext): Promise<Result<FetchResult, ProviderError>>;
   /** Discover items in a channel or playlist. */
-  list?(url: string, signal: AbortSignal): Promise<DiscoveredItem[]>;
+  list?(url: string, signal: AbortSignal): Promise<Result<DiscoveredItem[], ProviderError>>;
 }
 ```
 
-Providers are resolved by asking each `supports(url)` in priority order. The
-yt-dlp provider answers for the ~1800 sites it handles. Later providers can be
-direct APIs, other tools, or per-site extractors — without touching the queue,
-the pipeline or the UI.
+**The yt-dlp provider is built in and cannot be removed.** It answers for the
+~1800 sites it handles and is the fallback for everything else. Additional
+providers register ahead of it and are asked first — that ordering is what makes
+a custom extractor possible for a site yt-dlp does not cover, or covers badly.
+
+If no provider claims a URL, the job is **refused clearly** rather than
+half-attempted.
 
 **The seam is not free**: `MediaInfo` and `DownloadPlan` must describe formats,
 audio tracks, subtitles and languages in provider-neutral terms. Getting that
 vocabulary right is the main design risk of this project.
 
----
+### Hooks answer "do something at this moment"
+
+Two kinds, and the distinction is the design:
+
+| | Transforming | Observing |
+|---|---|---|
+| Can change the outcome | yes | no |
+| Execution | in order, one after another | in parallel, not awaited |
+| On failure | fails the job | logged, job continues |
+| Example | unshorten a URL, adjust format selection | refresh the media server, send a notification |
+
+**An observer can never fail a job.** If the media-server refresh fails, the
+video is downloaded and correct; marking the job failed would be a lie.
+
+Lifecycle points: `url:resolve` (before a provider is chosen), `job:queued`,
+`probe:complete` (the transforming hook that can influence selection),
+`download:complete`, `job:completed`, `job:failed`.
+
+### Plugins are how both arrive
+
+A plugin is a `.ts` file in `DATA_DIR/plugins/`. **Bun imports TypeScript
+directly, so a simple plugin needs no build step at all.**
+
+```ts
+export default registerPlugin(({ on, addProvider, fetch, log, config }) => {
+  on("url:resolve",   async (url) => unshorten(url));      // transforming
+  on("job:completed", async (job) => refreshLibrary(job)); // observing
+});
+```
+
+**Capabilities are injected, not imported.** The host hands the plugin `fetch`,
+`log`, `config`, and access to the bundled `yt-dlp` and `ffmpeg`. This is what
+makes the dependency question mostly disappear: a URL unshortener and a media
+server notifier need `fetch` and nothing else.
+
+**When a plugin genuinely needs a library**, the author bundles it —
+`bun build plugin.ts --outfile plugin.js` — and drops the single file. This is
+the Obsidian and VS Code model, and it is deliberately chosen over running
+`npm install` at load time (the Node-RED model), which brings version conflicts,
+slow startup, and a supply-chain surface that activates on load rather than on
+build.
+
+⚠️ **A plugin runs in-process with CasaTube's own privileges.** It can read the
+filesystem and see cookies. Acceptable for a self-hosted tool whose plugins you
+write yourself; **it stops being acceptable if third-party plugins are ever
+distributed**, and that is the moment to look at isolation rather than before.
+
+📌 **The media-server refresh is the first observing plugin**, not code welded
+into the worker. Today it is a `POST /Library/Refresh` with an `X-Emby-Token`
+header — verified working against the reference deployment. Making it a plugin
+is what lets someone use Plex or Emby without touching the core.
 
 ## 6. A job is a pipeline, not a status
 
@@ -840,10 +898,20 @@ the download budget before blocking (§4.3). Worth remembering when the time com
 
 ## 18. Open tensions — decide, do not drift
 
-**Deleting from the library.** The designs include a delete button. That library
-is served by a media server, over a network mount — **deletion is not
-reversible**. Default off. If enabled: explicit confirmation, never bulk, and
-an audit record.
+**Deleting from the library — settled.** An earlier draft argued for disabling
+it by default. That caution was borrowed from a different mount: on the
+reference deployment there is a WebDAV mount where deleting propagates to a
+cloud provider and destroys the remote copy. **CasaTube's library is not that
+mount** — it is an ordinary directory, and deleting a file there deletes a file.
+
+So: **delete is enabled**, with three cheap guards.
+
+- **Deletes move to `.trash/` inside the library**, not `unlink`. Same
+  filesystem, so it is a rename: instant, and undo comes almost free.
+- **Configurable retention** for the trash, plus a force-delete for when the
+  space is needed now — the pattern most apps already use.
+- **Nothing outside the library root**, enforced by `PathOutsideRoot`, and every
+  deletion recorded.
 
 **Authentication is deliberately deferred.** Not a blocker for a self-hosted LAN
 tool. The consequence, stated so it stays a decision rather than an oversight:
