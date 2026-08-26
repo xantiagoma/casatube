@@ -23,6 +23,37 @@ treaty<App>(origin, { parseDate: false })
 do not describe. Type-safety end to end does not help when one end quietly
 transforms the values after the types have been checked.
 
+## YouTube reports a bitrate for every format and a size for almost none (2026-08-26)
+
+`yt-dlp -J` on a YouTube video fills `tbr`/`vbr` on every DASH format and leaves
+`filesize` and `filesize_approx` null on nearly all of them. A size column fed
+only by the reported number is therefore **empty exactly where it is wanted** —
+on the resolution list someone is choosing from.
+
+So `api/options.ts` estimates it as `bitrate × duration / 8` and marks the row
+`bytesEstimated`. Both numbers are approximations; the flag says which kind.
+Verified live: `dQw4w9WgXcQ` gives 2160p ≈ 485 MB, 720p ≈ 32 MB, with no
+`filesize` on any of them.
+
+⚠️ Related, and it costs an afternoon if unknown: **`toLanguageTag` folds
+`zh-Hans` and `zh-Hant` into one `chi` row.** That is correct — a container tag
+has no room for the script — but it means two audio streams that a person would
+call different languages become one option. Simplified vs Traditional cannot be
+expressed by `Preferences`, which names languages.
+
+## The local yt-dlp may be too old to extract YouTube at all (2026-08-26)
+
+`yt-dlp 2024.07.09` fails every YouTube extraction; the live tests notice and
+skip. Any end-to-end check against a real URL needs a current binary:
+
+```bash
+curl -sSL -o /tmp/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux
+chmod +x /tmp/yt-dlp && YTDLP_BIN=/tmp/yt-dlp bun src/server.ts
+```
+
+📌 The failure is loud in the test output and silent in the app: a probe just
+returns `ProbeFailed`. Check the version before blaming the code.
+
 ## Elysia's `fail()` needs a literal union of status codes
 
 With a plain `number`, Elysia collapses the response type and **the success

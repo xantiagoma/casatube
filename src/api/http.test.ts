@@ -225,13 +225,39 @@ describe("DELETE and retry", () => {
 });
 
 describe("POST /api/probe", () => {
-  test("returns the provider's media info", async () => {
+  test("returns the provider's media info, the choices it implies, and a suggestion", async () => {
     const app = await makeApp();
     const response = await post(app, "/api/probe", { url: "https://example.test/f" });
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { provider: string; info: MediaInfo };
+    const body = (await response.json()) as {
+      provider: string;
+      info: MediaInfo;
+      options: { resolutions: { height: number }[]; audio: { tag: string; isOriginal: boolean }[] };
+      suggested: { maxResolution: number; audioLanguages: string[] };
+    };
     expect(body.provider).toBe("test-provider");
     expect(body.info.title).toBe("A talk about nothing");
+
+    // What the form draws instead of a fixed list: this video has one height,
+    // one audio language, and the original is identifiable.
+    expect(body.options.resolutions.map((option) => option.height)).toEqual([1080]);
+    expect(body.options.audio).toEqual([expect.objectContaining({ tag: "eng", isOriginal: true })]);
+    expect(body.suggested.maxResolution).toBe(1080);
+    expect(body.suggested.audioLanguages).toEqual(["eng"]);
+  });
+
+  test("the suggestion honours the settings the form already has", async () => {
+    const app = await makeApp();
+    const body = (await (
+      await post(app, "/api/probe", {
+        url: "https://example.test/f",
+        preferences: { maxResolution: 720, subtitleLanguages: ["en"] },
+      })
+    ).json()) as { suggested: { maxResolution: number; subtitleLanguages: string[] } };
+
+    // Nothing at or below 720p in this fake, so the ceiling stands as asked.
+    expect(body.suggested.maxResolution).toBe(720);
+    expect(body.suggested.subtitleLanguages).toEqual(["eng"]);
   });
 
   test("maps a provider failure to its own status", async () => {

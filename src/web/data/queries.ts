@@ -17,11 +17,14 @@
  */
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 
+import type { DestinationFolder } from "../../api/destinations";
+import type { MediaOptions, Suggestion } from "../../api/options";
 import type { Job, MediaInfo, Preferences, Priority } from "../../core/types";
 import { api, unwrap } from "./client";
 
 /** One key for the queue. Everything that changes a job invalidates it. */
 export const JOBS_KEY = ["jobs"] as const;
+export const DESTINATIONS_KEY = ["destinations"] as const;
 export const probeKey = (url: string): readonly unknown[] => ["probe", url] as const;
 
 export interface QueueSnapshot {
@@ -113,6 +116,10 @@ export function useRetryJob() {
 export interface ProbeResult {
   provider: string;
   info: MediaInfo;
+  /** The media as *choices* — see `api/options.ts`. */
+  options: MediaOptions;
+  /** What the selection logic would pick, so the form can start there. */
+  suggested: Suggestion;
 }
 
 /**
@@ -127,14 +134,61 @@ export interface ProbeResult {
  * The key carries the URL, so editing it discards the previous preview instead
  * of leaving a stale title attached to a different video.
  */
-export function useProbe(url: string): UseQueryResult<ProbeResult, Error> {
+export function useProbe(url: string, preferences: Preferences): UseQueryResult<ProbeResult, Error> {
   return useQuery({
+    // ⚠️ The URL alone. Preferences travel in the body — they only shape the
+    // *suggestion* — and keying on them would re-probe the same video every
+    // time a checkbox moved, which is the IP budget spent on nothing.
     queryKey: probeKey(url.trim()),
-    queryFn: async () => unwrap(await api.api.probe.post({ url: url.trim() })),
+    queryFn: async () => unwrap(await api.api.probe.post({ url: url.trim(), preferences })),
     enabled: false,
     retry: false,
     // A video's formats do not change minute to minute, and re-probing costs
     // the same budget as the first one.
     staleTime: 5 * 60_000,
+  });
+}
+
+// --- Destinations -----------------------------------------------------------
+
+export interface DestinationListing {
+  root: string;
+  folders: DestinationFolder[];
+  truncated: boolean;
+  at: string;
+}
+
+/**
+ * The folders the library really has.
+ *
+ * ⚠️ **This one is allowed to fail and must not take the form with it.** The
+ * library is often a network mount, and a mount that is asleep answers slowly
+ * or not at all (the route puts a deadline on it and reports `MountUnavailable`).
+ * So: one retry, a short cache, and a picker that falls back to typing a name —
+ * which still works, because the worker creates the folder at the move.
+ */
+export function useDestinations(): UseQueryResult<DestinationListing, Error> {
+  return useQuery({
+    queryKey: DESTINATIONS_KEY,
+    queryFn: async () => unwrap(await api.api.destinations.get()),
+    // Folders do not appear on their own; re-reading a slow mount on every
+    // render of the form would be the expensive kind of pointless.
+    staleTime: 30_000,
+    retry: 1,
+  });
+}
+
+/**
+ * Create one, before queueing rather than after.
+ *
+ * Strictly a convenience — the move stage creates whatever the job names — but
+ * it is the same convenience `/api/probe` provides: finding out that a name is
+ * refused, or that the library is read-only, before 800 MB instead of after.
+ */
+export function useCreateDestination() {
+  const client = useQueryClient();
+  return useMutation<{ path: string; created: boolean }, Error, string>({
+    mutationFn: async (path) => unwrap(await api.api.destinations.post({ path })),
+    onSuccess: () => void client.invalidateQueries({ queryKey: DESTINATIONS_KEY }),
   });
 }

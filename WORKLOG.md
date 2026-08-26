@@ -5,20 +5,73 @@ session with none of this context. Newest first.
 
 ---
 
-## Pending — run when the UI lands
+## 2026-08-26 — The form stopped asking blind
 
-**[React Doctor](https://www.react.doctor/docs/overview/quickstart)** over the
-frontend, once it exists:
+> «las resoluciones y etc deben aparecer después de que se ponga el video, así
+> se sabe qué hay disponible; lo mismo para el audio e igual para los
+> subtítulos… Destination folder igual, no me dice qué folders hay.»
+
+One fault, four times over: **the form asked for decisions without showing the
+choices.** A fixed list offered 4K for a 720p video; "original audio only" named
+a track nobody could see; automatic captions looked exactly like authored
+subtitles; the destination was a text box that never said what existed.
+
+**203 tests, 0 failures.** `tsc` clean apart from three pre-existing errors in
+`src/providers/ytdlp.test.ts` — `buildFetchArgs(plan(), {})` is missing its
+`workDir` argument in three places (added in 3cfd2d4, test-only, not touched
+here).
+
+### What was built
+
+| Where | What |
+|---|---|
+| `src/api/destinations.ts` | `GET`/`POST /api/destinations` — the folders that exist, and creating one |
+| `src/api/options.ts` | A probe turned into **choices**: real resolutions, audio grouped by language with the original marked, subtitles with authored told apart from automatic |
+| `src/api/probe.ts` | Now answers `{ info, options, suggested }` |
+| `src/web/components/MediaPicker.tsx` | The three lists, as checkbox rows |
+| `src/web/components/DestinationPicker.tsx` | The folder list, with a typed name as the fallback |
+
+### The two decisions worth keeping
+
+**The options and the preselection are derived on the server, by calling
+`core/selection` itself.** Not an imitation of the selection logic that can
+drift from it — the same functions `analyze` runs, on the same input. "Ticked by
+default" is therefore *provably* what the worker will do, and R3 holds: the
+browser renders what it is told.
+
+**One row per language tag, not one per track.** `Preferences` names languages,
+not track ids, so a row per track would let the user pick something the request
+cannot express — two English streams, or the automatic captions for a language
+that also has authored ones, which `selectSubtitles` overrides anyway. Verified
+against MrBeast's Squid Game video: 120 audio streams fold into 23 language
+rows, English marked original, `por` and `pan` among them — HomeTube's two
+famous wrong tags, here attached to the right languages.
+
+⚠️ **A dead library mount hangs rather than failing**, so every filesystem call
+in `destinations.ts` runs under a deadline and reports `MountUnavailable`
+(503). An abandoned `readdir` cannot be cancelled — it runs on the threadpool,
+so it does not block the event loop, and racing it is the honest version of
+"give up". The picker falls back to a text box, which still queues correctly
+because the move stage creates whatever folder it is given.
+
+📌 **A failed probe never blocks the queue.** It renders as a warning and the
+Download button stays live: `analyze` reads the media again anyway. Not being
+able to look must not stop you downloading.
+
+### React Doctor, run as the worklog asked
+
+**70 / 100, 29 issues** — the same score as before this work (70 / 100, 28
+issues). The performance count is back where it started; the one added issue is
+`deslop/unused-file` for the two new components, which the scanner reports for
+*every* component in `src/web` because it does not follow the JSX import graph
+from `index.html`.
 
 ```bash
-npx react-doctor@latest                      # full scan
-npx react-doctor@latest --verbose --scope changed
+bunx react-doctor@latest                      # full scan
+bunx react-doctor@latest --verbose --scope changed
 ```
 
-Scans for security risks, performance regressions, over-complex components and
-hooks, and repeated JSX. It auto-detects the framework and React version.
-
-📌 Worth running **before** the shadcn/Tailwind reskin, not after: fixing a
+📌 Still worth re-running **before** the shadcn/Tailwind reskin: fixing a
 structural problem is cheaper while the components are still plain.
 
 ---

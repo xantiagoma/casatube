@@ -14,18 +14,7 @@ import { resolvePreferences } from "../core/queue";
 import type { AppContext } from "./context";
 import { fail } from "./errors";
 import { safeDestination } from "./destination";
-
-const preferencesSchema = t.Partial(
-  t.Object({
-    originalOnly: t.Boolean(),
-    audioLanguages: t.Array(t.String()),
-    /** ⚠️ R7: independent of audio. Never derived from `audioLanguages`. */
-    subtitleLanguages: t.Array(t.String()),
-    maxResolution: t.Integer({ minimum: 144, maximum: 4320 }),
-    sponsorblock: t.Boolean(),
-    embedSubtitles: t.Boolean(),
-  }),
-);
+import { preferencesSchema } from "./schemas";
 
 const KNOWN_STATUSES: readonly JobStatus[] = [
   "queued", "analyzing", "downloading", "processing", "moving",

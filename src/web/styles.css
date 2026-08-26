@@ -531,6 +531,130 @@ button.danger:hover:not(:disabled) {
   overflow-wrap: anywhere;
 }
 
+/* --- Choosing what to download -------------------------------------------- */
+/*
+ * The options a probe found. Rows rather than a `<select multiple>`: multiple
+ * selects are unusable with a thumb — the iPad is a target (PLAN §8) — and they
+ * cannot carry the badge that says which audio track is the original or whether
+ * a subtitle was written by a person.
+ */
+
+.picker {
+  display: grid;
+  gap: var(--gap);
+  margin-top: 14px;
+}
+
+.field {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px 12px;
+  margin: 0;
+  min-width: 0;
+}
+
+.field legend,
+.field-title {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 4px;
+}
+
+.field legend .hint {
+  font-weight: 400;
+  max-width: 46ch;
+}
+
+.option-list {
+  display: grid;
+  gap: 6px;
+  /* Long lists happen: a YouTube video can carry eighty auto-translated
+     caption tracks. Scroll the list rather than the page. */
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 400;
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.option:hover {
+  outline: 1px solid var(--border);
+}
+
+.option.disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.option input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+  /* A checkbox is the tap target; 16px is the smallest that is not a fight. */
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.option-body {
+  min-width: 0;
+}
+
+.option-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.option .hint {
+  margin-top: 1px;
+}
+
+.tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.tag.ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+}
+
+.tag.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
+}
+
+/* An input with its buttons beside it — the new-folder field. */
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.row input {
+  flex: 1 1 160px;
+  width: auto;
+}
+
 /* --- Small screens -------------------------------------------------------- */
 
 @media (max-width: 600px) {
@@ -545,5 +669,10 @@ button.danger:hover:not(:disabled) {
 
   .preview img {
     width: 84px;
+  }
+
+  /* The lists are the reason to be on this screen; give them the height. */
+  .option-list {
+    max-height: none;
   }
 }

@@ -24,6 +24,7 @@ import { openJobQueue } from "./core/queue";
 import { createDefaultRegistry } from "./providers/registry";
 import { loadConfig, type ServerConfig } from "./api/config";
 import type { AppContext } from "./api/context";
+import { destinationRoutes } from "./api/destinations";
 import { eventRoutes } from "./api/events";
 import { jobRoutes } from "./api/jobs";
 import { probeRoutes } from "./api/probe";
@@ -44,6 +45,7 @@ function apiRoutes(ctx: AppContext) {
     }))
     .use(jobRoutes(ctx))
     .use(probeRoutes(ctx))
+    .use(destinationRoutes(ctx))
     .use(eventRoutes(ctx));
 }
 
