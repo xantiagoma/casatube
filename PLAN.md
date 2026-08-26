@@ -325,6 +325,7 @@ but it should be a conscious one — the components become our code.
 | **yt-dlp as external binary** | Updates independently of the app — and its freshness is exactly what breaks | yt-dlp as a Python library |
 | **React + shadcn/ui + Tailwind** | The designs are shadcn-shaped; component libraries build on it | Hand-written CSS |
 | **SSE** | One-way server→browser is all we need | WebSockets |
+| **better-result** | Typed `Result`, and `Result.gen` keeps fallible code linear | Effect (see §10); neverthrow (**0 releases in 12 months**) |
 
 ---
 
@@ -348,7 +349,83 @@ would type queries beautifully and still let that happen.
 Kysely remains a reasonable alternative if hand-written SQL migrations are
 preferred to generated ones.
 
-## 10. Data model
+## 10. Errors
+
+Failure is normal here, not exceptional: a site changes, a format disappears, a
+network mount stalls, a provider gets rate-limited. Code that treats every one of
+those as a surprise ends up as nested `try`/`catch` around ad-hoc `{ ok: true }`
+objects — which is exactly what the first attempt turned into.
+
+### Rules
+
+1. **One `Result<T, E>`, everywhere.** No module invents its own way to fail.
+2. **Errors are typed and distinguishable** by the caller. `"something went
+   wrong"` is not an error type.
+3. **`throw` is reserved for defects** — bugs and impossible states. Expected
+   failure travels in the return type where the compiler can see it.
+4. **Errors carry context**: which URL, which stage, which provider.
+5. **Conversion happens at boundaries only** — HTTP layer turns a `Result` into a
+   status code, the worker turns one into a failed stage. Nowhere else.
+
+### `Result.gen` is the point
+
+The reason for this library rather than a hand-rolled type: fallible code stays
+**linear**.
+
+```ts
+const outcome = Result.gen(function* () {
+  const info = yield* provider.probe(url);
+  const plan = yield* selectFormats(info, preferences);
+  const file = yield* provider.fetch(plan, ctx);
+  return yield* moveIntoLibrary(file, destination);
+});
+```
+
+Any step that fails short-circuits with its typed error and the rest does not
+run. It reads top to bottom.
+
+### The error taxonomy
+
+Each domain owns its failure modes, so a handler can react to the *kind* of
+problem rather than string-matching a message:
+
+| Domain | Errors |
+|---|---|
+| Provider | `UnsupportedUrl`, `ProbeFailed`, `Blocked`, `RateLimited`, `AuthRequired`, `FormatUnavailable` |
+| Worker | `StageFailed`, `Cancelled`, `Timeout`, `DiskFull` |
+| Library | `MountUnavailable`, `PathOutsideRoot`, `NotFound` |
+| Queue | `NotFound`, `InvalidTransition` |
+
+`Blocked` and `RateLimited` matter most: they are the ones that should back off
+and, per §4.3, they are the ones the IP budget makes expensive.
+
+### Why not Effect
+
+Effect would give all of the above natively, plus `Schedule` for retries, fiber
+interruption for cancellation, and `Layer` for dependency injection. It is the
+more powerful answer and it was seriously considered.
+
+Rejected **for v1**, on timing rather than merit:
+
+- It is a whole-codebase paradigm. Every function changes shape, and the payoff
+  arrives after the cost.
+- This project has not downloaded a single video yet. Its main risk is stalling
+  before it works, which already happened once.
+- Its three biggest wins here have cheap substitutes: typed errors from
+  `Result`, retries from the queue, cancellation from `AbortSignal`.
+- Its HTTP layer still lives under `effect/unstable/httpapi`.
+
+📌 **Revisit when** CasaTube works and we know where it actually hurts. If the
+worker pipeline fills up with cancellation and resource-cleanup edge cases,
+Effect stops being elegance and becomes the right tool — and by then `HttpApi`
+will likely have stabilised. Note that `Schema` can be adopted standalone,
+without the runtime, if stricter validation is wanted before that.
+
+⚠️ **Accepted cost of `better-result`**: three major versions and 27 releases in
+twelve months. The API moves. Acceptable for a library this small, but it is not
+frozen.
+
+## 11. Data model
 
 The contract every module shares. It lives in the Drizzle schema; these are the
 inferred shapes.
@@ -424,7 +501,7 @@ catalogue — a channel with 800 videos would flood the queue and burn the IP
 budget. Adding a source marks current items as seen; only what appears *after*
 is enqueued, unless explicitly asked otherwise with a cap.
 
-## 11. Configuration
+## 12. Configuration
 
 Everything by environment variable, so the image is the only artefact.
 
@@ -451,7 +528,7 @@ API. They also **expire within hours**, and reusing them from a different IP tha
 the one that created them is itself a signal — so treat them as a mitigation, not
 a fix.
 
-## 12. What this is not
+## 13. What this is not
 
 Naming non-goals now prevents scope drift later.
 
@@ -465,7 +542,7 @@ Naming non-goals now prevents scope drift later.
 - **Not a scraper of arbitrary sites.** Support comes from providers; if no
   provider handles a URL, it is refused clearly rather than half-attempted.
 
-## 13. Packaging
+## 14. Packaging
 
 **One Docker image, self-contained**: the app, **yt-dlp** and **ffmpeg** inside.
 No host dependencies. It must run on plain Docker, Docker Compose, or CasaOS.
@@ -478,7 +555,7 @@ Configuration by environment variables. Persistent state in one volume.
 
 ---
 
-## 14. Open tensions — decide, do not drift
+## 15. Open tensions — decide, do not drift
 
 **Concurrent downloads.** The designs show a limit of 4. Default here is **1**,
 because parallel requests accelerate IP blocking (§4.3). Configurable, with the
@@ -497,7 +574,7 @@ exposed beyond it — at which point auth becomes blocking.
 
 ---
 
-## 15. Verification
+## 16. Verification
 
 "Done" means observed working, not "the tests pass". Each phase in §7 has a
 condition that can only be met by doing the thing.
@@ -527,7 +604,7 @@ version looked missing; a status endpoint excluded exactly the item type being
 verified. Before concluding something is absent or broken, confirm the check
 could have seen it.
 
-## 16. How this gets built
+## 17. How this gets built
 
 The reason this plan exists: the first attempt was orchestrated badly. Work was
 handed to parallel agents before the requirements were settled, and the brief
