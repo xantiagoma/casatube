@@ -5,6 +5,47 @@ session with none of this context. Newest first.
 
 ---
 
+## 2026-08-27 — Usable end to end, and published
+
+**566 tests, 0 failures.** Running in Docker and used for real.
+Repository: <https://github.com/xantiagoma/casatube> (private).
+
+### What works
+
+Paste a URL → the form shows the resolutions, audio tracks and subtitles that
+video actually has, with the original marked → queue it → watch the six stages
+live over SSE → the file lands in the library, correctly language-tagged.
+
+Eight screens on shadcn/Tailwind. Library with thumbnails, playback (HLS remux
+on demand, with real seeking), downloads as video / everything / extras-only,
+and a trash you can restore from. Sources, scheduler, storage, analytics,
+plugins.
+
+### Still to improve
+
+- Priority change, settings write, watchlist as a concept and filename templates
+  were reported as missing endpoints and never built.
+- `react-doctor` sits at 57/100; most findings are in vendored Dice UI code.
+- `notifications` grows until someone purges it — no automatic retention.
+- `Preferences` cannot refuse auto-generated subtitles.
+- `FFMPEG_BIN` never reaches yt-dlp, which finds ffmpeg on `PATH` only.
+
+### Two habits this project earned
+
+**Verify the instrument, not just the result.** Again and again something passed
+for the wrong reason: a test asserting on the thing next to the thing; `grep -c`
+counting commented-out lines as enabled config; a paginated registry making a
+published version look missing; a helper returning "unavailable" that turned a
+content assertion into a test which always passed. The fix each time was to
+break the code on purpose and check that the test noticed.
+
+**Never substitute in silence.** HomeTube's language tags, a codec that does not
+exist at the requested resolution, a subtitle failure taking a video down with
+it, a bundle quietly shipping one file instead of three. Every one of them
+looked like it was working.
+
+---
+
 ## 2026-08-27 — The library has pictures, and the good ones come from the source
 
 > «la biblioteca no tiene miniaturas.»
