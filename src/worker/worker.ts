@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import type { JobQueue } from "../core/queue";
 import type { ProviderRegistry } from "../providers/registry";
 import type { DownloadPlan, Job, ProgressUpdate, StageName } from "../core/types";
-import { buildDownloadPlan } from "../core/selection";
+import { buildDownloadPlan, videoCodecNotice } from "../core/selection";
 import { demandsBackoff } from "../core/errors";
 import {
   clearRunning, initialStages, markDone, markFailed, markRunning,
@@ -209,6 +209,12 @@ export class Worker {
 
         const plan = buildDownloadPlan(job.url, info.value, job.preferences);
         if (Result.isError(plan)) return plan;
+
+        // 🔴 Never a silent substitution. The form says this before the job is
+        // queued; the job log says it again, because a job created from an API
+        // call or a watched source never passed through the form.
+        const notice = videoCodecNotice(info.value.videoFormats, job.preferences);
+        if (notice) ctx.log(notice.message);
 
         await queue.update(job.id, {
           title: plan.value.outputName,

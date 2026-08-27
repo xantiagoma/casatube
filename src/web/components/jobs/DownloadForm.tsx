@@ -25,7 +25,12 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import { DEFAULT_PREFERENCES, type Preferences, type Priority } from "../../../core/types";
+import {
+  DEFAULT_PREFERENCES,
+  type Preferences,
+  type Priority,
+  type VideoCodecPreference,
+} from "../../../core/types";
 import { formatBytes, formatDuration, hostOf } from "../../data/format";
 import { useLocalPref } from "../../data/prefs";
 import { useEnqueue, useJobDefaults, useProbe } from "../../data/queries";
@@ -36,6 +41,7 @@ import { FormatPicker, type Choices } from "./FormatPicker";
 function choicesFrom(preferences: Preferences): Choices {
   return {
     maxResolution: preferences.maxResolution,
+    videoCodec: preferences.videoCodec,
     originalOnly: preferences.originalOnly,
     audioTags: preferences.audioLanguages,
     subtitleTags: preferences.subtitleLanguages,
@@ -46,6 +52,7 @@ function preferencesFrom(base: Preferences, choices: Choices): Preferences {
   return {
     ...base,
     maxResolution: choices.maxResolution,
+    videoCodec: choices.videoCodec,
     originalOnly: choices.originalOnly,
     audioLanguages: choices.audioTags,
     subtitleLanguages: choices.subtitleTags,
@@ -63,12 +70,18 @@ function PreviewCard({
   analyzed,
   url,
   height,
+  videoCodec,
 }: {
   analyzed: NonNullable<ReturnType<typeof useProbe>["data"]>;
   url: string;
   height: number;
+  videoCodec: VideoCodecPreference;
 }) {
-  const chosen = analyzed.options.resolutions.find((option) => option.height === height);
+  // 🔴 The row that was clicked is not always the file that arrives: a named
+  // codec that cannot reach this height caps it lower. `byCodec` is the server's
+  // answer for every choice, so the preview shows what will really be
+  // downloaded — this is a lookup, not the selection rule copied into the tab.
+  const chosen = analyzed.options.resolutions.find((option) => option.height === height)?.byCodec[videoCodec];
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -95,6 +108,11 @@ function PreviewCard({
           <dd className="text-right font-medium tabular-nums">{formatDuration(analyzed.info.duration)}</dd>
           <dt className="text-muted-foreground">Formats</dt>
           <dd className="text-right font-medium tabular-nums">{analyzed.info.videoFormats.length}</dd>
+          <dt className="text-muted-foreground">Video</dt>
+          <dd className={cn("text-right font-medium tabular-nums", chosen && !chosen.exact && "text-warning")}>
+            {chosen ? `${chosen.height ?? "?"}p` : "—"}
+            {chosen && chosen.codecFamily !== "unknown" ? ` · ${chosen.codecFamily.toUpperCase()}` : ""}
+          </dd>
           <dt className="text-muted-foreground">Size (est.)</dt>
           <dd className="text-right font-medium tabular-nums">
             {chosen?.approxBytes ? `${chosen.bytesEstimated ? "≈ " : ""}${formatBytes(chosen.approxBytes)}` : "—"}
@@ -209,6 +227,7 @@ export function DownloadForm({ className }: { className?: string }) {
   const suggested: Choices = analyzed
     ? {
         maxResolution: analyzed.suggested.maxResolution,
+        videoCodec: analyzed.suggested.videoCodec,
         originalOnly: analyzed.suggested.originalOnly,
         audioTags: analyzed.suggested.audioLanguages,
         subtitleTags: analyzed.suggested.subtitleLanguages,
@@ -304,7 +323,12 @@ export function DownloadForm({ className }: { className?: string }) {
 
       {analyzed ? (
         <div className="grid gap-4 xl:grid-cols-2">
-          <PreviewCard analyzed={analyzed} url={url} height={choices.maxResolution} />
+          <PreviewCard
+            analyzed={analyzed}
+            url={url}
+            height={choices.maxResolution}
+            videoCodec={choices.videoCodec}
+          />
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Format &amp; Quality</CardTitle>

@@ -23,33 +23,92 @@
 import { Result } from "better-result";
 import { FormatUnavailable } from "./errors";
 import filenamify from "filenamify";
+import { VIDEO_CODECS } from "./types";
 import type {
   AudioTrack,
   DownloadPlan,
   MediaInfo,
   Preferences,
   SubtitleTrack,
+  VideoCodec,
+  VideoCodecPreference,
   VideoFormat,
 } from "./types";
 
 // --- Video codecs -----------------------------------------------------------
 
 /**
- * Preferred video codecs, best first.
+ * The order `videoCodec: "auto"` uses — best first.
  *
  * At equal resolution, H.264 wins. The file ends up on a media server, and AV1
  * forces a transcode on any client without hardware support — which is most of
  * them, and every machine without a GPU. A smaller AV1 file that plays back at
  * 3 fps is not the better download.
  *
+ * ⚠️ **This is the default, not the law.** It is one of the orders in
+ * {@link codecOrder}; `efficient` reverses the trade-off and a named codec
+ * overrides it outright. The reason it stays the default is that a transcode is
+ * the failure a person notices *while watching*, and a few hundred extra
+ * megabytes is not.
+ *
  * Anything not listed ranks last, behind everything known.
  */
 export const VIDEO_CODEC_PREFERENCE = ["h264", "vp9", "hevc", "av1"] as const;
 
-export type PreferredVideoCodec = (typeof VIDEO_CODEC_PREFERENCE)[number];
+export type PreferredVideoCodec = VideoCodec;
+
+/**
+ * The order `videoCodec: "efficient"` uses.
+ *
+ * Bytes per unit of quality, best first — the other side of the same trade-off:
+ * a smaller file, at the risk of a transcode on a server without hardware
+ * decoding. VP9 sits above HEVC because where both trade-offs are actually on
+ * offer (YouTube) VP9 is the one that exists, and H.264 comes last because
+ * being the compatible one is precisely not what this mode is asking for.
+ */
+export const EFFICIENT_CODEC_PREFERENCE = ["av1", "vp9", "hevc", "h264"] as const;
+
+/** Display names, for the sentences this module writes. */
+const CODEC_NAMES: Readonly<Record<VideoCodec, string>> = {
+  h264: "H.264",
+  vp9: "VP9",
+  hevc: "HEVC",
+  av1: "AV1",
+};
+
+/** How a codec is written in a sentence a person reads. */
+export function codecName(codec: VideoCodec | "unknown"): string {
+  return codec === "unknown" ? "an unrecognised codec" : CODEC_NAMES[codec];
+}
+
+/** The named codec in a preference, or `undefined` for `auto`/`efficient`. */
+export function requestedCodec(
+  preference: VideoCodecPreference | undefined,
+): VideoCodec | undefined {
+  return preference !== undefined && (VIDEO_CODECS as readonly string[]).includes(preference)
+    ? (preference as VideoCodec)
+    : undefined;
+}
+
+/**
+ * The ranking a preference implies, best first.
+ *
+ * ⚠️ An unknown or missing value is `auto`. Preferences are stored as JSON on
+ * the job row, so a job queued before this field existed reads back without it
+ * — and the honest reading of "no opinion recorded" is the default order, not a
+ * crash and not a different download.
+ */
+export function codecOrder(
+  preference: VideoCodecPreference | undefined,
+): readonly VideoCodec[] {
+  if (preference === "efficient") return EFFICIENT_CODEC_PREFERENCE;
+  const named = requestedCodec(preference);
+  if (named) return [named, ...VIDEO_CODEC_PREFERENCE.filter((codec) => codec !== named)];
+  return VIDEO_CODEC_PREFERENCE;
+}
 
 /** Codec strings arrive as `avc1.640028`, `vp09.00.40.08`, `av01.0.08M.08`… */
-const CODEC_FAMILIES: ReadonlyArray<readonly [RegExp, PreferredVideoCodec]> = [
+const CODEC_FAMILIES: ReadonlyArray<readonly [RegExp, VideoCodec]> = [
   [/^(?:avc[13]|h\.?264|x264)/i, "h264"],
   [/^vp0?9/i, "vp9"],
   [/^(?:hev1|hvc1|hevc|h\.?265|x265)/i, "hevc"],
@@ -57,7 +116,7 @@ const CODEC_FAMILIES: ReadonlyArray<readonly [RegExp, PreferredVideoCodec]> = [
 ];
 
 /** The codec family of a raw codec string, or `unknown` if unrecognised. */
-export function videoCodecFamily(codec: string | undefined): PreferredVideoCodec | "unknown" {
+export function videoCodecFamily(codec: string | undefined): VideoCodec | "unknown" {
   if (!codec) return "unknown";
   const trimmed = codec.trim();
   for (const [pattern, family] of CODEC_FAMILIES) {
@@ -66,10 +125,10 @@ export function videoCodecFamily(codec: string | undefined): PreferredVideoCodec
   return "unknown";
 }
 
-function codecRank(codec: string | undefined): number {
+function codecRank(codec: string | undefined, order: readonly VideoCodec[]): number {
   const family = videoCodecFamily(codec);
-  const index = VIDEO_CODEC_PREFERENCE.indexOf(family as PreferredVideoCodec);
-  return index === -1 ? VIDEO_CODEC_PREFERENCE.length : index;
+  const index = order.indexOf(family as VideoCodec);
+  return index === -1 ? order.length : index;
 }
 
 // --- Language tags ----------------------------------------------------------
@@ -185,13 +244,20 @@ function pickBest<T>(items: readonly T[], compare: (a: T, b: T) => number): T | 
   return best;
 }
 
-/** Lower is better. */
-function compareVideo(a: VideoFormat, b: VideoFormat): number {
+/**
+ * Lower is better.
+ *
+ * ⚠️ Height comes before codec, always. The codec preference breaks ties *at a
+ * resolution*; it never buys a better codec by giving up pixels. Dropping
+ * resolution to honour a named codec is a separate, deliberate step in
+ * {@link selectVideoFormat}, because that one has to be announced.
+ */
+function compareVideo(a: VideoFormat, b: VideoFormat, order: readonly VideoCodec[]): number {
   const heightA = a.height ?? 0;
   const heightB = b.height ?? 0;
   if (heightA !== heightB) return heightB - heightA;
-  const codecA = codecRank(a.codec);
-  const codecB = codecRank(b.codec);
+  const codecA = codecRank(a.codec, order);
+  const codecB = codecRank(b.codec, order);
   if (codecA !== codecB) return codecA - codecB;
   const fpsA = a.fps ?? 0;
   const fpsB = b.fps ?? 0;
@@ -233,13 +299,158 @@ function compareSubtitle(a: SubtitleTrack, b: SubtitleTrack): number {
 export function selectVideoFormat(
   formats: readonly VideoFormat[],
   maxResolution: number,
+  videoCodec: VideoCodecPreference = "auto",
+): VideoFormat | undefined {
+  const order = codecOrder(videoCodec);
+  const named = requestedCodec(videoCodec);
+
+  // A named codec restricts the pool. Asking for H.264 and being handed AV1 at a
+  // higher resolution answers a question nobody asked: the reason to name H.264
+  // is that the file has to play without transcoding, and 4K AV1 fails at
+  // exactly that. So the resolution gives way, not the codec — and
+  // `videoCodecNotice` says so out loud when it happens.
+  if (named) {
+    const restricted = formats.filter((f) => videoCodecFamily(f.codec) === named);
+    const chosen = bestUnderCeiling(restricted, maxResolution, order);
+    if (chosen) return chosen;
+    // The media has none of it at all. Falling back is right — a job must not
+    // fail over a preference — and it is the loudest of the cases the notice
+    // reports, never a silent substitution.
+  }
+
+  return bestUnderCeiling(formats, maxResolution, order);
+}
+
+/** The ceiling rule, applied to whichever pool the codec preference left. */
+function bestUnderCeiling(
+  formats: readonly VideoFormat[],
+  maxResolution: number,
+  order: readonly VideoCodec[],
 ): VideoFormat | undefined {
   const withKnownHeight = formats.filter((f) => typeof f.height === "number");
   const withinCeiling = withKnownHeight.filter((f) => (f.height ?? 0) <= maxResolution);
   const pool = withinCeiling.length > 0
     ? withinCeiling
     : formats.filter((f) => typeof f.height !== "number");
-  return pickBest(pool, compareVideo);
+  return pickBest(pool, (a, b) => compareVideo(a, b, order));
+}
+
+// --- Saying so when the codec asked for is not there ------------------------
+
+/**
+ * What a named codec costs on this particular media, or `null` when it costs
+ * nothing.
+ *
+ * 🔴 **The point: never substitute in silence.** On YouTube, AVC1 stops at
+ * 1080p — 1440p and 2160p exist only as VP9 and AV1. "H.264, 4K" is therefore
+ * not a request that can be filled, and the old code answered it by handing
+ * over a different codec without a word. There are exactly two ways to be
+ * honest about it, and this function is the second half of both:
+ *
+ * - `resolution-capped` — the codec exists, just not that high. The download
+ *   keeps the codec and loses the pixels.
+ * - `codec-unavailable` — the media has none of it. The download keeps the
+ *   resolution and changes codec, which is the substitution, said out loud.
+ *
+ * Returns `null` for `auto` and `efficient`: those are orders of preference, so
+ * whatever they land on *is* what was asked for. Nothing to confess.
+ */
+export interface VideoCodecNotice {
+  kind: "resolution-capped" | "codec-unavailable";
+  /** The codec the preferences named. */
+  requested: VideoCodec;
+  /** The ceiling those preferences carried. */
+  requestedHeight: number;
+  /** What will actually be downloaded. */
+  resolvedHeight: number | null;
+  resolvedCodec: VideoCodec | "unknown";
+  /** The codecs that do exist at the height that was out of reach. */
+  alternatives: (VideoCodec | "unknown")[];
+  /** One line, already written for a person to read. */
+  message: string;
+}
+
+/** Codec families present at a given height, in `auto` order. */
+function codecsAtHeight(formats: readonly VideoFormat[], height: number): (VideoCodec | "unknown")[] {
+  const families = new Set<VideoCodec | "unknown">();
+  for (const format of formats) {
+    if (format.height === height) families.add(videoCodecFamily(format.codec));
+  }
+  return [...families].sort((a, b) => codecRank(a, VIDEO_CODEC_PREFERENCE) - codecRank(b, VIDEO_CODEC_PREFERENCE));
+}
+
+/** `AV1 and VP9`, `AV1, VP9 and HEVC`, `AV1`. */
+function listNames(codecs: readonly (VideoCodec | "unknown")[]): string {
+  const names = codecs.map(codecName);
+  if (names.length === 0) return "nothing";
+  if (names.length === 1) return names[0]!;
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+export function videoCodecNotice(
+  formats: readonly VideoFormat[],
+  preferences: Pick<Preferences, "maxResolution" | "videoCodec">,
+): VideoCodecNotice | null {
+  const requested = requestedCodec(preferences.videoCodec);
+  if (!requested || formats.length === 0) return null;
+
+  const chosen = selectVideoFormat(formats, preferences.maxResolution, preferences.videoCodec);
+  // Nothing fits the ceiling at all — that is `FormatUnavailable`'s story to
+  // tell, and reporting it as a codec problem would point at the wrong knob.
+  if (!chosen) return null;
+
+  const resolvedCodec = videoCodecFamily(chosen.codec);
+  const resolvedHeight = chosen.height ?? null;
+  // What the same ceiling would have reached with no codec opinion at all.
+  const unrestricted = bestUnderCeiling(formats, preferences.maxResolution, VIDEO_CODEC_PREFERENCE);
+  const reachableHeight = unrestricted?.height ?? null;
+
+  if (resolvedCodec !== requested) {
+    const alternatives = reachableHeight === null ? [] : codecsAtHeight(formats, reachableHeight);
+    return {
+      kind: "codec-unavailable",
+      requested,
+      requestedHeight: preferences.maxResolution,
+      resolvedHeight,
+      resolvedCodec,
+      alternatives,
+      message:
+        `This video has no ${codecName(requested)} at all — it is ${listNames(alternatives)} only. ` +
+        `The download will be ${codecName(resolvedCodec)}` +
+        `${resolvedHeight === null ? "" : ` at ${resolvedHeight}p`}.`,
+    };
+  }
+
+  if (resolvedHeight !== null && reachableHeight !== null && resolvedHeight < reachableHeight) {
+    const alternatives = codecsAtHeight(formats, reachableHeight).filter((codec) => codec !== requested);
+    return {
+      kind: "resolution-capped",
+      requested,
+      requestedHeight: preferences.maxResolution,
+      resolvedHeight,
+      resolvedCodec,
+      alternatives,
+      message:
+        `There is no ${codecName(requested)} above ${resolvedHeight}p in this video — ` +
+        `at ${reachableHeight}p it is ${listNames(alternatives)} only. ` +
+        `The download will be ${resolvedHeight}p ${codecName(requested)}.`,
+    };
+  }
+
+  return null;
+}
+
+/** The highest height a codec family reaches here, or `null` if it has none. */
+export function codecMaxHeight(
+  formats: readonly VideoFormat[],
+  codec: VideoCodec,
+): number | null {
+  let best: number | null = null;
+  for (const format of formats) {
+    if (videoCodecFamily(format.codec) !== codec) continue;
+    if (typeof format.height === "number" && (best === null || format.height > best)) best = format.height;
+  }
+  return best;
 }
 
 // --- Audio ------------------------------------------------------------------
@@ -415,7 +626,11 @@ export function buildDownloadPlan(
 ): Result<DownloadPlan, SelectionError> {
   let video: VideoFormat | null = null;
   if (info.videoFormats.length > 0) {
-    const chosen = selectVideoFormat(info.videoFormats, preferences.maxResolution);
+    const chosen = selectVideoFormat(
+      info.videoFormats,
+      preferences.maxResolution,
+      preferences.videoCodec,
+    );
     if (!chosen) {
       return Result.err(
         new FormatUnavailable({ url, wanted: `video at or below ${preferences.maxResolution}p` }),

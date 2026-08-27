@@ -5,6 +5,71 @@ session with none of this context. Newest first.
 
 ---
 
+## 2026-08-27 — The codec stopped being a decision taken for you
+
+> «hoy el códec de vídeo se muestra pero no se puede elegir.»
+
+`VIDEO_CODEC_PREFERENCE` was right about the trade-off and wrong to settle it:
+AV1 forces a transcode on a media server without a GPU, H.264 direct-plays — and
+which side of that matters depends on where the file gets watched, which the
+code cannot know. So the order stays, as one option among six.
+
+**445 tests, 0 failures** (was 421; +22 new). `tsc` clean.
+
+### The shape
+
+`Preferences.videoCodec: "auto" | "efficient" | "h264" | "vp9" | "hevc" | "av1"`,
+default `auto` — bit-for-bit the old behaviour, which is why
+`selection.test.ts`'s original 61 tests never moved.
+
+- `auto` — H.264 first. The historical order, now named.
+- `efficient` — AV1/VP9 first: fewer bytes, at the risk of a transcode.
+- a named codec — **the codec is kept and the resolution gives way**, never the
+  reverse. Naming H.264 means "this has to play without transcoding", and
+  answering with 4K AV1 answers a question nobody asked.
+
+### 🔴 The part that is not a feature: saying so
+
+On YouTube, AVC1 stops at 1080p. "H.264 at 4K" is a request that cannot be
+filled, and the old code filled it with a different codec **without a word**.
+
+`selection.videoCodecNotice()` is pure, tested, and the single author of that
+sentence. It distinguishes the two honest failures — `resolution-capped` (the
+codec exists, not that high) and `codec-unavailable` (the media has none of it,
+so something is standing in) — and everything else quotes it:
+
+| Layer | How it says it |
+|---|---|
+| `POST /api/probe` | `warnings[]`, computed for the preferences the call carried |
+| `options.codecs[]` | a `caveat` per choice, measured against this video |
+| `options.resolutions[].byCodec` | per height × choice: what would really be downloaded, and `exact: false` when that is not what was asked |
+| The form | a badge per codec ("up to 1080p", "not in this video"), a marker on the affected resolution rows, one warning line, and a preview showing the file that *arrives* |
+| `analyze` stage | the same sentence into the job log — an API call or a watched source never passed through a form |
+
+Verified live against `dQw4w9WgXcQ` (4K remaster, 37 formats): asking for
+2160p + H.264 returns *“There is no H.264 above 1080p in this video — at 2160p
+it is VP9 and AV1 only. The download will be 1080p H.264.”* and the plan is
+format 137. Asking for HEVC, which the video does not have, names VP9 as the
+stand-in.
+
+### The resolution list is grouped by codec now
+
+1080p is not one thing: on that video it is 119 MB of H.264, 45 MB of VP9 or
+29 MB of AV1, and which one arrives decides whether the media server plays the
+file or transcodes it. One row per height hid both facts.
+
+⚠️ And the row for a height the chosen codec cannot reach **stays on the list**,
+flagged. Hiding 2160p because H.264 stops below it would be the same silence in
+a new place: the resolution exists, it is the combination that does not.
+
+### React Doctor
+
+**57 / 100, 52 issues — byte-identical to the same scan on `HEAD`.** Nothing
+here made it worse. ⚠️ The 70 / 100 recorded below is stale: the drop happened
+in `c335f13` (the dashboard, ~25 components), not in this work.
+
+---
+
 ## 2026-08-26 — The form stopped asking blind
 
 > «las resoluciones y etc deben aparecer después de que se ponga el video, así

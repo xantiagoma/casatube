@@ -45,6 +45,7 @@ import { usePlugins, useTogglePlugin } from "../data/plugins";
 import { useJobDefaults } from "../data/queries";
 import { useHealth, useStorage } from "../data/stats";
 import { useTheme, type ThemeChoice } from "../data/theme";
+import type { VideoCodecPreference } from "../../core/types";
 
 /** A read-only field, with the reason it is read-only attached once per card. */
 function ReadOnly({ label, value }: { label: string; value: string }) {
@@ -109,6 +110,22 @@ function ThemeCard() {
   );
 }
 
+/**
+ * The default codec preference, in the same words the download form uses.
+ *
+ * ⚠️ No caveat here, and that is not an omission: "no H.264 above 1080p" is a
+ * fact about one video, and this screen is looking at no video at all. The
+ * caveat belongs where a URL has been analyzed.
+ */
+const CODEC_LABELS: Record<VideoCodecPreference, string> = {
+  auto: "auto — H.264 first, direct play on most TVs",
+  efficient: "efficient — AV1/VP9 first, smaller files, may transcode",
+  h264: "H.264 — direct play on most TVs",
+  vp9: "VP9 — smaller than H.264, widely supported",
+  hevc: "HEVC — small, decoders are uneven",
+  av1: "AV1 — smallest files, may transcode without a GPU",
+};
+
 function DefaultsCard() {
   const defaults = useJobDefaults();
 
@@ -126,6 +143,10 @@ function DefaultsCard() {
           <>
             <div className="divide-y">
               <ReadOnly label="Maximum resolution" value={`${defaults.data.resolved.maxResolution}p`} />
+              <ReadOnly
+                label="Video codec"
+                value={CODEC_LABELS[defaults.data.resolved.videoCodec] ?? defaults.data.resolved.videoCodec}
+              />
               <ReadOnly label="Original audio only" value={String(defaults.data.resolved.originalOnly)} />
               <ReadOnly
                 label="Audio languages"
@@ -141,7 +162,8 @@ function DefaultsCard() {
             <ServerOwned>
               These are what a job gets when the form sends nothing. They come from the server and there is no
               endpoint that writes them back — change them per download in the form, which does travel with the
-              job. Audio and subtitle languages stay independent (R7).
+              job. Audio and subtitle languages stay independent (R7), and the codec is a preselection: a named
+              one gives up resolution rather than being swapped for another codec behind your back.
             </ServerOwned>
           </>
         )}

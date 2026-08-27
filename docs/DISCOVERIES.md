@@ -23,6 +23,32 @@ treaty<App>(origin, { parseDate: false })
 do not describe. Type-safety end to end does not help when one end quietly
 transforms the values after the types have been checked.
 
+## The probe happens once, so anything preference-dependent must ship for *every* choice (2026-08-27)
+
+`useProbe` is keyed by the **URL alone** — deliberately, because one probe per
+URL is the IP budget (PLAN §4.3). Preferences travel in the request body and
+only shape the answer.
+
+The consequence is easy to miss and it bit while adding the codec selector: any
+field in `MediaOptions` computed *from* the preferences is **frozen at the
+moment of the probe**. Moving a radio in the form does not recompute it, and the
+first version of the codec picker quietly rendered stale flags — the 2160p row
+kept claiming H.264 was available after H.264 was chosen, because that flag had
+been computed under `auto` fifteen seconds earlier.
+
+The two fixes that do not work: re-keying the query on the preferences (a probe
+per checkbox) and re-deriving in the browser (the selection rule copied into the
+one place it can drift from `core/selection`).
+
+What works is to answer **all** the choices up front:
+`resolutions[].byCodec` holds `selectVideoFormat(formats, height, codec)` for
+every height × every codec choice, so the browser does a lookup and the server
+still owns every decision.
+
+📌 The general shape: caching keyed on less than the answer depends on is not a
+stale-data bug, it is a **silently wrong UI**. Either key on everything, or send
+everything.
+
 ## YouTube reports a bitrate for every format and a size for almost none (2026-08-26)
 
 `yt-dlp -J` on a YouTube video fills `tbr`/`vbr` on every DASH format and leaves

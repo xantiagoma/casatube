@@ -38,6 +38,38 @@ export const TERMINAL_STATUSES: readonly JobStatus[] = [
 
 export type Priority = "high" | "normal" | "low";
 
+// --- Video codec ------------------------------------------------------------
+
+/**
+ * The codec families we can name. Ranking them is `core/selection`'s job; the
+ * vocabulary lives here because `Preferences` carries it and both the API
+ * schema and the browser have to spell the same four words.
+ */
+export const VIDEO_CODECS = ["h264", "vp9", "hevc", "av1"] as const;
+
+export type VideoCodec = (typeof VIDEO_CODECS)[number];
+
+/**
+ * Which video codec to prefer — **a preference, not a filter on the request**.
+ *
+ * 🔴 It exists because the trade-off is real and only the person watching knows
+ * which side they are on: AV1 is smaller at the same quality and forces a
+ * transcode on a media server with no GPU, while H.264 direct-plays almost
+ * everywhere. The old code decided that for everybody by hard-coding H.264
+ * first; this makes the decision visible and changeable.
+ *
+ * - `auto` — H.264 first, the historical order. Still the default.
+ * - `efficient` — AV1/VP9 first: fewer bytes, at the risk of a transcode.
+ * - a codec name — that codec, and the download drops resolution rather than
+ *   quietly swapping the codec you asked for (see `videoCodecNotice`).
+ */
+export type VideoCodecPreference = "auto" | "efficient" | VideoCodec;
+
+/** ⚠️ A tuple, not `readonly VideoCodecPreference[]`: Elysia's `t.UnionEnum`
+ * needs the literal members to type the route, and an annotation widens them
+ * back to `string`. */
+export const VIDEO_CODEC_PREFERENCES = ["auto", "efficient", ...VIDEO_CODECS] as const;
+
 export interface Preferences {
   /** Exactly one audio track: the one marked original. */
   originalOnly: boolean;
@@ -45,6 +77,14 @@ export interface Preferences {
   /** ⚠️ Independent of audio — PLAN R7. Never derive one from the other. */
   subtitleLanguages: string[];
   maxResolution: number;
+  /**
+   * ⚠️ A *preselection*, never an imposition — and never a silent swap. Asking
+   * for a codec the media does not have at that height is answered out loud:
+   * `selection.videoCodecNotice` says so, `POST /api/probe` returns it, and the
+   * form shows it. Reading it as `undefined` (a job queued before this field
+   * existed) means `auto`.
+   */
+  videoCodec: VideoCodecPreference;
   sponsorblock: boolean;
   /**
    * Embed subtitles in the container, or write them alongside as files.
@@ -61,6 +101,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   audioLanguages: [],
   subtitleLanguages: ["en"],
   maxResolution: 1080,
+  videoCodec: "auto",
   sponsorblock: true,
   embedSubtitles: false,
 };

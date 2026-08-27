@@ -26,6 +26,7 @@ import { Result } from "better-result";
 import { resolvePreferences } from "../core/queue";
 import type { AppContext } from "./context";
 import { fail } from "./errors";
+import { videoCodecNotice } from "../core/selection";
 import { mediaOptions, suggestFor } from "./options";
 import { preferencesSchema } from "./schemas";
 
@@ -52,11 +53,19 @@ export function probeRoutes(ctx: AppContext) {
       // user already lowered instead of overwriting it with the default.
       const preferences = resolvePreferences(body.preferences);
 
+      // 🔴 What cannot be delivered, said out loud. On YouTube, AVC1 stops at
+      // 1080p: "H.264 at 4K" is a request with no answer, and the old code
+      // answered it by handing over AV1 without a word. `warnings` is that word
+      // — computed against the preferences this call carried, so an API client
+      // reading only this response still learns what it is about to get.
+      const notice = videoCodecNotice(info.value.videoFormats, preferences);
+
       return {
         provider: provider.value.name,
         info: info.value,
-        options: mediaOptions(info.value),
+        options: mediaOptions(info.value, preferences),
         suggested: suggestFor(info.value, preferences),
+        warnings: notice ? [notice] : [],
       };
     },
     {

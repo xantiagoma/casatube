@@ -701,8 +701,24 @@ interface Preferences {
   audioLanguages: string[];
   subtitleLanguages: string[];  // ⚠️ independent of audio — R7
   maxResolution: number;
+  videoCodec: "auto" | "efficient" | "h264" | "vp9" | "hevc" | "av1";
   sponsorblock: boolean;
+  embedSubtitles: boolean;      // embed in the container, or sidecar files
 }
+```
+
+**`videoCodec` is preselected, never imposed.** `auto` is the default and is the
+old hard-coded order — H.264 first, because a transcode is the failure someone
+notices while watching and a few hundred megabytes is not. `efficient` reverses
+it (AV1/VP9 first). A named codec keeps the codec and **gives up resolution**
+rather than being swapped for another one: on YouTube AVC1 stops at 1080p, so
+"H.264 at 4K" cannot be filled, and every layer says so instead of substituting
+in silence — `selection.videoCodecNotice` writes the sentence, `POST /api/probe`
+returns it as `warnings` and per-choice `caveat`s, the form shows it, and the
+`analyze` stage writes it to the job log for jobs that never passed through a
+form.
+
+```ts
 
 interface Source {              // channel, playlist or watch target
   id: string;

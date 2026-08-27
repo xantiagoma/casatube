@@ -11,6 +11,9 @@ import {
   buildDownloadPlan,
   buildLanguageTags,
   cleanTitle,
+  codecMaxHeight,
+  codecOrder,
+  EFFICIENT_CODEC_PREFERENCE,
   FALLBACK_OUTPUT_NAME,
   selectAudioTracks,
   selectSubtitles,
@@ -19,6 +22,7 @@ import {
   toOutputName,
   UNKNOWN_LANGUAGE,
   videoCodecFamily,
+  videoCodecNotice,
   VIDEO_CODEC_PREFERENCE,
 } from "./selection";
 import { DEFAULT_PREFERENCES } from "./types";
@@ -419,6 +423,137 @@ describe("selectVideoFormat", () => {
   });
 });
 
+// --- 🔴 The codec, chosen rather than imposed --------------------------------
+//
+// The trade-off is real and the answer depends on where the file is watched:
+// AV1 is smaller and transcodes on a server with no GPU; H.264 direct-plays.
+// So the old hard-coded order stays as `auto`, and the other two shapes exist.
+
+describe("codecOrder", () => {
+  test("auto is the historical order, H.264 first", () => {
+    expect(codecOrder("auto")).toEqual(VIDEO_CODEC_PREFERENCE);
+  });
+
+  test("efficient turns it around: AV1 and VP9 first, H.264 last", () => {
+    expect(codecOrder("efficient")).toEqual(EFFICIENT_CODEC_PREFERENCE);
+    expect(codecOrder("efficient")[0]).toBe("av1");
+    expect(codecOrder("efficient").at(-1)).toBe("h264");
+  });
+
+  test("a named codec leads, and the rest keep the default order behind it", () => {
+    expect(codecOrder("hevc")).toEqual(["hevc", "h264", "vp9", "av1"]);
+  });
+
+  test("⚠️ a job stored before this field existed reads as auto, not as a crash", () => {
+    // `preferences` is a JSON column. An old row simply has no `videoCodec`.
+    expect(codecOrder(undefined)).toEqual(VIDEO_CODEC_PREFERENCE);
+  });
+});
+
+describe("selectVideoFormat with a codec preference", () => {
+  test("auto is exactly what the function did before: H.264 at 1080p", () => {
+    expect(selectVideoFormat(VIDEO_FORMATS, 1080, "auto")!.id).toBe("137");
+    expect(selectVideoFormat(VIDEO_FORMATS, 1080)!.id).toBe("137");
+  });
+
+  test("efficient takes AV1 at the same resolution — smaller, and it may transcode", () => {
+    const chosen = selectVideoFormat(VIDEO_FORMATS, 1080, "efficient")!;
+    expect(chosen.id).toBe("399");
+    expect(videoCodecFamily(chosen.codec)).toBe("av1");
+    // Same pixels, less than half the bitrate. That is the whole trade.
+    expect(chosen.bitrate).toBeLessThan(selectVideoFormat(VIDEO_FORMATS, 1080, "auto")!.bitrate!);
+  });
+
+  test("a named codec is honoured at every rung it reaches", () => {
+    expect(selectVideoFormat(VIDEO_FORMATS, 1080, "vp9")!.id).toBe("248");
+    expect(selectVideoFormat(VIDEO_FORMATS, 720, "av1")!.id).toBe("398");
+    expect(selectVideoFormat(VIDEO_FORMATS, 2160, "av1")!.id).toBe("401");
+  });
+
+  test("the codec never buys quality: height still comes first", () => {
+    // `efficient` prefers AV1, but not enough to give up 1080p for 720p AV1.
+    expect(selectVideoFormat(VIDEO_FORMATS, 1080, "efficient")!.height).toBe(1080);
+  });
+
+  test("🎯 H.264 at 4K: the resolution gives way, not the codec", () => {
+    // YouTube's AVC1 stops at 1080p. Someone who names H.264 wants a file that
+    // direct-plays; handing them 4K AV1 answers a question they did not ask.
+    const chosen = selectVideoFormat(VIDEO_FORMATS, 2160, "h264")!;
+    expect(videoCodecFamily(chosen.codec)).toBe("h264");
+    expect(chosen.height).toBe(1080);
+    expect(chosen.id).toBe("137");
+  });
+
+  test("a codec the media does not have at all falls back rather than failing", () => {
+    // A job must not die over a preference — but see the notice below: this is
+    // the one case that is reported as a substitution.
+    const chosen = selectVideoFormat(VIDEO_FORMATS, 2160, "hevc")!;
+    expect(chosen.height).toBe(2160);
+    expect(videoCodecFamily(chosen.codec)).toBe("vp9");
+  });
+
+  test("the ceiling still excludes everything when it is below every format", () => {
+    expect(selectVideoFormat(VIDEO_FORMATS, 100, "h264")).toBeUndefined();
+    expect(selectVideoFormat(VIDEO_FORMATS, 100, "efficient")).toBeUndefined();
+  });
+});
+
+describe("codecMaxHeight", () => {
+  test("how high each codec reaches in this video", () => {
+    expect(codecMaxHeight(VIDEO_FORMATS, "h264")).toBe(1080);
+    expect(codecMaxHeight(VIDEO_FORMATS, "av1")).toBe(2160);
+    expect(codecMaxHeight(VIDEO_FORMATS, "hevc")).toBeNull();
+  });
+});
+
+// --- 🔴 Saying it, instead of substituting in silence ------------------------
+
+describe("videoCodecNotice", () => {
+  test("🎯 “H.264 at 4K” is answered out loud, not with another codec", () => {
+    const notice = videoCodecNotice(VIDEO_FORMATS, { maxResolution: 2160, videoCodec: "h264" })!;
+    expect(notice).not.toBeNull();
+    expect(notice.kind).toBe("resolution-capped");
+    expect(notice.requested).toBe("h264");
+    expect(notice.requestedHeight).toBe(2160);
+    expect(notice.resolvedHeight).toBe(1080);
+    expect(notice.resolvedCodec).toBe("h264");
+    // The sentence the form shows: what is missing, and what arrives instead.
+    expect(notice.message).toContain("H.264");
+    expect(notice.message).toContain("1080p");
+    expect(notice.message).toContain("2160p");
+    expect(notice.message).toContain("AV1");
+    expect(notice.message).toContain("VP9");
+  });
+
+  test("the codec is missing entirely: the substitution is named", () => {
+    const notice = videoCodecNotice(VIDEO_FORMATS, { maxResolution: 2160, videoCodec: "hevc" })!;
+    expect(notice.kind).toBe("codec-unavailable");
+    expect(notice.resolvedCodec).toBe("vp9");
+    expect(notice.resolvedHeight).toBe(2160);
+    expect(notice.message).toContain("no HEVC");
+    expect(notice.message).toContain("VP9");
+  });
+
+  test("nothing to confess when the codec is there at the chosen ceiling", () => {
+    expect(videoCodecNotice(VIDEO_FORMATS, { maxResolution: 1080, videoCodec: "h264" })).toBeNull();
+    expect(videoCodecNotice(VIDEO_FORMATS, { maxResolution: 720, videoCodec: "h264" })).toBeNull();
+    expect(videoCodecNotice(VIDEO_FORMATS, { maxResolution: 2160, videoCodec: "av1" })).toBeNull();
+  });
+
+  test("auto and efficient never warn — they are orders, so they cannot be denied", () => {
+    expect(videoCodecNotice(VIDEO_FORMATS, { maxResolution: 2160, videoCodec: "auto" })).toBeNull();
+    expect(videoCodecNotice(VIDEO_FORMATS, { maxResolution: 2160, videoCodec: "efficient" })).toBeNull();
+  });
+
+  test("a ceiling below every format is FormatUnavailable's story, not the codec's", () => {
+    expect(videoCodecNotice(VIDEO_FORMATS, { maxResolution: 100, videoCodec: "h264" })).toBeNull();
+  });
+
+  test("an audio-only source has no codec complaint", () => {
+    expect(videoCodecNotice([], { maxResolution: 1080, videoCodec: "h264" })).toBeNull();
+  });
+});
+
 // --- Output name ------------------------------------------------------------
 
 describe("cleanTitle", () => {
@@ -569,6 +704,31 @@ describe("buildDownloadPlan", () => {
     expect(Object.values(plan.value.languageTags)).toEqual(["eng"]);
     expect(Object.values(plan.value.languageTags)).not.toContain("por");
     expect(Object.values(plan.value.languageTags)).not.toContain("pan");
+  });
+
+  test("the codec preference reaches the plan", () => {
+    const efficient = buildDownloadPlan(URL, INFO, prefs({ videoCodec: "efficient" }));
+    expect(Result.isOk(efficient) && efficient.value.video?.id).toBe("399"); // 1080p AV1
+
+    const named = buildDownloadPlan(URL, INFO, prefs({ videoCodec: "vp9" }));
+    expect(Result.isOk(named) && named.value.video?.id).toBe("248"); // 1080p VP9
+  });
+
+  test("🎯 H.264 with a 4K ceiling plans 1080p H.264, and the notice explains why", () => {
+    const preferences = prefs({ maxResolution: 2160, videoCodec: "h264" });
+    const plan = buildDownloadPlan(URL, INFO, preferences);
+    expect(Result.isOk(plan)).toBe(true);
+    if (!Result.isOk(plan)) return;
+    expect(plan.value.video?.id).toBe("137");
+    expect(videoCodecFamily(plan.value.video?.codec)).toBe("h264");
+    // The plan is not allowed to be the only record of that decision.
+    expect(videoCodecNotice(INFO.videoFormats, preferences)?.kind).toBe("resolution-capped");
+  });
+
+  test("the default is unchanged: auto, which is H.264 first", () => {
+    expect(DEFAULT_PREFERENCES.videoCodec).toBe("auto");
+    const plan = buildDownloadPlan(URL, INFO, DEFAULT_PREFERENCES);
+    expect(Result.isOk(plan) && plan.value.video?.id).toBe("137");
   });
 
   test("the plan is pure: the same input gives the same plan", () => {

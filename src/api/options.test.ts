@@ -81,6 +81,110 @@ describe("resolutions", () => {
   });
 });
 
+describe("codecs", () => {
+  // A YouTube-shaped video: 4K exists, but not in H.264.
+  const info = media({
+    duration: 100,
+    videoFormats: [
+      { id: "401", height: 2160, codec: "av01.0.12M.08", bitrate: 17_000 },
+      { id: "313", height: 2160, codec: "vp09.00.50.08", bitrate: 20_000 },
+      { id: "399", height: 1080, codec: "av01.0.08M.08", bitrate: 2_200 },
+      { id: "137", height: 1080, codec: "avc1.640028", bitrate: 4_400 },
+    ],
+  });
+
+  test("🔴 one resolution, several codecs, and the sizes that differ", () => {
+    const hd = mediaOptions(info).resolutions.find((option) => option.height === 1080)!;
+
+    // The thing a single row per height could not show: 1080p is two offers.
+    expect(hd.variants.map((variant) => variant.codecFamily)).toEqual(["h264", "av1"]);
+    const [h264, av1] = hd.variants;
+    expect(h264!.formatId).toBe("137");
+    expect(av1!.formatId).toBe("399");
+    expect(av1!.approxBytes).toBeLessThan(h264!.approxBytes!);
+    // Preselected by `auto`, which is H.264 — and the row's own line says so.
+    expect(hd.formatId).toBe("137");
+    expect(hd.byCodec.auto).toMatchObject({ formatId: "137", height: 1080, exact: true });
+    expect(hd.byCodec.av1).toMatchObject({ formatId: "399", height: 1080, exact: true });
+  });
+
+  test("the preselection follows videoCodec", () => {
+    const hd = mediaOptions(info, prefs({ videoCodec: "efficient" })).resolutions.find(
+      (option) => option.height === 1080,
+    )!;
+    expect(hd.formatId).toBe("399");
+    expect(hd.codecFamily).toBe("av1");
+  });
+
+  test("every choice is measured against this video, with its cost in words", () => {
+    const codecs = mediaOptions(info).codecs;
+    const by = (value: string) => codecs.find((codec) => codec.value === value)!;
+
+    expect(codecs.map((codec) => codec.value)).toEqual(["auto", "efficient", "h264", "vp9", "hevc", "av1"]);
+    expect(by("auto").caveat).toBeNull();
+    expect(by("efficient").caveat).toBeNull();
+    expect(by("av1")).toMatchObject({ available: true, maxHeight: 2160, caveat: null });
+
+    // 🔴 The one that matters: H.264 is offered, and what it costs is written
+    // next to it before anyone picks it.
+    expect(by("h264")).toMatchObject({ available: true, maxHeight: 1080 });
+    expect(by("h264").caveat).toContain("1080p");
+    expect(by("h264").caveat).toContain("2160p");
+
+    // Not there at all, and said so rather than left to be discovered.
+    expect(by("hevc")).toMatchObject({ available: false, maxHeight: null, formatCount: 0 });
+    expect(by("hevc").caveat).toContain("no HEVC");
+  });
+
+  test("🔴 a resolution the named codec cannot reach is flagged, never removed", () => {
+    const resolutions = mediaOptions(info, prefs({ videoCodec: "h264" })).resolutions;
+
+    // 2160p is still on the list: the resolution exists, the *combination* does
+    // not, and dropping the row would hide the choice instead of explaining it.
+    expect(resolutions.map((option) => option.height)).toEqual([2160, 1080]);
+    const uhd = resolutions[0]!;
+    expect(uhd.variants.map((variant) => variant.codecFamily)).toEqual(["vp9", "av1"]);
+
+    // 🔴 Picking 2160p with H.264 is answered, not silently reinterpreted: what
+    // arrives is 1080p H.264, and `exact: false` is the flag that says so.
+    expect(uhd.byCodec.h264).toMatchObject({
+      height: 1080,
+      formatId: "137",
+      codecFamily: "h264",
+      exact: false,
+    });
+    // The same row, asked with no codec opinion, is exactly 2160p.
+    expect(uhd.byCodec.auto).toMatchObject({ height: 2160, exact: true });
+    // And a codec the video does not carry at all: the stand-in is named.
+    expect(uhd.byCodec.hevc).toMatchObject({ height: 2160, codecFamily: "vp9", exact: false });
+
+    const hd = resolutions[1]!;
+    expect(hd.byCodec.h264).toMatchObject({ height: 1080, formatId: "137", exact: true });
+    expect(hd.formatId).toBe("137");
+  });
+
+  test("every choice is answered at every height, so moving the radio needs no second probe", () => {
+    // ⚠️ One probe per URL (PLAN §4.3): the codec radio cannot cost a network
+    // call, so the answers for all six choices ship with the first one.
+    for (const row of mediaOptions(info).resolutions) {
+      expect(Object.keys(row.byCodec).sort()).toEqual(
+        ["auto", "av1", "efficient", "h264", "hevc", "vp9"],
+      );
+    }
+  });
+
+  test("the caveat is a fact about the video, so lowering the ceiling does not hide it", () => {
+    const codecs = mediaOptions(info, prefs({ maxResolution: 720 })).codecs;
+    expect(codecs.find((codec) => codec.value === "h264")!.caveat).toContain("1080p");
+  });
+
+  test("an audio-only source offers the choices and no video to spend them on", () => {
+    const codecs = mediaOptions(media()).codecs;
+    expect(codecs).toHaveLength(6);
+    expect(codecs.every((codec) => codec.caveat === null)).toBe(true);
+  });
+});
+
 describe("audio", () => {
   test("one row per language, with the original marked", () => {
     const options = mediaOptions(
@@ -165,6 +269,14 @@ describe("the suggestion", () => {
   test("starts at the best resolution under the ceiling, not at the ceiling", () => {
     expect(suggestFor(info, prefs({ maxResolution: 1080 })).maxResolution).toBe(1080);
     expect(suggestFor(info, prefs({ maxResolution: 720 })).maxResolution).toBe(480);
+  });
+
+  test("carries the codec preference through, and what it lands on", () => {
+    const suggestion = suggestFor(info, prefs());
+    expect(suggestion.videoCodec).toBe("auto");
+    expect(suggestFor(info, prefs({ videoCodec: "av1" })).videoCodec).toBe("av1");
+    // The fixture's formats carry no codec at all, so the honest answer is that.
+    expect(suggestion.videoCodecFamily).toBe("unknown");
   });
 
   test("preselects the original audio track", () => {

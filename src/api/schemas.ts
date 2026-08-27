@@ -9,6 +9,8 @@
  */
 import { t } from "elysia";
 
+import { VIDEO_CODEC_PREFERENCES } from "../core/types";
+
 export const preferencesSchema = t.Partial(
   t.Object({
     originalOnly: t.Boolean(),
@@ -16,6 +18,14 @@ export const preferencesSchema = t.Partial(
     /** ⚠️ R7: independent of audio. Never derived from `audioLanguages`. */
     subtitleLanguages: t.Array(t.String()),
     maxResolution: t.Integer({ minimum: 144, maximum: 4320 }),
+    /**
+     * ⚠️ `{ default: undefined }` on purpose — `t.UnionEnum` otherwise sets
+     * `default: values[0]`, which turns an omitted field into a stated
+     * preference (see docs/DISCOVERIES.md). Here that default would even be the
+     * *right* value, `auto`, which is what makes it dangerous: the bug would
+     * only show the day the order of this list changes.
+     */
+    videoCodec: t.UnionEnum([...VIDEO_CODEC_PREFERENCES], { default: undefined }),
     sponsorblock: t.Boolean(),
     embedSubtitles: t.Boolean(),
   }),
