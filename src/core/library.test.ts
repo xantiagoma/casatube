@@ -606,3 +606,145 @@ describe("ffprobe, lazily and one item at a time", () => {
     expect(tagOf(await open().probe("missing.mkv"))).toBe("NotFound");
   });
 });
+
+/**
+ * 🔴 The whole point of `presence` is the distinction between "there is nothing
+ * there" and "I could not look", so every test below is really one question:
+ * *would this have been reported as `missing`?*
+ */
+describe("presence", () => {
+  test("a file that is there is present, with its size and mtime", async () => {
+    put("Videos/Talk.mkv", "0123456789");
+    touch("Videos/Talk.mkv", 1_700_000_000);
+
+    const report = await open().presence(["Videos/Talk.mkv"]);
+    const answer = report.results.get("Videos/Talk.mkv");
+    expect(answer?.state).toBe("present");
+    if (answer?.state !== "present") throw new Error("unreachable");
+    expect(answer.size).toBe(10);
+    expect(answer.modifiedAt).toBe(new Date(1_700_000_000_000).toISOString());
+    expect(report.checked).toBe(1);
+  });
+
+  test("a file deleted from a library that still has other files is missing", async () => {
+    put("Videos/Kept.mkv");
+    const report = await open().presence(["Videos/Gone.mkv"]);
+    expect(report.results.get("Videos/Gone.mkv")?.state).toBe("missing");
+  });
+
+  test("a whole folder that is gone is still missing, not unknown", async () => {
+    put("Videos/Kept.mkv");
+    const report = await open().presence(["Deleted Folder/Talk.mkv"]);
+    expect(report.results.get("Deleted Folder/Talk.mkv")?.state).toBe("missing");
+  });
+
+  test("a directory wearing the file's name is missing — it is not the file", async () => {
+    put("Videos/Kept.mkv");
+    mkdirSync(join(root, "Videos/Talk.mkv"), { recursive: true });
+    const report = await open().presence(["Videos/Talk.mkv"]);
+    expect(report.results.get("Videos/Talk.mkv")?.state).toBe("missing");
+  });
+
+  // --- the three ways of not knowing ---------------------------------------
+
+  test("🔴 a root that does not exist is unknown, never missing", async () => {
+    const library = openLibrary({ root: join(root, "not-mounted-here") });
+    const report = await library.presence(["Videos/Talk.mkv"]);
+    const answer = report.results.get("Videos/Talk.mkv");
+    expect(answer?.state).toBe("unknown");
+    if (answer?.state !== "unknown") throw new Error("unreachable");
+    expect(answer.reason).toBe("mount-unavailable");
+    expect(report.checked).toBe(0);
+  });
+
+  test("🔴 an empty root is unknown — an unmounted mountpoint looks exactly like this", async () => {
+    const report = await open().presence(["Videos/Talk.mkv"]);
+    const answer = report.results.get("Videos/Talk.mkv");
+    expect(answer?.state).toBe("unknown");
+    if (answer?.state !== "unknown") throw new Error("unreachable");
+    expect(answer.reason).toBe("library-empty");
+    expect(answer.detail).toContain("probably not mounted");
+  });
+
+  test("🔴 a root that cannot be read is unknown, and every path in the batch says so", async () => {
+    put("Videos/Talk.mkv");
+    chmodSync(root, 0o000);
+    try {
+      const report = await open().presence(["Videos/Talk.mkv", "Videos/Other.mkv"]);
+      for (const path of ["Videos/Talk.mkv", "Videos/Other.mkv"]) {
+        const answer = report.results.get(path);
+        expect(answer?.state).toBe("unknown");
+        if (answer?.state !== "unknown") throw new Error("unreachable");
+        expect(answer.reason).toBe("mount-unavailable");
+      }
+    } finally {
+      chmodSync(root, 0o755);
+    }
+  });
+
+  test("🔴 a folder that refuses to be read is unreadable, not missing", async () => {
+    put("Videos/Talk.mkv");
+    put("Other/Keep.mkv");
+    chmodSync(join(root, "Videos"), 0o000);
+    try {
+      const report = await open().presence(["Videos/Talk.mkv"]);
+      const answer = report.results.get("Videos/Talk.mkv");
+      expect(answer?.state).toBe("unknown");
+      if (answer?.state !== "unknown") throw new Error("unreachable");
+      expect(answer.reason).toBe("unreadable");
+    } finally {
+      chmodSync(join(root, "Videos"), 0o755);
+    }
+  });
+
+  test("a path that climbs out of the root is refused rather than checked", async () => {
+    put("Videos/Talk.mkv");
+    const report = await open().presence(["../../etc/passwd"]);
+    const answer = report.results.get("../../etc/passwd");
+    expect(answer?.state).toBe("unknown");
+    if (answer?.state !== "unknown") throw new Error("unreachable");
+    expect(answer.reason).toBe("unreadable");
+    expect(report.checked).toBe(0);
+  });
+
+  // --- the batch itself ----------------------------------------------------
+
+  test("duplicate paths are asked about once", async () => {
+    put("Videos/Talk.mkv");
+    const report = await open().presence(["Videos/Talk.mkv", "Videos/Talk.mkv", "Videos/Talk.mkv"]);
+    expect(report.checked).toBe(1);
+    expect(report.results.size).toBe(1);
+  });
+
+  test("an empty batch does no work at all", async () => {
+    const report = await open().presence([]);
+    expect(report.results.size).toBe(0);
+    expect(report.checked).toBe(0);
+  });
+
+  test("two hundred files are answered, and the wall clock is reported", async () => {
+    for (let index = 0; index < 200; index += 1) put(`Videos/Talk ${index}.mkv`);
+    const paths = Array.from({ length: 200 }, (_, index) => `Videos/Talk ${index}.mkv`);
+
+    const report = await open().presence(paths);
+    expect(report.checked).toBe(200);
+    expect(report.exhausted).toBe(false);
+    expect([...report.results.values()].every((answer) => answer.state === "present")).toBe(true);
+    expect(report.elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
+  test("🔴 a batch that runs out of budget reports timed-out, not missing", async () => {
+    put("Videos/Talk.mkv");
+    // ⚠️ `0`, not `1`. With a one-millisecond budget the whole batch can finish
+    // inside that millisecond on a warm page cache, and the test then passes or
+    // fails depending on the machine. Zero makes `remaining()` non-positive by
+    // construction, so the path is guaranteed to reach the deadline branch.
+    const report = await open().presence(["Videos/Talk.mkv"], { budgetMs: 0, concurrency: 1 });
+    const answer = report.results.get("Videos/Talk.mkv");
+    expect(answer?.state).toBe("unknown");
+    if (answer?.state !== "unknown") throw new Error("unreachable");
+    // Either gate may be the one that expires first; neither may say `missing`.
+    expect(["timed-out", "mount-unavailable"]).toContain(answer.reason);
+    expect(report.exhausted || answer.reason === "mount-unavailable").toBe(true);
+  });
+});

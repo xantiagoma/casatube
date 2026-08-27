@@ -30,6 +30,7 @@ import {
   INSPECTOR_TABS,
   JOB_SORTS,
   LIBRARY_SORTS,
+  LIBRARY_TABS,
   LIBRARY_VIEWS,
   QUEUE_FILTERS,
   RANGES,
@@ -84,6 +85,7 @@ const queueRoute = createRoute({
     panel: oneOf(search.panel, INSPECTOR_TABS, "details"),
     sort: oneOf(search.sort, JOB_SORTS, "date"),
     order: oneOf(search.order, SORT_ORDERS, "desc"),
+    file: oneOf(search.file, FILE_FILTERS, "any"),
     ...(text(search.q) !== undefined ? { q: text(search.q)! } : {}),
     ...(text(search.job) !== undefined ? { job: text(search.job)! } : {}),
   }),
@@ -97,7 +99,11 @@ const libraryRoute = createRoute({
     sort: oneOf(search.sort, LIBRARY_SORTS, "modified"),
     order: oneOf(search.order, SORT_ORDERS, "desc"),
     view: oneOf(search.view, LIBRARY_VIEWS, "grid"),
-    trash: search.trash === true || search.trash === "true",
+    // ⚠️ `?trash=true` was this screen's param before there were three tabs.
+    // It is still honoured as the *default* for `tab`, so a bookmark or a link
+    // from an older build opens the trash rather than silently opening the
+    // media grid — the failure nobody would report.
+    tab: oneOf(search.tab, LIBRARY_TABS, search.trash === true || search.trash === "true" ? "trash" : "media"),
     ...(text(search.q) !== undefined ? { q: text(search.q)! } : {}),
     ...(text(search.folder) !== undefined ? { folder: text(search.folder)! } : {}),
     ...(text(search.item) !== undefined ? { item: text(search.item)! } : {}),

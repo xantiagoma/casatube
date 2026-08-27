@@ -15,29 +15,37 @@
  * filter are all navigations, the default turned every click at the bottom of a
  * long queue into a jump back to the top. See `docs/DISCOVERIES.md`.
  */
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useSearch } from "@tanstack/react-router";
 import { Loader2, MousePointerClick } from "lucide-react";
 
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDockedPanels } from "@/hooks/use-media-query";
+import { useSetSearch } from "@/hooks/use-set-search";
 import { EmptyState, ErrorState, StatTile } from "../components/common/Bits";
 import { BatchAdd } from "../components/jobs/BatchAdd";
 import { JobInspector } from "../components/jobs/JobInspector";
-import { SearchBox, SortControl, StatusFilter } from "../components/jobs/JobFilters";
+import { FileFilterControl, FileStateBadge, SearchBox, SortControl, StatusFilter } from "../components/jobs/JobFilters";
 import { JobTable } from "../components/jobs/JobTable";
-import { matchesStatus, matchesText, sortJobs } from "../components/jobs/job-order";
+import {
+  fileStateOf,
+  finishedIds,
+  indexFileStates,
+  matchesFile,
+  matchesStatus,
+  matchesText,
+  sortJobs,
+} from "../components/jobs/job-order";
 import { RUNNING, WAITING } from "../components/jobs/job-view";
 import { PageHeader } from "../components/layout/AppShell";
 import { formatCount } from "../data/format";
-import { useJobs } from "../data/queries";
+import { useJobFileStates, useJobs } from "../data/queries";
 import { useJobStream } from "../data/stream";
 import type { QueueSearch } from "../search-params";
 
 export function Queue() {
   const search = useSearch({ from: "/queue" });
-  const navigate = useNavigate({ from: "/queue" });
   const stream = useJobStream();
   const jobs = useJobs(stream.connection === "live");
   const docked = useDockedPanels();
@@ -45,13 +53,32 @@ export function Queue() {
   /**
    * One writer for the URL, so `resetScroll: false` cannot be forgotten on the
    * one call that would then throw the page back to the top.
+   *
+   * ⚠️ The intersection is not decoration: `useSetSearch` constrains its
+   * parameter to `Record<string, unknown>`, and an `interface` — unlike a type
+   * alias — has no implicit index signature.
    */
-  const setSearch = (patch: Partial<QueueSearch>): void =>
-    void navigate({ search: (current) => ({ ...current, ...patch }), resetScroll: false });
+  const setSearch = useSetSearch<QueueSearch & Record<string, unknown>>();
+  const patch = (fields: Partial<QueueSearch>): void => setSearch((current) => ({ ...current, ...fields }));
 
   const all = jobs.data?.jobs ?? [];
+
+  /**
+   * 🔴 The same disk check the Downloads screen makes, over the same cache
+   * entry — the ids are sorted into the key, so both screens open at once ask
+   * the server **once**. Only finished jobs: nothing else has a file yet.
+   */
+  const wanted = finishedIds(all);
+  const files = useJobFileStates(wanted);
+  const fileIndex = indexFileStates(files.data?.states);
+
   const shown = sortJobs(
-    all.filter((job) => matchesStatus(job, search.status) && matchesText(job, search.q ?? "")),
+    all.filter(
+      (job) =>
+        matchesStatus(job, search.status) &&
+        matchesText(job, search.q ?? "") &&
+        matchesFile(fileStateOf(job, fileIndex), search.file),
+    ),
     search.sort,
     search.order,
   );
@@ -64,18 +91,19 @@ export function Queue() {
     failed: all.filter((job) => job.status === "failed").length,
   };
 
-  const select = (id: string): void => setSearch({ job: search.job === id ? undefined : id });
+  const select = (id: string): void => patch({ job: search.job === id ? undefined : id });
 
   const inspector = selected ? (
     <JobInspector
       job={selected}
       tab={search.panel}
-      onTab={(panel) => setSearch({ panel })}
-      onClose={() => setSearch({ job: undefined })}
+      onTab={(panel) => patch({ panel })}
+      onClose={() => patch({ job: undefined })}
+      fileState={fileStateOf(selected, fileIndex)}
     />
   ) : null;
 
-  const filtered = search.status !== "all" || (search.q ?? "") !== "";
+  const filtered = search.status !== "all" || (search.q ?? "") !== "" || search.file !== "any";
 
   return (
     <>
@@ -96,12 +124,25 @@ export function Queue() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <StatusFilter value={search.status} onChange={(status) => setSearch({ status })} />
-            <SortControl sort={search.sort} order={search.order} onChange={setSearch} />
+            <StatusFilter value={search.status} onChange={(status) => patch({ status })} />
+            {/* 🔴 The file filter is here too, not only on Downloads. "Which of
+                my downloads lost its file" is not a question about a tab, and a
+                filter that lived on one screen made the answer depend on which
+                screen you happened to open. */}
+            <FileFilterControl
+              value={search.file}
+              onChange={(file) => patch({ file })}
+              onRecheck={() => void files.refetch()}
+              checking={files.isFetching}
+              checkedAt={files.data?.at}
+              elapsedMs={files.data?.elapsedMs}
+              unavailable={wanted.length > 0 && files.isError}
+            />
+            <SortControl sort={search.sort} order={search.order} onChange={patch} />
             <SearchBox
               label="Search the queue"
               value={search.q ?? ""}
-              onChange={(next) => setSearch({ q: next === "" ? undefined : next })}
+              onChange={(next) => patch({ q: next === "" ? undefined : next })}
             />
           </div>
 
@@ -132,13 +173,18 @@ export function Queue() {
                       all.length === 0
                         ? "Add URLs above. A queued job survives both the browser closing and the service restarting."
                         : filtered
-                          ? "Try another status, or clear the search."
+                          ? "Try another status, set the file state back to any, or clear the search."
                           : "Try another status."
                     }
                   />
                 </div>
               ) : (
-                <JobTable jobs={shown} selectedId={search.job} onSelect={select} />
+                <JobTable
+                  jobs={shown}
+                  selectedId={search.job}
+                  onSelect={select}
+                  badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
+                />
               )}
             </CardContent>
           </Card>
@@ -168,7 +214,7 @@ export function Queue() {
       <Sheet
         open={!docked && selected !== null}
         onOpenChange={(open) => {
-          if (!open) setSearch({ job: undefined });
+          if (!open) patch({ job: undefined });
         }}
       >
         {/* The inspector brings its own close button; the sheet's default one

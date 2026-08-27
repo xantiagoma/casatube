@@ -70,6 +70,15 @@ export interface QueueSearch {
   q?: string;
   sort: JobSort;
   order: SortOrder;
+  /**
+   * What became of the file — the same filter Downloads has.
+   *
+   * It belongs here too because "which of my downloads lost its file" is not a
+   * question about a tab: the Queue is the screen that shows *everything*, and
+   * a filter that only existed on one of them made the answer depend on which
+   * screen you happened to be looking at.
+   */
+  file: FileFilter;
   job?: string;
   panel: InspectorTab;
 }
@@ -88,18 +97,35 @@ export const JOB_SORTS = ["date", "status", "priority", "size", "duration"] as c
 export type JobSort = (typeof JOB_SORTS)[number];
 
 /**
- * Downloads' file-state filter.
+ * The file-state filter, on **both** job screens.
  *
- * ⚠️ There is no `missing`: nothing on the wire says whether a recorded output
- * path still exists. `components/jobs/job-order.ts` carries the full note.
+ * 🔴 `missing` and `unknown` are the two that earn their place. `missing` is a
+ * fact the server established by looking at the disk (`POST
+ * /api/jobs/file-state`), and it used to be unrepresentable — the badge said
+ * *Filed* for a file that had been `rm`'d on the NAS, and the tooltip admitted
+ * as much. `unknown` is its opposite number and just as load-bearing: a library
+ * that is unreachable must produce *"could not check"* rows a person can find
+ * and re-check, not rows quietly reported as gone.
  */
-export const FILE_FILTERS = ["any", "filed", "trashed", "none"] as const;
+export const FILE_FILTERS = ["any", "present", "missing", "trashed", "none", "unknown"] as const;
 export type FileFilter = (typeof FILE_FILTERS)[number];
 
 export const LIBRARY_SORTS = ["modified", "name", "size"] as const;
 export const SORT_ORDERS = ["asc", "desc"] as const;
 export type SortOrder = (typeof SORT_ORDERS)[number];
 export const LIBRARY_VIEWS = ["grid", "list"] as const;
+
+/**
+ * The three things the Library screen can be showing.
+ *
+ * 🔴 One param rather than a boolean per view. It began as `trash: boolean`,
+ * and adding conversions to that would have meant two independent flags with an
+ * impossible combination between them (`trash` *and* `conversions`) that
+ * something would eventually have to arbitrate. The router still reads an old
+ * `?trash=true` link and lands on the right tab — see `router.tsx`.
+ */
+export const LIBRARY_TABS = ["media", "conversions", "trash"] as const;
+export type LibraryTab = (typeof LIBRARY_TABS)[number];
 
 export interface LibrarySearch {
   q?: string;
@@ -108,8 +134,8 @@ export interface LibrarySearch {
   order: (typeof SORT_ORDERS)[number];
   view: (typeof LIBRARY_VIEWS)[number];
   item?: string;
-  /** The trash is a view of the library, not a separate screen. */
-  trash: boolean;
+  /** The trash and the conversions are views of the library, not other screens. */
+  tab: LibraryTab;
 }
 
 export const SOURCE_KINDS = ["all", "playlists", "subscriptions"] as const;

@@ -10,17 +10,20 @@
  * the stream instead of polling beside it.
  */
 import { useEffect, useRef } from "react";
-import { ExternalLink, RotateCcw, TriangleAlert, X } from "lucide-react";
+import { CircleHelp, Download, ExternalLink, Pause, Play, RotateCcw, TriangleAlert, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Job } from "../../../core/types";
 import { formatBytes, formatDateTime, formatDuration, formatSpeed, formatUntil, hostOf } from "../../data/format";
-import { useCancelJob, useRetryJob } from "../../data/queries";
+import { useCancelJob, usePauseJob, useRedownload, useResumeJob, useRetryJob } from "../../data/queries";
 import { PriorityMark, StatusPill } from "../common/Bits";
 import { isTerminal } from "../status";
+import { PausedMark } from "./JobTable";
+import { FileStateBadge, unknownReasonText } from "./JobFilters";
 import { StagePipeline } from "./StageTrack";
+import type { ResolvedFileState } from "./job-order";
 import { formatLabel, jobTitle } from "./job-view";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -37,15 +40,37 @@ export function JobInspector({
   tab,
   onTab,
   onClose,
+  fileState,
 }: {
   job: Job;
   tab: "details" | "tasks" | "logs";
   onTab(next: "details" | "tasks" | "logs"): void;
   onClose(): void;
+  /**
+   * What the server found on disk for this job.
+   *
+   * Passed in rather than fetched here: the screen already asked about every
+   * row in one batch, and a panel that asked again would be a second `stat` for
+   * a file that was checked a moment ago — and a second, possibly *different*,
+   * answer sitting next to the badge on the row behind it.
+   */
+  fileState?: ResolvedFileState | undefined;
 }) {
   const cancel = useCancelJob();
   const retry = useRetryJob();
+  const redownload = useRedownload();
+  const missing = fileState?.state === "missing";
+  const uncheckable =
+    fileState?.state === "unknown" && fileState.reason !== "not-finished" && fileState.reason !== "not-checked";
+  const pause = usePauseJob();
+  const resume = useResumeJob();
   const logEnd = useRef<HTMLDivElement>(null);
+
+  // ⚠️ The same rule as the row's buttons, and it lives in both places on
+  // purpose: pause is a *claim* filter, so it is offered where it does what it
+  // says. See `JobActions` in `JobTable.tsx`.
+  const canPause = job.status === "queued" && job.paused !== true;
+  const canResume = job.paused === true && !isTerminal(job.status);
 
   // The interesting line is always the last one. Following it is what makes the
   // log usable while something is running rather than only afterwards.
@@ -87,7 +112,15 @@ export function JobInspector({
         <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-4">
           <TabsContent value="details" className="mt-0">
             <dl className="divide-y">
-              <Row label="Status" value={<StatusPill status={job.status} />} />
+              <Row
+                label="Status"
+                value={
+                  <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                    <StatusPill status={job.status} />
+                    {job.paused ? <PausedMark /> : null}
+                  </span>
+                }
+              />
               <Row label="Priority" value={<PriorityMark priority={job.priority} />} />
               <Row label="Format" value={formatLabel(job)} />
               <Row label="Retries" value={`${job.attempts} / ${job.maxAttempts}`} />
@@ -105,6 +138,12 @@ export function JobInspector({
               <Row label="Speed" value={job.speed ? formatSpeed(job.speed) : "—"} />
               <Row label="ETA" value={job.eta ? formatDuration(job.eta) : "—"} />
               <Row label="Output" value={job.outputFile ?? "—"} />
+              {fileState && fileState.state !== "unknown" ? (
+                <Row label="File" value={<FileStateBadge state={fileState} />} />
+              ) : null}
+              {fileState?.state === "present" && fileState.size !== undefined ? (
+                <Row label="On disk" value={formatBytes(fileState.size)} />
+              ) : null}
               <Row label="Updated" value={formatDateTime(job.updatedAt)} />
               {job.notBefore ? <Row label="Next attempt" value={formatUntil(job.notBefore)} /> : null}
               {job.claimedBy ? <Row label="Worker" value={job.claimedBy} /> : null}
@@ -122,6 +161,73 @@ export function JobInspector({
                     Retrying ({job.attempts}/{job.maxAttempts}) {job.notBefore ? formatUntil(job.notBefore) : ""}.
                   </p>
                 ) : null}
+              </div>
+            ) : null}
+
+            {/* 🔴 A held job reports its underlying status forever and shows no
+                progress, which reads exactly like a stuck queue. Saying what is
+                actually true — and that one button undoes it — is the whole
+                reason `resume` had to be wired up. */}
+            {job.paused && !isTerminal(job.status) ? (
+              <div className="mt-4 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs">
+                <p className="font-medium text-warning">On hold</p>
+                <p className="mt-1 text-muted-foreground">
+                  The worker will not pick this up while it is paused. Nothing has been lost and nothing expires —
+                  Resume puts it back in line exactly where its priority says.
+                </p>
+              </div>
+            ) : null}
+
+            {/* 🔴 The one place this work has to become an action rather than a
+                colour. A download whose file is gone is not information — it is
+                a thing to do something about, and until now the only way to do
+                it was to copy the URL out and queue it again by hand. */}
+            {missing ? (
+              <div className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                <p className="flex items-center gap-2 text-xs font-medium text-destructive">
+                  <TriangleAlert className="size-3.5" aria-hidden />
+                  The file is not there any more
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  The library answered and there is nothing at <span className="font-mono">{fileState?.path}</span>.
+                  It was removed or moved outside CasaTube — the download itself succeeded.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2.5 gap-1.5"
+                  disabled={redownload.isPending}
+                  onClick={() => redownload.mutate(job.id)}
+                >
+                  <Download className="size-3.5" aria-hidden />
+                  {redownload.isPending ? "Queueing…" : "Download it again"}
+                </Button>
+                {/* ⚠️ Said out loud, because the queue is where it lands and
+                    this panel is not going to change to show it. */}
+                {redownload.isSuccess ? (
+                  <p className="mt-2 text-xs text-success">Queued again — it is in the queue as a new job.</p>
+                ) : null}
+                {redownload.isError ? (
+                  <p className="mt-2 text-xs text-destructive">{redownload.error.message}</p>
+                ) : null}
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  It is queued with the same settings this job used, so the copy that arrives matches the one that
+                  went missing.
+                </p>
+              </div>
+            ) : null}
+
+            {/* ⚠️ Not an error, and deliberately not styled as one. A library
+                that cannot be read says nothing about the file — the mistake
+                this whole feature exists to stop making is treating that
+                silence as bad news. */}
+            {uncheckable ? (
+              <div className="mt-4 rounded-lg border bg-muted/40 p-3">
+                <p className="flex items-center gap-2 text-xs font-medium">
+                  <CircleHelp className="size-3.5" aria-hidden />
+                  The file could not be checked
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">{unknownReasonText(fileState!)}</p>
               </div>
             ) : null}
 
@@ -156,6 +262,30 @@ export function JobInspector({
       </Tabs>
 
       <div className="flex flex-wrap gap-2 border-t p-3">
+        {canResume && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 text-warning hover:text-warning"
+            disabled={resume.isPending}
+            onClick={() => resume.mutate(job.id)}
+          >
+            <Play className="size-3.5" aria-hidden />
+            Resume
+          </Button>
+        )}
+        {canPause && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            disabled={pause.isPending}
+            onClick={() => pause.mutate(job.id)}
+          >
+            <Pause className="size-3.5" aria-hidden />
+            Pause
+          </Button>
+        )}
         {(job.status === "failed" || job.status === "cancelled") && (
           <Button
             variant="outline"

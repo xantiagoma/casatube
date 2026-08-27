@@ -28,6 +28,13 @@
  * and "Embed subtitles" two cards away from the subtitles — which is how a form
  * ends up reading like a list of fields instead of a decision.
  *
+ * 🔴 **Plugins are shown after the five steps and are not numbered**, because
+ * nothing there is a decision *yet*: `POST /api/jobs` takes no plugin field, so
+ * the per-download override PLAN §5 asks for has nothing behind it and a switch
+ * would move without changing anything. What the panel can honestly do — say
+ * which plugins claim this URL, what each would do to it, and which are
+ * actually on — it does. `PluginNotice.tsx` carries the full note.
+ *
  * 🔴 R3: nothing here downloads. `Add to queue` is one POST; the response is a
  * row that already survives this tab closing, and every visible change after
  * that comes back from the server through the stream.
@@ -61,6 +68,7 @@ import type { Choices } from "./choices";
 import { DestinationPicker } from "./DestinationPicker";
 import { VideoPicker } from "./FormatPicker";
 import { Step, SwitchRow } from "./OptionBits";
+import { ApplicablePlugins, ApplicablePluginsBadge } from "./PluginNotice";
 import { AudioPicker, SubtitlePicker } from "./TrackPickers";
 
 function choicesFrom(preferences: Preferences): Choices {
@@ -224,6 +232,9 @@ function AnalyzedRow({
           {analyzed.info.duration ? ` · ${formatDuration(analyzed.info.duration)}` : ""}
         </p>
         <p className="mt-1.5 truncate text-xs font-medium tabular-nums">{summary}</p>
+        {/* Discoverability: the panel is where the detail is, and this is what
+            tells someone the panel has something to say about it. */}
+        <ApplicablePluginsBadge url={url} />
       </div>
       <Button type="button" variant="outline" onClick={onOpen} className="shrink-0 gap-1.5">
         <Settings2 className="size-4" aria-hidden />
@@ -591,6 +602,20 @@ function OptionsPanel(props: {
             onPriority={props.onPriority}
           />
         </Step>
+
+        {/* ⚠️ Deliberately outside the numbered steps. A number promises a
+            decision, and there is nothing to decide here until the server can
+            carry a per-download choice — see the header. */}
+        <section className="space-y-3 border-t pt-5">
+          <div>
+            <h3 className="text-sm font-semibold">Plugins</h3>
+            <p className="text-xs text-muted-foreground">
+              What else will touch this download. Read from what each plugin declares — none of them runs to answer
+              this.
+            </p>
+          </div>
+          <ApplicablePlugins url={props.url} />
+        </section>
       </div>
     </AnalysisDrawer>
   );

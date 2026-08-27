@@ -10,14 +10,14 @@
  * what makes an inspector view shareable and survive a refresh (PLAN §8).
  */
 import type { ReactNode } from "react";
-import { ExternalLink, RotateCcw, X } from "lucide-react";
+import { ExternalLink, Pause, Play, RotateCcw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Job } from "../../../core/types";
 import { formatBytes, formatClock, formatDuration, formatPercent, formatSpeed, hostOf } from "../../data/format";
-import { useCancelJob, useRetryJob } from "../../data/queries";
+import { useCancelJob, usePauseJob, useResumeJob, useRetryJob } from "../../data/queries";
 import { PriorityMark, ProgressBar, StatusPill } from "../common/Bits";
 import { isTerminal } from "../status";
 import { StageTrack } from "./StageTrack";
@@ -46,13 +46,89 @@ function Thumb({ job }: { job: Job }) {
   );
 }
 
+/**
+ * The mark that a job is on hold.
+ *
+ * 🔴 It has to be its own badge because `paused` is **not a status**: it is a
+ * separate column, and the status underneath goes on saying `Queued`. Without
+ * this, a held job and a waiting job are the same row on screen — which is how
+ * "why has this never started?" becomes a twenty-minute question.
+ */
+export function PausedMark() {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-xs font-medium text-warning ring-1 ring-warning/30 ring-inset whitespace-nowrap">
+      <Pause className="size-2.5" aria-hidden />
+      Paused
+    </span>
+  );
+}
+
+/**
+ * Pause and resume, together, always.
+ *
+ * 🔴 `POST /api/jobs/:id/resume` existed with **nothing calling it**, which is
+ * the shape of bug worth naming: a hold with no release. The two buttons are
+ * written in one place so neither can be shipped without the other.
+ *
+ * ⚠️ **Pause is offered on a queued job only.** `paused` is a column the claim
+ * query filters on, and nothing in the worker reads it mid-run — so pausing
+ * something that is already downloading would leave the download running and
+ * the button looking broken. Cancel is the honest control for a job in flight,
+ * and it is already here.
+ */
 function JobActions({ job, compact = false }: { job: Job; compact?: boolean }) {
   const cancel = useCancelJob();
   const retry = useRetryJob();
+  const pause = usePauseJob();
+  const resume = useResumeJob();
   const canRetry = job.status === "failed" || job.status === "cancelled";
+  const canPause = job.status === "queued" && job.paused !== true;
+  const canResume = job.paused === true && !isTerminal(job.status);
 
   return (
     <div className="flex items-center gap-1">
+      {canResume ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7 text-warning hover:text-warning"
+              disabled={resume.isPending}
+              onClick={(event) => {
+                event.stopPropagation();
+                resume.mutate(job.id);
+              }}
+              aria-label="Resume"
+            >
+              <Play className="size-3.5" aria-hidden />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Let the worker pick it up again</TooltipContent>
+        </Tooltip>
+      ) : null}
+
+      {canPause ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              disabled={pause.isPending}
+              onClick={(event) => {
+                event.stopPropagation();
+                pause.mutate(job.id);
+              }}
+              aria-label="Pause"
+            >
+              <Pause className="size-3.5" aria-hidden />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Hold it in the queue — nothing is lost</TooltipContent>
+        </Tooltip>
+      ) : null}
+
       {canRetry ? (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -190,6 +266,7 @@ export function JobTable({
                 <td className="px-3 py-2.5">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <StatusPill status={job.status} />
+                    {job.paused ? <PausedMark /> : null}
                     {badge?.(job)}
                   </div>
                 </td>
@@ -258,6 +335,7 @@ export function JobList({ jobs }: { jobs: Job[] }) {
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1.5">
               <StatusPill status={job.status} />
+              {job.paused ? <PausedMark /> : null}
               <JobActions job={job} compact />
             </div>
           </li>

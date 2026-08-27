@@ -45,7 +45,15 @@ CASATUBE_PORT=8520
 CASATUBE_DATA=./data
 CASATUBE_LIBRARY=/mnt/media/youtube
 MAX_CONCURRENT_DOWNLOADS=3
+
+# Without this, every cookie and password you add is stored in plain text.
+# Generate with: openssl rand -base64 48
+CREDENTIALS_KEY=change-me-to-a-long-random-string
 ```
+
+⚠️ **`.env` now holds a secret**, so it belongs beside the compose file and
+nowhere else — not in the repository, and not in the backup that gets emailed
+around. `.gitignore` already covers it.
 
 ### Plain Docker
 
@@ -55,6 +63,7 @@ docker run -d \
   --restart unless-stopped \
   -p 8520:8520 \
   -e PUID=1000 -e PGID=1000 -e UMASK=022 -e TZ=America/Bogota \
+  -e CREDENTIALS_KEY="$(openssl rand -base64 48)" \
   -v /srv/casatube:/data \
   -v /mnt/media/youtube:/library \
   casatube:0.1.0-ytdlp-2026.08.19
@@ -196,6 +205,45 @@ a destination that stays down for a week must not quietly fill the data volume.
 | `MAX_CONCURRENT_DOWNLOADS` | `3` | Concurrent downloads. Limits the download stage only (PLAN §17) |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
+### Credentials at rest
+
+Cookies, logins and API keys are added from **Settings → Credentials**, per
+site, and stored in `DATA_DIR/casatube.db`. `CREDENTIALS_KEY` is what decides
+whether they are stored *encrypted* or *readable*.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `CREDENTIALS_KEY` | **unset — secrets stored in plain text** | Passphrase for AES-256-GCM at rest. The key is derived with PBKDF2-HMAC-SHA256, 210 000 iterations, a fresh random salt per credential |
+
+```bash
+openssl rand -base64 48        # generate one; put it in .env, or the unit file
+```
+
+🔴 **Unset means plain text, and everything says so.** There is no weaker
+encryption and no obfuscation: the secret goes into the row as it was typed.
+The server prints three lines at every start, every write logs one, every
+listing carries the reason, and the Settings screen shows a red *"Not
+encrypted"* panel **instead of** the "encrypted at rest" claim — that sentence
+is only ever drawn when it is true. Nothing about this is quiet; the only way
+to end up storing cookies in the clear is to decide to.
+
+⚠️ **Changing the key re-encrypts nothing.** Each credential records which key
+sealed it (a short non-reversible fingerprint, shown on the row), so after a
+change the old rows simply cannot be opened. That state is diagnosable rather
+than mysterious: the **Test** button on the row says it was sealed with a
+different key, and the fix is to paste that credential in again. There is no
+re-encrypt-everything command.
+
+📌 **Losing the key loses the credentials and nothing else.** They are copies
+of secrets that exist elsewhere — a browser session, a password manager — so
+the recovery is to export the cookies again. Jobs, history and the library are
+untouched by any of this.
+
+⚠️ **The key is not in `DATA_DIR`**, deliberately, so the volume that gets
+backed up does not carry the thing that opens it. That also means restoring
+`/data` onto a host with a different `CREDENTIALS_KEY` restores credentials
+that cannot be read — copy the key across too, or expect to paste them again.
+
 ### Browser playback (on-demand HLS)
 
 No browser opens Matroska, so an MKV is remuxed to HLS when someone presses
@@ -262,6 +310,13 @@ never in the repository. They expire within hours, and reusing them from a
 different IP than the one that created them is itself a signal to the site — a
 mitigation, not a fix (PLAN §12).
 
+📌 **`COOKIES_FILE` is the global fallback — one jar for every site.** Per-site
+cookies, per-site logins and API keys are added from **Settings → Credentials**
+and resolve most-specific-first (`www.youtube.com` beats `*.youtube.com` beats
+`youtube.com` beats `*`); anything that matches there beats this file. Those are
+stored in the database and encrypted only when `CREDENTIALS_KEY` is set — see
+[Credentials at rest](#credentials-at-rest).
+
 ---
 
 ## Volumes
@@ -282,6 +337,12 @@ before I upgrade" without pretending to be a backup system (PLAN §15).
 Stop the container before copying `/data`, or copy the WAL files
 (`*.db-wal`, `*.db-shm`) along with the databases — a `casatube.db` snapshot
 taken alone while the app is writing is not a consistent database.
+
+⚠️ **`casatube.db` holds the credentials**, so a copy of `/data` is a copy of
+your cookies and logins. Encrypted if `CREDENTIALS_KEY` is set — and readable
+if it is not, which is the other reason to set it. The key itself is *not* in
+`/data`: restoring this directory somewhere with a different key restores
+credentials nobody can open (see [Credentials at rest](#credentials-at-rest)).
 
 ---
 
@@ -552,10 +613,22 @@ otherwise the fix disappears on the next recreate (see
 ### `Sign in to confirm you're not a bot`
 
 The IP looks suspicious to YouTube. Export cookies from a logged-in browser
-session, put the file inside `/data`, `chmod 600` it, and set
-`COOKIES_FILE=/data/cookies.txt`. Expect to redo it: cookies expire within
-hours, and using them from a different IP than the one that created them is
-itself a signal.
+session and paste (or upload) the `cookies.txt` in **Settings → Credentials**,
+filed under `youtube.com`. The file is validated at the paste — a jar whose tabs
+were turned into spaces by a terminal or a chat window is refused there and
+then, naming the line, rather than failing twenty minutes into an 800 MB
+download — and the **Test** button says whether it has already expired and
+whether its domains actually cover the site.
+
+The older way still works and is global rather than per site: put the file
+inside `/data`, `chmod 600` it, and set `COOKIES_FILE=/data/cookies.txt`.
+
+⚠️ Set `CREDENTIALS_KEY` **before** adding the first credential, or the jar is
+written to the database in plain text (the screen will say so). See
+[Credentials at rest](#credentials-at-rest).
+
+Expect to redo it either way: cookies expire within hours, and using them from a
+different IP than the one that created them is itself a signal.
 
 ### Ownership changed and now everything is wrong
 

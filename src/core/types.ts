@@ -199,6 +199,14 @@ export type JobPatch = Partial<
 
 export interface JobFilter {
   status?: JobStatus | JobStatus[];
+  /**
+   * Exactly these jobs, in one query.
+   *
+   * ⚠️ An **empty array matches nothing**, which is the honest reading and the
+   * opposite of what `undefined` means. A caller asking about no jobs must not
+   * be handed the whole table.
+   */
+  ids?: readonly string[];
   paused?: boolean;
   claimedBy?: string;
   fingerprint?: string;

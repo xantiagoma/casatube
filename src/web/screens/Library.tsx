@@ -11,22 +11,18 @@
  * place and takes nothing else with it.
  */
 import { useState } from "react";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useSearch } from "@tanstack/react-router";
 import {
-  ArrowDownUp,
+  Check,
   ChevronDown,
   Download,
   FileArchive,
   Film,
-  Folder,
-  FolderOpen,
-  Grid2x2,
-  List,
   Music,
   Package,
   RotateCcw,
-  Search,
   Trash2,
+  Wand2,
   X,
 } from "lucide-react";
 
@@ -42,8 +38,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -51,10 +45,15 @@ import { useDockedPanels } from "@/hooks/use-media-query";
 import { cn } from "@/lib/utils";
 import type { LibraryItem } from "../../core/library";
 import { Donut } from "../components/charts/Sparkline";
-import { EmptyState, ErrorState, UsageBar } from "../components/common/Bits";
+import { EmptyState, ErrorState } from "../components/common/Bits";
 import { PageHeader } from "../components/layout/AppShell";
+import { FolderSidebar } from "../components/library/FolderSidebar";
+import { LibraryToolbar } from "../components/library/LibraryToolbar";
+import { ConvertingBadge, FileTranscodes, TranscodeJobsCard } from "../components/library/TranscodeJobs";
+import { TranscodeDialog } from "../components/library/TranscodeDialog";
+import { activeTranscodes, hasActiveTranscode, transcodesForPath } from "../components/library/transcode-view";
 import { MediaPreview } from "../components/media/MediaPreview";
-import { formatBytes, formatDateTime, formatDuration, splitPath } from "../data/format";
+import { formatBytes, formatDateTime, formatDuration } from "../data/format";
 import {
   canPlayHlsNatively,
   isBrowserPlayable,
@@ -72,9 +71,9 @@ import {
   useTrash,
   useTrashItem,
 } from "../data/library";
-import { useDestinations } from "../data/queries";
-import { useStorage } from "../data/stats";
-import type { LibrarySearch } from "../search-params";
+import { useRefreshLibraryOnFinish, useTranscodes } from "../data/transcode";
+import { useSetSearch } from "../hooks/use-set-search";
+import type { LibrarySearch, LibraryTab } from "../search-params";
 
 const AUDIO_EXT = new Set(["mp3", "m4a", "opus", "flac", "ogg", "wav", "aac"]);
 
@@ -155,26 +154,60 @@ function Thumbnail({ item, iconClassName }: { item: LibraryItem; iconClassName?:
   );
 }
 
+/**
+ * The tick a card or a row shows while the library is in selection mode.
+ *
+ * ⚠️ A `<span>`, not the `Checkbox` component. The whole card is already a
+ * `<button>` and a real checkbox is another button — nesting them is invalid
+ * HTML and, in practice, a hit target inside a hit target where the inner one
+ * swallows the tap. The card carries `aria-pressed` instead, so the state is
+ * announced once by the control that actually toggles it.
+ */
+function SelectionTick({ checked, className }: { checked: boolean; className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        // 24 px rather than the 16 px of a desktop checkbox: this is tapped
+        // with a finger on an iPad, and it sits over a picture, so it needs its
+        // own background to stay visible on a bright frame.
+        "grid size-6 shrink-0 place-items-center rounded-md border-2 shadow-sm transition-colors",
+        checked ? "border-primary bg-primary text-primary-foreground" : "border-white/80 bg-black/35 text-transparent",
+        className,
+      )}
+    >
+      <Check className="size-4" />
+    </span>
+  );
+}
+
 function ItemCard({
   item,
   selected,
+  selecting,
+  checked,
   onOpen,
 }: {
   item: LibraryItem;
   selected: boolean;
+  selecting: boolean;
+  checked: boolean;
   onOpen(): void;
 }) {
   return (
     <button
       type="button"
       onClick={onOpen}
+      aria-pressed={selecting ? checked : undefined}
       className={cn(
         "flex flex-col overflow-hidden rounded-xl border bg-card text-left transition-colors hover:border-primary/40",
         selected && "border-primary ring-1 ring-primary/30",
+        selecting && checked && "border-primary ring-2 ring-primary/40",
       )}
     >
       <span className="relative grid aspect-video w-full place-items-center overflow-hidden bg-muted text-muted-foreground">
         <Thumbnail item={item} />
+        {selecting ? <SelectionTick checked={checked} className="absolute top-1.5 left-1.5" /> : null}
         <span className="absolute right-1.5 bottom-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white uppercase">
           {item.ext.replace(/^\./, "")}
         </span>
@@ -310,7 +343,16 @@ function DownloadSplitButton({ item }: { item: LibraryItem }) {
   );
 }
 
-function DetailPanel({ path, onClose }: { path: string; onClose(): void }) {
+function DetailPanel({
+  path,
+  onClose,
+  onConvert,
+}: {
+  path: string;
+  onClose(): void;
+  /** Opens the conversion dialog for this one file. */
+  onConvert(paths: string[]): void;
+}) {
   const detail = useLibraryItem(path, true);
   /**
    * 🔴 **The server decides how this file is played, not its extension.**
@@ -328,6 +370,12 @@ function DetailPanel({ path, onClose }: { path: string; onClose(): void }) {
    */
   const playback = usePlayback(path);
   const trash = useTrashItem();
+  /*
+   * The whole conversion list, filtered here rather than asked for per file:
+   * `GET /api/transcode` has no path filter, and one shared query is one poll
+   * for the tab badge, this panel and the Conversions tab together.
+   */
+  const transcodes = useTranscodes();
   const [confirming, setConfirming] = useState(false);
 
   if (detail.isPending) return <div className="p-4"><Skeleton className="h-64 w-full" /></div>;
@@ -340,6 +388,9 @@ function DetailPanel({ path, onClose }: { path: string; onClose(): void }) {
   }
 
   const { item, probe } = detail.data;
+  const jobs = transcodes.data?.jobs ?? [];
+  const mine = transcodesForPath(jobs, item.path);
+  const converting = hasActiveTranscode(jobs, item.path);
   const verdict = playback.data;
   const src = verdict === undefined ? playableUrl(item) : verdict.url;
   const isHls = src !== null && src.includes("/hls/");
@@ -374,6 +425,22 @@ function DetailPanel({ path, onClose }: { path: string; onClose(): void }) {
           unplayableHint={hint}
           hls={isHls}
         />
+
+        {/*
+          * 🔴 The one place where converting is the *answer* rather than an
+          * option. `unsupported` means no browser here can play this at all —
+          * VP9 or AV1, which MPEG-TS cannot carry — so the honest next step is
+          * a re-encode, and this is where a person is standing when they find
+          * out. The cost is named in the same breath.
+          */}
+        {verdict?.mode === "unsupported" ? (
+          <p className="rounded-md border border-warning/30 bg-warning/10 p-2.5 text-xs text-warning">
+            Nothing here can play this file as it is. Converting it makes a copy that can — at the cost of re-encoding
+            every frame, which is the slowest thing CasaTube does.
+          </p>
+        ) : null}
+
+        <FileTranscodes rows={mine} jobs={jobs} />
 
         <dl className="divide-y text-xs">
           {[
@@ -439,10 +506,28 @@ function DetailPanel({ path, onClose }: { path: string; onClose(): void }) {
 
       <div className="flex flex-wrap gap-2 border-t p-3">
         <DownloadSplitButton item={item} />
+        {/*
+          * ⚠️ Disabled *with its reason* when this file is already in the
+          * queue, rather than hidden or left to fail: the server refuses a
+          * second conversion of the same file ("one at a time, on purpose"),
+          * and a button that returns that as an error afterwards is a button
+          * that taught nobody anything.
+          */}
         <Button
           variant="outline"
           size="sm"
-          className="flex-1 gap-1.5 text-destructive hover:text-destructive"
+          className="flex-1 basis-36 gap-1.5"
+          disabled={converting}
+          title={converting ? "This file is already in the conversion queue." : undefined}
+          onClick={() => onConvert([item.path])}
+        >
+          <Wand2 className="size-3.5" aria-hidden />
+          {converting ? "In the queue" : "Convert…"}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="flex-1 basis-36 gap-1.5 text-destructive hover:text-destructive"
           onClick={() => setConfirming(true)}
         >
           <Trash2 className="size-3.5" aria-hidden />
@@ -578,7 +663,18 @@ function TrashView() {
 
 export function LibraryScreen() {
   const search = useSearch({ from: "/library" });
-  const navigate = useNavigate({ from: "/library" });
+  /*
+   * 🔴 `useSetSearch`, never `navigate` directly. A search-param change is a
+   * navigation, and TanStack Router scrolls to the top after one unless it is
+   * told otherwise — so typing a character into the search box, opening an
+   * item or switching tab each threw the page back to the start. This screen
+   * was one of the six still doing it. See `hooks/use-set-search.ts`.
+   */
+  // ⚠️ The intersection is not decoration: `useSetSearch` constrains its
+  // parameter to `Record<string, unknown>`, and an `interface` — unlike a type
+  // alias — has no implicit index signature, so `LibrarySearch` alone does not
+  // satisfy it.
+  const setSearch = useSetSearch<LibrarySearch & Record<string, unknown>>();
   const docked = useDockedPanels();
 
   const listing = useLibrary({
@@ -588,11 +684,44 @@ export function LibraryScreen() {
     order: search.order,
     limit: 200,
   });
-  const folders = useDestinations();
-  const storage = useStorage();
+
+  /*
+   * One shared query for every conversion. The badge on the tab, the detail
+   * panel and the Conversions tab all read this same cache entry, so a running
+   * encode is one poll for the screen rather than one per component.
+   */
+  const transcodes = useTranscodes();
+  const transcodeJobs = transcodes.data?.jobs ?? [];
+  useRefreshLibraryOnFinish(transcodes.data?.jobs);
 
   const items = listing.data?.items ?? [];
-  const update = (patch: Partial<LibrarySearch>) => void navigate({ search: (current) => ({ ...current, ...patch }) });
+  const update = (patch: Partial<LibrarySearch>) => setSearch((current) => ({ ...current, ...patch }));
+
+  /*
+   * 🔴 **Selection is the one piece of state on this screen that is not in the
+   * URL, and it is deliberate.** Everything else here — the folder, the search,
+   * the sort, which item is open — is a *view* worth sending someone. A tick
+   * list of forty paths is neither shareable nor reloadable in any useful
+   * sense, and it would push a query string past what a browser will keep. It
+   * is cleared when selection mode is left, so it cannot act on files the
+   * screen is no longer showing.
+   */
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [converting, setConverting] = useState<string[] | null>(null);
+
+  const isSelected = (path: string): boolean => selected.includes(path);
+  const toggleSelected = (path: string): void =>
+    setSelected((current) => (current.includes(path) ? current.filter((one) => one !== path) : [...current, path]));
+  const leaveSelection = (): void => {
+    setSelecting(false);
+    setSelected([]);
+  };
+  /** Tapping a card means "select this" in selection mode and "open this" otherwise. */
+  const onItemActivate = (path: string): void => {
+    if (selecting) toggleSelected(path);
+    else update({ item: search.item === path ? undefined : path });
+  };
 
   const byExt = new Map<string, number>();
   for (const item of items) {
@@ -609,7 +738,9 @@ export function LibraryScreen() {
       color: `var(--chart-${index + 1})`,
     }));
 
-  const detail = search.item ? <DetailPanel path={search.item} onClose={() => update({ item: undefined })} /> : null;
+  const detail = search.item ? (
+    <DetailPanel path={search.item} onClose={() => update({ item: undefined })} onConvert={setConverting} />
+  ) : null;
 
   return (
     <>
@@ -617,17 +748,31 @@ export function LibraryScreen() {
         title="Library"
         description="What is on disk. Deleting moves to the trash first — it is reversible."
         actions={
-          <Tabs value={search.trash ? "trash" : "media"} onValueChange={(next) => update({ trash: next === "trash" })}>
+          <Tabs
+            value={search.tab}
+            onValueChange={(next) => {
+              leaveSelection();
+              update({ tab: next as LibraryTab });
+            }}
+          >
             <TabsList>
               <TabsTrigger value="media">Media</TabsTrigger>
+              <TabsTrigger value="conversions">
+                Conversions
+                {/* ⚠️ The badge is on the tab because a conversion runs for
+                    hours and nobody stays on this screen to watch it. */}
+                <ConvertingBadge count={activeTranscodes(transcodeJobs).length} />
+              </TabsTrigger>
               <TabsTrigger value="trash">Trash</TabsTrigger>
             </TabsList>
           </Tabs>
         }
       />
 
-      {search.trash ? (
+      {search.tab === "trash" ? (
         <TrashView />
+      ) : search.tab === "conversions" ? (
+        <TranscodeJobsCard />
       ) : (
         /*
          * ⚠️ `28rem`, not the `22rem` this started at, and the reference design
@@ -640,120 +785,20 @@ export function LibraryScreen() {
          * holds at any width.
          */
         <div className="grid gap-4 xl:grid-cols-[13rem_minmax(0,1fr)] 2xl:grid-cols-[13rem_minmax(0,1fr)_28rem]">
-          <aside className="min-w-0 space-y-4">
-            <Card className="p-0">
-              <CardHeader className="px-3 pt-3 pb-2">
-                <CardTitle className="text-sm">Folders</CardTitle>
-              </CardHeader>
-              <CardContent className="px-2 pb-3">
-                <ul className="space-y-0.5">
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => update({ folder: undefined })}
-                      className={cn(
-                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                        search.folder === undefined ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
-                      )}
-                    >
-                      <FolderOpen className="size-4 shrink-0" aria-hidden />
-                      <span className="truncate">All media</span>
-                    </button>
-                  </li>
-                  {(folders.data?.folders ?? []).map((folder) => (
-                    <li key={folder.path}>
-                      <button
-                        type="button"
-                        onClick={() => update({ folder: folder.path })}
-                        className={cn(
-                          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                          search.folder === folder.path ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
-                        )}
-                        style={{ paddingLeft: `${0.5 + folder.depth * 0.6}rem` }}
-                      >
-                        <Folder className="size-4 shrink-0" aria-hidden />
-                        <span className="truncate">{splitPath(folder.path).name}</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-                {folders.isError ? (
-                  <p className="px-2 pt-2 text-xs text-muted-foreground">
-                    The folder list is unavailable; search still works.
-                  </p>
-                ) : null}
-              </CardContent>
-            </Card>
-
-            {storage.data?.library.available ? (
-              <Card className="p-0">
-                <CardHeader className="px-3 pt-3 pb-2">
-                  <CardTitle className="text-sm">Storage</CardTitle>
-                </CardHeader>
-                <CardContent className="px-3 pb-3">
-                  <UsageBar usedPercent={storage.data.library.usedPercent} />
-                  <p className="mt-1.5 text-xs text-muted-foreground tabular-nums">
-                    {formatBytes(storage.data.library.usedBytes)} of {formatBytes(storage.data.library.totalBytes)}
-                  </p>
-                </CardContent>
-              </Card>
-            ) : null}
-          </aside>
+          <FolderSidebar folder={search.folder} onFolder={(next) => update({ folder: next })} />
 
           <div className="min-w-0 space-y-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="relative min-w-48 flex-1">
-                <Search className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
-                <Input
-                  value={search.q ?? ""}
-                  placeholder="Search library…"
-                  aria-label="Search library"
-                  className="pl-8"
-                  onChange={(event) => update({ q: event.target.value === "" ? undefined : event.target.value })}
-                />
-              </div>
-
-              <Select value={search.sort} onValueChange={(next) => update({ sort: next as LibrarySearch["sort"] })}>
-                <SelectTrigger className="w-36" aria-label="Sort by">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="modified">Date added</SelectItem>
-                  <SelectItem value="name">Name</SelectItem>
-                  <SelectItem value="size">Size</SelectItem>
-                </SelectContent>
-              </Select>
-
-              <Button
-                variant="outline"
-                size="icon"
-                aria-label={`Sort ${search.order === "asc" ? "ascending" : "descending"}`}
-                onClick={() => update({ order: search.order === "asc" ? "desc" : "asc" })}
-              >
-                <ArrowDownUp className="size-4" aria-hidden />
-              </Button>
-
-              <div className="flex overflow-hidden rounded-md border">
-                <Button
-                  variant={search.view === "grid" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="rounded-none"
-                  aria-label="Grid view"
-                  onClick={() => update({ view: "grid" })}
-                >
-                  <Grid2x2 className="size-4" aria-hidden />
-                </Button>
-                <Button
-                  variant={search.view === "list" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="rounded-none"
-                  aria-label="List view"
-                  onClick={() => update({ view: "list" })}
-                >
-                  <List className="size-4" aria-hidden />
-                </Button>
-              </div>
-            </div>
+            <LibraryToolbar
+              search={search}
+              onSearch={update}
+              selecting={selecting}
+              selected={selected.length}
+              visible={items.length}
+              onToggleSelecting={() => (selecting ? leaveSelection() : setSelecting(true))}
+              onSelectAll={() => setSelected(items.map((item) => item.path))}
+              onClearSelection={() => setSelected([])}
+              onConvertSelected={() => setConverting(selected)}
+            />
 
             {listing.isPending ? (
               <Skeleton className="h-64 w-full" />
@@ -771,7 +816,9 @@ export function LibraryScreen() {
                     key={item.path}
                     item={item}
                     selected={search.item === item.path}
-                    onOpen={() => update({ item: search.item === item.path ? undefined : item.path })}
+                    selecting={selecting}
+                    checked={isSelected(item.path)}
+                    onOpen={() => onItemActivate(item.path)}
                   />
                 ))}
               </div>
@@ -783,12 +830,15 @@ export function LibraryScreen() {
                       <li key={item.path}>
                         <button
                           type="button"
-                          onClick={() => update({ item: search.item === item.path ? undefined : item.path })}
+                          onClick={() => onItemActivate(item.path)}
+                          aria-pressed={selecting ? isSelected(item.path) : undefined}
                           className={cn(
                             "flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-accent/40",
                             search.item === item.path && "bg-primary/5",
+                            selecting && isSelected(item.path) && "bg-primary/10",
                           )}
                         >
+                          {selecting ? <SelectionTick checked={isSelected(item.path)} /> : null}
                           <span className="relative grid aspect-video w-20 shrink-0 place-items-center overflow-hidden rounded bg-muted text-muted-foreground sm:w-24">
                             <Thumbnail item={item} iconClassName="size-5" />
                           </span>
@@ -851,7 +901,7 @@ export function LibraryScreen() {
       )}
 
       <Sheet
-        open={!docked && !search.trash && search.item !== undefined}
+        open={!docked && search.tab === "media" && search.item !== undefined}
         onOpenChange={(open) => {
           if (!open) update({ item: undefined });
         }}
@@ -871,6 +921,25 @@ export function LibraryScreen() {
           {detail}
         </SheetContent>
       </Sheet>
+
+      {/*
+        * One dialog for both entry points — the detail panel's button and the
+        * selection bar's — because they ask the same question. `converting`
+        * holds the files, so it is also what decides whether it is open; a
+        * separate boolean would be a second source of truth for one thing.
+        */}
+      <TranscodeDialog
+        paths={converting ?? []}
+        open={converting !== null}
+        onOpenChange={(open) => {
+          if (!open) setConverting(null);
+        }}
+        onSeeQueue={() => {
+          setConverting(null);
+          leaveSelection();
+          update({ tab: "conversions" });
+        }}
+      />
     </>
   );
 }

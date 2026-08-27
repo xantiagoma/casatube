@@ -166,7 +166,11 @@ function errnoOf(cause: unknown): string | undefined {
 function describeCause(cause: unknown): string {
   const code = errnoOf(cause);
   const message = cause instanceof Error ? cause.message : String(cause);
-  return code === undefined ? message : `${code}: ${message}`;
+  if (code === undefined) return message;
+  // ⚠️ Bun already puts the errno at the front of the message, so prefixing
+  // unconditionally produced "EACCES: EACCES: permission denied…" — which is
+  // the sentence a user reads in a badge tooltip, so it is worth the two lines.
+  return message.startsWith(`${code}:`) ? message : `${code}: ${message}`;
 }
 
 // --- Paths ------------------------------------------------------------------
@@ -381,6 +385,65 @@ export interface MediaProbe {
   streams: ProbeStream[];
 }
 
+/**
+ * Whether one path is really on disk — and, when nothing can be said, why not.
+ *
+ * 🔴 **`missing` is a claim, and `unknown` is the absence of one.** They are
+ * separate members rather than "not present" for the reason this whole file
+ * runs under deadlines: the root is very often a network mount, and a mount
+ * that is asleep, unmounted or unreadable answers `ENOENT` for every path in
+ * it. Telling someone their file is gone when the NAS is merely down is the
+ * one wrong answer this type exists to make impossible to give by accident.
+ */
+export type Presence =
+  | { state: "present"; size: number; modifiedAt: string }
+  | { state: "missing" }
+  | { state: "unknown"; reason: PresenceReason; detail: string };
+
+/**
+ * Why a path could not be answered for.
+ *
+ * | | |
+ * |---|---|
+ * | `mount-unavailable` | the root itself did not answer — nothing under it can be judged |
+ * | `library-empty` | the root answered and holds **nothing**, while we were asked about files in it. An unmounted mountpoint looks exactly like this, and so does a library someone emptied; the safe reading is the one that does not announce a loss |
+ * | `timed-out` | the batch's budget ran out before this path's turn |
+ * | `unreadable` | the path itself refused — `EACCES`, `ELOOP`, a device error |
+ */
+export type PresenceReason = "mount-unavailable" | "library-empty" | "timed-out" | "unreadable";
+
+export interface PresenceOptions {
+  /**
+   * The budget for the **whole batch**, not per path. Anything unanswered when
+   * it expires comes back `unknown`, never `missing`.
+   */
+  budgetMs?: number;
+  /** How many `stat` calls are in flight at once. */
+  concurrency?: number;
+}
+
+export interface PresenceReport {
+  /** One entry per **distinct** path asked about, keyed by the path as given. */
+  results: Map<string, Presence>;
+  /** How many paths were actually `stat`ed, as opposed to answered from a rule. */
+  checked: number;
+  /** Wall-clock cost of the batch, for the caller to report and for a test to assert on. */
+  elapsedMs: number;
+  /** True when the batch ran out of budget — some answers are `timed-out`. */
+  exhausted: boolean;
+}
+
+/** Generous for a spinning disk; a NAS that needs longer is a NAS that is down. */
+const DEFAULT_PRESENCE_BUDGET_MS = 3_000;
+
+/**
+ * ⚠️ Parallel on purpose, and bounded on purpose. Two hundred serialised
+ * `stat`s over NFS at 30 ms each is six seconds; two hundred at once is a
+ * thundering herd against a box that also runs Home Assistant. Sixteen keeps
+ * the round trips overlapping without becoming the load itself.
+ */
+const DEFAULT_PRESENCE_CONCURRENCY = 16;
+
 export interface LibraryOptions {
   root: string;
   /** Per filesystem call. */
@@ -410,6 +473,12 @@ export interface Library {
   readonly retentionDays: number;
   list(query?: LibraryQuery): Promise<Result<LibraryListing, LibraryError>>;
   item(path: string): Promise<Result<LibraryItem, LibraryError>>;
+  /**
+   * Are these paths still on disk? One answer per path, and **never a
+   * failure** — see the implementation for why every way of not knowing is a
+   * value rather than an error.
+   */
+  presence(paths: readonly string[], options?: PresenceOptions): Promise<PresenceReport>;
   probe(path: string): Promise<Result<MediaProbe, LibraryError | ProbeFailed | Timeout>>;
   remove(path: string, options?: { reason?: string }): Promise<Result<TrashEntry, LibraryError>>;
   restore(path: string): Promise<Result<RestoreResult, LibraryError>>;
@@ -817,6 +886,166 @@ export function openLibrary(options: LibraryOptions): Library {
       });
     }
     return Result.ok(found);
+  }
+
+  // --- presence -----------------------------------------------------------
+
+  /**
+   * `stat` one absolute path and turn the outcome into a {@link Presence}.
+   *
+   * 🔴 It does **not** go through {@link statUnder}, and the difference is the
+   * point: that helper folds everything that is not `ENOENT` into
+   * `MountUnavailable`, which flattens "the file is not there" and "I was not
+   * allowed to look" into one shape whose only distinguishing mark is a string.
+   * Here the errno is read directly, because it is the *whole* decision.
+   */
+  async function presenceOf(absolute: string, budget: number): Promise<Presence> {
+    const raced = await withDeadline(capture(stat(absolute)), budget, absolute, "checking a file");
+    if (Result.isError(raced)) {
+      return { state: "unknown", reason: "timed-out", detail: raced.error.detail };
+    }
+    const caught = raced.value;
+    if (caught.ok) {
+      // A directory that took the file's name is not the file. Reporting it
+      // `present` would offer to play something that cannot be played.
+      if (!caught.value.isFile()) return { state: "missing" };
+      return {
+        state: "present",
+        size: caught.value.size,
+        modifiedAt: new Date(caught.value.mtimeMs).toISOString(),
+      };
+    }
+    const code = errnoOf(caught.cause);
+    // ⚠️ These two, and only these two, are evidence of absence. `ENOENT` is
+    // "no such entry"; `ENOTDIR` is "something on the way is not a folder",
+    // which is the same answer about the leaf.
+    if (code === "ENOENT" || code === "ENOTDIR") return { state: "missing" };
+    return { state: "unknown", reason: "unreadable", detail: describeCause(caught.cause) };
+  }
+
+  /**
+   * Are these files still where they were put?
+   *
+   * 🔴 **This never fails.** It returns a verdict per path, and every way of
+   * not knowing is one of those verdicts — because the caller is a UI drawing a
+   * badge per row, and a thrown error there means either a blank screen or, far
+   * worse, a row silently rendered as if the answer had been "gone".
+   *
+   * The order of the three gates below is the design, and each one exists
+   * because of a real way a library disappears:
+   *
+   * 1. **The root does not answer** (`LIBRARY_DIR` pointing nowhere, the mount
+   *    unreachable, permissions removed) → everything is `mount-unavailable`.
+   *    Nothing under a root that cannot be read is judgeable.
+   * 2. **The root answers and is completely empty**, while we were asked about
+   *    files in it → everything is `library-empty`. ⚠️ This is the gate that
+   *    matters most in practice: an NFS mount that failed to mount leaves the
+   *    *mountpoint directory* behind, so the root `stat`s perfectly and every
+   *    file under it is `ENOENT`. Gate 1 cannot see that; this one can. It
+   *    misreads a genuinely emptied library as unknown, which is the direction
+   *    to be wrong in — an unnecessary "cannot say" costs a re-check, and an
+   *    unwarranted "your file is gone" costs someone their afternoon.
+   * 3. **Per path**, on its own errno — see {@link presenceOf}.
+   *
+   * ⚠️ A path that resolves outside the root is refused rather than checked,
+   * and refused as `unreadable` rather than `missing`: it is a fact about the
+   * *request*, and "outside the library" is not "not on disk".
+   */
+  async function presence(
+    paths: readonly string[],
+    options: PresenceOptions = {},
+  ): Promise<PresenceReport> {
+    const started = Date.now();
+    const budgetMs = options.budgetMs ?? DEFAULT_PRESENCE_BUDGET_MS;
+    const concurrency = Math.max(1, options.concurrency ?? DEFAULT_PRESENCE_CONCURRENCY);
+    const deadline = started + budgetMs;
+    const remaining = (): number => deadline - Date.now();
+
+    const wanted = [...new Set(paths)];
+    const results = new Map<string, Presence>();
+    const report = (checked: number, exhausted: boolean): PresenceReport => ({
+      results,
+      checked,
+      elapsedMs: Date.now() - started,
+      exhausted,
+    });
+    const everything = (reason: PresenceReason, detail: string): PresenceReport => {
+      for (const path of wanted) results.set(path, { state: "unknown", reason, detail });
+      return report(0, reason === "timed-out");
+    };
+
+    if (wanted.length === 0) return report(0, false);
+
+    // Gate 1 — the root itself. ⚠️ Not `presenceOf`: that answers about a
+    // *file*, and a healthy library root is a directory, which it would
+    // correctly and uselessly call `missing`. What is being asked here is only
+    // "did the root answer at all".
+    const rootStat = await statUnder(root, "reading the library root", Math.min(timeoutMs, Math.max(1, remaining())));
+    if (Result.isError(rootStat)) {
+      return everything(
+        "mount-unavailable",
+        rootStat.error._tag === "NotFound"
+          ? `the library root ${root} is not there`
+          : `the library root did not answer: ${rootStat.error.detail}`,
+      );
+    }
+    if (!rootStat.value.isDirectory()) {
+      return everything("mount-unavailable", `the library root ${root} is not a directory`);
+    }
+
+    // Gate 2 — the root answered. Is there anything in it?
+    const entries = await readdirUnder(root, Math.min(timeoutMs, Math.max(1, remaining())));
+    if (Result.isError(entries)) {
+      return everything("mount-unavailable", `the library root could not be read: ${entries.error.detail}`);
+    }
+    if (entries.value.length === 0) {
+      return everything(
+        "library-empty",
+        `the library root ${root} is empty — if it is a network mount, it is probably not mounted`,
+      );
+    }
+
+    // Gate 3 — one answer per path, in a bounded pool.
+    let cursor = 0;
+    let checked = 0;
+    let exhausted = false;
+
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const index = cursor++;
+        if (index >= wanted.length) return;
+        const path = wanted[index]!;
+
+        const left = remaining();
+        if (left <= 0) {
+          exhausted = true;
+          results.set(path, {
+            state: "unknown",
+            reason: "timed-out",
+            detail: `the ${budgetMs} ms budget for this batch ran out before this file's turn`,
+          });
+          continue;
+        }
+
+        const absolute = resolveInRoot(root, path);
+        if (Result.isError(absolute)) {
+          results.set(path, {
+            state: "unknown",
+            reason: "unreadable",
+            detail: `${path} is not inside the library root`,
+          });
+          continue;
+        }
+
+        const answer = await presenceOf(absolute.value, Math.min(timeoutMs, left));
+        if (answer.state === "unknown" && answer.reason === "timed-out") exhausted = true;
+        checked += 1;
+        results.set(path, answer);
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(concurrency, wanted.length) }, worker));
+    return report(checked, exhausted);
   }
 
   // --- ffprobe ------------------------------------------------------------
@@ -1338,5 +1567,5 @@ export function openLibrary(options: LibraryOptions): Library {
     return renameUnder(temporary, journalPath, "replacing the trash journal");
   }
 
-  return { root, retentionDays, list, item, probe, remove, restore, emptyTrash, listTrash };
+  return { root, retentionDays, list, item, presence, probe, remove, restore, emptyTrash, listTrash };
 }

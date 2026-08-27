@@ -314,3 +314,48 @@ export function knownExtras(item: import("../../core/library").LibraryItem): {
   if (item.thumbnail !== undefined) labels.push("1 thumbnail");
   return { count: item.subtitles.length + (item.thumbnail === undefined ? 0 : 1), labels };
 }
+
+// --- Playback sessions ------------------------------------------------------
+
+/**
+ * The remuxes running right now, and the temp disk they are holding —
+ * `GET /api/library/hls/sessions`.
+ *
+ * 🔴 **These bytes are not anybody's files.** A session is MPEG-TS segments
+ * ffmpeg writes under `TEMP_DIR/hls` so a browser can play a container it
+ * refuses to open. They are a cache of something the library already holds, and
+ * the manager deletes a session once it has gone `idleMs` without a request —
+ * which is why the Storage screen has to say so beside the number. A megabyte
+ * count on a storage screen reads as "your data" unless it is told otherwise.
+ *
+ * ⚠️ `startedAt` and `lastAccessAt` are **epoch milliseconds**, not the ISO
+ * strings every other timestamp in this app uses — they come from `Date.now()`
+ * inside the manager rather than from a database column. Anything formatting
+ * them has to convert first.
+ *
+ * ⚠️ There is **no route that ends a session on demand.** `sweep()` exists in
+ * `core/hls.ts` and is not exposed, so this is a read-only view: it can say
+ * what is running and when it will go, and cannot stop it.
+ */
+export interface HlsSessionsPayload {
+  root: string;
+  sessions: import("../../core/hls").HlsSessionInfo[];
+  /** Everything the sessions hold together, in bytes. */
+  bytes: number;
+  maxSessions: number;
+  /** How long a session may go unread before the sweep removes it, in ms. */
+  idleMs: number;
+  transcodeIdleMs: number;
+}
+
+export function useHlsSessions(): UseQueryResult<HlsSessionsPayload, Error> {
+  return useQuery({
+    queryKey: keys.hlsSessions,
+    queryFn: async () => unwrap(await api.api.library.hls.sessions.get()),
+    // A session appears the moment someone presses play on the other screen and
+    // grows for as long as they watch, so this is one of the few things here
+    // worth re-reading on a timer rather than on an event.
+    refetchInterval: 15_000,
+    retry: 1,
+  });
+}

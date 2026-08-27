@@ -2,6 +2,108 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## A *value* imported from `core/` into `src/web` breaks the bundle, and `tsc` says nothing (2026-08-27)
+
+The credentials screen needed the four credential types to draw its type
+picker, and `core/credentials.ts` already exports them:
+
+```ts
+import { CREDENTIAL_TYPES, type CredentialType } from "../../../core/credentials";
+```
+
+`bunx tsc --noEmit` is clean. The tests pass. The **browser bundle stops
+building**:
+
+```
+error: Browser build cannot import Bun builtin: "bun". When bundling for Bun, set target to 'bun'
+    at src/core/credentials.ts:42:30      ← import { randomUUIDv7 } from "bun"
+```
+
+`verbatimModuleSyntax` erases `import type`, so every other reference this
+folder makes to a `core` type costs nothing at runtime. A *value* import does
+not get erased: it drags the whole module in, and with it `bun:sqlite`, drizzle
+and the `bun` builtin.
+
+⚠️ **How it presents is the trap.** `Bun.build` fails, `api/web.ts` catches it
+and serves the error page, and the server log says exactly two words —
+`client bundle failed: Bundle failed`. The API keeps working, so `curl` is
+perfectly happy while the app is a blank error page. The real message only
+appears if you run `Bun.build` yourself.
+
+📌 The fix is a local copy of the list, typed against the core type so it
+cannot drift:
+
+```ts
+export const CREDENTIAL_TYPE_ORDER: CredentialType[] = ["cookies", "password", "apiKey", "custom"];
+export const TYPE_LABEL: Record<CredentialType, string> = { ... };  // exhaustive by construction
+```
+
+The general shape, and it is the same one as the import cycle further down this
+file: **`tsc` type-checks a graph the bundler does not have to be able to
+build.** Anything under `src/web` may import *types* from `src/core` freely and
+must not import a value from it.
+
+## An unmounted NFS mountpoint `stat`s perfectly, and every file under it is `ENOENT` (2026-08-27)
+
+The obvious way to answer *"is this download still on disk?"* is `stat`, and the
+obvious reading of `ENOENT` is "it is gone". Both are wrong in the case this
+project actually runs in.
+
+A network mount is a **directory that something is mounted onto**. When the
+mount fails — the NAS is asleep, the credentials expired, the unit did not come
+up after a reboot — the mountpoint directory is still there, empty, on the local
+disk. So:
+
+| Check | Healthy | **Mount failed** | Library genuinely deleted |
+|---|---|---|---|
+| `stat(root)` | ok, directory | **ok, directory** | ENOENT |
+| `stat(root/Videos/Talk.mkv)` | ok | **ENOENT** | ENOENT |
+
+The middle column is indistinguishable from a file someone deleted, one path at
+a time. A UI built on that arithmetic tells a person that two hundred downloads
+have vanished, at the moment their NAS is merely asleep — which is the most
+alarming thing this application could say, and it would be false.
+
+🔴 So `core/library.ts`'s `presence()` has **three gates**, and the second one is
+the whole point:
+
+1. `stat` the **root**. It does not answer → everything is `mount-unavailable`.
+   (Catches `LIBRARY_DIR` pointing nowhere, and permissions removed.)
+2. `readdir` the root. It is **completely empty** while we are being asked about
+   files in it → everything is `library-empty`. This is the column above.
+3. Only then, per path, on its own errno — and only `ENOENT` and `ENOTDIR` are
+   allowed to mean absence. `EACCES` and a timeout are `unknown`.
+
+⚠️ Gate 2 misreads a library someone really did empty as `unknown` rather than
+`missing`. That is deliberate and it is the cheap direction to be wrong in: an
+unnecessary "cannot say" costs a re-check, and an unwarranted "your file is
+gone" costs somebody their afternoon. There is no signal that separates the two
+— `st_dev` against the parent only says "this is not a mount point", which a
+library legitimately may not be.
+
+📌 The general shape, and it is the sixth time in this file: **an instrument that
+answers cheerfully about the wrong subject.** `stat` was asked "is there a file
+here" and answered correctly every time; the question was "can I see the library
+at all", and nothing in a per-path `stat` can reach it.
+
+## `useMemo` over `query.data ?? []` never memoises anything (2026-08-27)
+
+```tsx
+const all = jobs.data?.jobs ?? [];
+const ids = useMemo(() => all.filter(...).map(...), [all]);   // ← runs every render
+```
+
+`?? []` builds a **new array** on every render where the query has no data, so
+the dependency changes every time and the memo is pure overhead — plus a
+dependency list that reads as a promise it does not keep. React Doctor's
+`exhaustive-deps` names it exactly: *"`all` is rebuilt every render, so `useMemo`
+runs every time."*
+
+📌 Worth knowing which half to fix. Here the memo existed to keep a React Query
+*key* stable — and the key is a **string** built from the ids, which React Query
+hashes, so the array's identity was never what mattered. The fix was to delete
+the memo and do the work in one pass, not to stabilise the array.
+
 ## A query string does not bust Bun's module cache, so "reload the plugin" reloaded nothing (2026-08-27)
 
 `plugin-runtime.ts` reloaded by importing `file:///…/plugin.ts?g=<generation>`,
@@ -737,10 +839,28 @@ in use succeeds** and the kernel splits requests between them. A leftover
 process kept serving a stale bundle alongside the new one, half the requests got
 old code, and an agent "fixed" a bug that was already fixed.
 
-Check with `ss -lptn`; the tell is curling twice and comparing the asset hash.
+Check with `ss -lptn`; the tell is **two LISTEN rows for one port**, and curling
+twice and comparing the asset hash.
+
+⚠️ **It bit again on 2026-08-27, and it invalidated a measurement.** The way in
+was a shell line whose *later* half failed:
+
+```bash
+PORT=8702 … nohup bun src/server.ts > log 2>&1 & echo "PID=$!" > /server.pid
+#                                                                ↑ permission denied
+```
+
+The server started; the pid was never written. Killing the pid recorded by the
+*next* attempt therefore left the first one running, and the kernel round-robined
+between a server pointed at the real library and one pointed at a path that does
+not exist — so "the mount is down, everything must read unknown" came back
+`present` for half the requests, repeatably enough to look like a bug in the code
+under test.
 
 📌 The general shape again: a check that answers, but not about the thing you
-think it is about.
+think it is about. And the specific lesson: **`ss -lptn | grep <port>` before
+trusting any measurement**, not only when something looks wrong — a second server
+makes results *plausible*, not obviously broken.
 
 ## Radix restores focus by scrolling to it (2026-08-27)
 
@@ -764,3 +884,22 @@ which is exactly how the router half of it lived on six screens.
 ⚠️ **Two independent causes wearing the same symptom.** The first fix was real
 and the bug stayed, which is the moment to suspect a second cause rather than to
 doubt the first fix.
+
+
+## `curl /api/health` does not tell you the app works (2026-08-27)
+
+Importing a **value** from a core module into browser code typechecks fine and
+**breaks `Bun.build`**: it drags `bun:sqlite` and drizzle into a browser target.
+The server prints one line — `client bundle failed` — and **carries on serving
+the API**.
+
+So every health check passes, every route answers 200, and the page is blank.
+
+`scripts/smoke.sh` closes it: it fetches the page, extracts the `/assets/*.js`
+it references, and fetches that too. A missing or tiny script fails the check.
+
+⚠️ **Verified by pointing it at a server that serves HTML without our bundle** —
+it failed, as it should. A check nobody has seen fail is not yet a check.
+
+📌 Types are not the boundary here. `import type` is erased; a value import is
+not, and only the bundler finds out.

@@ -5,6 +5,257 @@ session with none of this context. Newest first.
 
 ---
 
+## 2026-08-27 — Credentials, on a screen at last (and `CREDENTIALS_KEY` in the deploy)
+
+The store, the encryption and the four endpoints landed earlier the same day
+and **nothing in the browser could reach any of them**. Asked where the cookies
+go, the honest answer was *nowhere*. Now they go in Settings → Credentials.
+
+**Only `screens/Settings.tsx` (one import, one card), new files under
+`components/settings/` and `data/credentials.ts`, plus one appended key in
+`data/keys.ts`.** +31 tests. `tsc` clean, bundle builds, React Doctor unchanged
+at 59/100 with one deliberate finding in the new code (see below).
+
+### What the screen says out loud, because it has to
+
+🔴 **`encryption.enabled`, in the same element as the claim.** With
+`CREDENTIALS_KEY` set: a green *"Encrypted at rest — aes-256-gcm, key derived
+by PBKDF2-HMAC-SHA256, 210000 iterations, under key `3a765cce`"*. Unset: a red
+panel carrying **the server's own `warning` string**, and the sentence the
+mockup promised is simply not drawn. Same rule inside the form, where the paste
+actually happens. Verified in a browser both ways, by restarting the server
+with and without the variable.
+
+🔴 **The cookie notice sits beside the cookie box** — the server's `notice`,
+verbatim, not summarised — and repeats under the list whenever a cookie
+credential is on screen. It is the screen someone comes back to when yesterday's
+download stops working today.
+
+🔴 **The list is numbered and says the numbering is the resolution order.** The
+API already sorts most-specific-first; a precedence list that does not say so is
+a list somebody re-sorts by date one day.
+
+### What makes a row readable
+
+`cookieCount`, `domains`, `sessionCookies` and `expiresAt` for a jar;
+`username` for a login; `fields` (names only) for a key. Without them, two jars
+for youtube.com are the same line twice. The expiry thresholds are deliberately
+impatient — a fresh YouTube jar reads *"First cookie expires in 4 h"* in red,
+because that is the truth about it and green would be a lie by omission.
+
+⚠️ **Nothing suggests a secret can come back.** No masked field, no "reveal",
+no prefill. Replacing means pasting again, and the dialog says so.
+
+### Verified in a real browser, with the network panel instrumented
+
+`window.fetch` was wrapped before any page JS, so every response **body** was
+captured, not just the request list. One credential of each type created (a
+cookies jar by **file upload**, a login, an API key, a two-field custom), each
+tested, each deleted, with and without a key.
+
+- **122 responses captured, 0 containing any of the 8 planted secrets** — and
+  the search was proved able to see them first, by planting one in the captured
+  list and finding it. Instruments lie; this one was checked.
+- The only field that echoes anything is `username`, which is metadata by
+  design (it is what tells two accounts apart) and is documented as such.
+- The 422 path renders the server's sentence intact:
+  *"That credential was rejected (cookies): line 3 is separated by spaces, not
+  tabs…"* — field named, line named. The form warns about that same paste one
+  second earlier, without a request.
+- Delete asks first and says what cannot be undone; the empty state and the
+  cookie notice both come back correctly afterwards.
+- Light and dark, 1180 px and 820 px (iPad). No console errors.
+
+### 🔴 The bug this work found: a value import from `core/` kills the bundle
+
+`import { CREDENTIAL_TYPES } from "../../../core/credentials"` type-checks
+perfectly and **breaks `Bun.build`** — `verbatimModuleSyntax` erases
+`import type` but not a value import, which drags `bun:sqlite`, drizzle and the
+`bun` builtin into a browser target. The server log says exactly
+`client bundle failed: Bundle failed`, the API keeps answering, and the app is a
+blank error page. Full entry in `docs/DISCOVERIES.md`.
+
+### Outside the frontend: `CREDENTIALS_KEY` is now in the deployment
+
+It was in neither `docker-compose.yml` nor `docs/DEPLOY.md`, so **a default
+deployment stored cookies in plain text and nobody was told**. Both now carry
+it: how to generate one (`openssl rand -base64 48`), that unset means plain
+text, that changing it re-encrypts nothing (each row records the key that
+sealed it, the Test button names it, the fix is to paste again), that losing it
+loses only the credentials, and that `/data` is a copy of your cookies while the
+key deliberately is not in it. The "Sign in to confirm you're not a bot"
+troubleshooting now points at the screen rather than at `COOKIES_FILE`, which is
+demoted to what it is: the global fallback that any matching credential beats.
+
+### Left as it is, on purpose
+
+- **Array index as a key** on the custom-fields rows is React Doctor's one
+  finding in this code and it stays: those rows have no identity, and a key
+  from the typed name remounts the input on every keystroke, losing the caret.
+- **No editing.** The API cannot return a secret, so an edit form could only
+  ever be a new paste with the old metadata drawn around it.
+- `apiKey` and `custom` are offered with the sentence that nothing built in
+  reads them, rather than quietly.
+
+---
+
+## 2026-08-27 — *Archivado* stopped being a guess
+
+> The Downloads screen badged a finished job **Filed**, and its own tooltip
+> admitted what that meant: *"whether it is still on disk is not checked — a
+> file deleted outside CasaTube still reads as filed."* That was written down as
+> a limitation the same day it was built. It was a fault: the screen showed a
+> fact **adjacent** to the one it was asked for.
+
+Now the disk is actually consulted, and a file removed behind CasaTube's back
+reads **File gone** — with a button that downloads it again.
+
+**+61 tests (935 → 996 across 39 files), `bunx tsc --noEmit` clean, React Doctor
+59/100 with nothing reported in any file this touched** (67 warnings, down from
+71: four were mine and are gone — see below).
+
+### The five states, and the one that carries the weight
+
+| | |
+|---|---|
+| `present` | on disk, at the recorded path, when the check ran |
+| `missing` | the library answered and there is nothing there |
+| `trashed` | in CasaTube's own trash — restorable, and the entry id travels with it |
+| `none` | finished, and no path was ever recorded |
+| `unknown` | nothing could be established, **and the reason says what stopped it** |
+
+🔴 **`unknown` outranks `missing` whenever the evidence is not conclusive**, and
+that is the whole design. Telling someone their download is gone when the NAS is
+merely asleep is a lie told with confidence — worse than the silence it replaces.
+
+### 🔴 The design decision: a route of its own, not a field on the job row
+
+The obvious version is a `fileState` computed while `GET /api/jobs` builds its
+listing. It is wrong **here**, for a reason specific to this application:
+
+**`GET /api/jobs` and the SSE stream are the same payload.** `api/watcher.ts`
+re-reads the job table every **750 ms** and pushes a whole snapshot to every open
+tab, and `web/data/stream.ts` writes that snapshot straight into the same React
+Query entry the listing fills. A `fileState` on the job row is therefore not
+"200 stats when the page loads" — it is **200 stats per second, for as long as a
+tab is open**, against a network mount. Leaving it off the pushed frames instead
+makes every badge flicker from checked to unknown twice a second.
+
+So: **`POST /api/jobs/file-state`**, taking the ids of the finished jobs on
+screen, with its own React Query entry keyed on those ids.
+
+- **Ids, not paths.** The browser has never been told where the library root is,
+  and `Job.outputFile` is absolute. The translation is the server's
+  (`core/file-state.ts` → `libraryRelativeOutput`), so no browser-supplied path
+  is ever `stat`ed — and a root that has *moved* (`/library` in a container,
+  `/mnt/nas` on the host) still resolves, via `destination` + filename.
+- **It never fails because of the disk.** A dead mount is a **200 full of
+  `unknown`**, not a 503: the caller is drawing a badge per row and needs an
+  answer for each one.
+- **Bounded**: one root check, one trash read, and a pool of at most 16 `stat`s
+  under a 3 s budget for the whole batch. Anything unanswered when it expires is
+  `timed-out` — never `missing`.
+- **Splitting the route splits the failures**, which is the part that matters
+  when the library is asleep: the queue is local SQLite and keeps answering while
+  this one says "could not check".
+
+Measured against a running server, 200 jobs, single instance (see the
+`SO_REUSEPORT` note below — the first numbers were taken with two):
+
+| | |
+|---|---|
+| `GET /api/jobs`, 200 jobs | **16 ms** warm, 59 ms cold |
+| `POST /api/jobs/file-state`, 199 ids → **199 `stat`s** | **5 ms** server-side, 11–16 ms round trip |
+| Same, cold | 13–19 ms server-side |
+| `file-state` requests during **20 s of live SSE** | **0** — verified with a positive control |
+
+### 🔴 The three gates that keep `missing` honest
+
+`core/library.ts` → `presence()`. Each gate exists because of a real way a
+library disappears, and the second one is the one nobody thinks of:
+
+1. **The root did not answer** — `LIBRARY_DIR` pointing nowhere, the mount
+   unreachable, permissions removed → everything is `mount-unavailable`.
+2. **The root answered and is completely empty**, while we were asked about files
+   in it → `library-empty`. ⚠️ **An NFS mount that failed to mount leaves the
+   mountpoint directory behind**, so the root `stat`s perfectly and every file
+   under it is `ENOENT`. Gate 1 cannot see that; this one can. It misreads a
+   genuinely emptied library as unknown, which is the direction to be wrong in.
+3. **Per path, on its own errno.** `ENOENT`/`ENOTDIR` are the *only* two that
+   mean absence. `EACCES` and a timeout are `unknown`.
+
+And a fourth, in `core/file-state.ts`: a file absent from its path **whose trash
+could not be read** is `unknown`, not `missing` — the one thing that would tell a
+deletion made here from one made behind our back is the thing that did not answer.
+
+**The disk decides before the trash.** The journal is authoritative about
+deletions, not about the present, so it is consulted only to *explain an
+absence*. A re-download over a trashed name therefore reads `present`, not
+`trashed` — there is a test for exactly that.
+
+### Verified in a browser, against a real disk
+
+`PORT=8702` with its own library. A file `rm`'d from the shell → **File gone**;
+one deleted through the API → **In trash**; the rest → **On disk**. Then
+`LIBRARY_DIR` pointed at a path that does not exist → every row went to a neutral
+grey **Not checked** with *"the library root … is not there"*, **no red badges
+and no alarm**. The same directory created but left empty → `library-empty`,
+still not `missing`. Light and dark, and legible at 1024 px.
+
+Re-download clicked from the panel: a **new** job, `queued`, same URL, same
+destination, same resolved `preferences` (1080p), with the original row untouched.
+
+### What changed
+
+| Where | What |
+|---|---|
+| `core/library.ts` | `presence(paths, { budgetMs, concurrency })` — never fails, one verdict per path |
+| `core/file-state.ts` | **new**. Job + trash + presence → the five states, and `libraryRelativeOutput` |
+| `core/types.ts`, `core/queue.ts` | `JobFilter.ids`, so one query answers for a batch (`[]` matches nothing) |
+| `api/jobs.ts` | `POST /file-state` and `POST /:id/redownload` |
+| `search-params.ts`, `router.tsx` | `FILE_FILTERS` gained `present`, `missing`, `unknown`; `QueueSearch.file` |
+| `components/jobs/job-order.ts` | the client-side derivation **deleted**, not duplicated; what is left is matching an answer to a row |
+| `components/jobs/JobFilters.tsx` | five badges, a re-check button carrying *when* and *how long*, per-reason sentences |
+| `components/jobs/JobInspector.tsx` | the File row, the "not there any more" panel, **Download it again** |
+| `screens/{Queue,Downloads}.tsx` | both filter by file state; Downloads counts the missing ones above the table |
+
+**Both screens moved to `useSetSearch`.** They were the last two calling
+`navigate({ search })` by hand, which is the scroll-to-top bug one copy at a
+time. Measured: `scrollY` 4000 → 4000 across a row click, 3000 → 3000 across a
+re-check.
+
+### Three things found by doing it
+
+**🔴 `SO_REUSEPORT` bit again, and it invalidated a measurement.** A `nohup … &`
+whose *following* command failed still started a server; `kill`ing the pid I had
+written down left it running, and Bun happily bound a second server to 8702. The
+kernel round-robined between a server pointed at the real library and one pointed
+at a path that does not exist — so "the mount is down" returned `present`. It is
+already in `docs/DISCOVERIES.md`; the new part is that `ss -lptn` shows **two
+rows for one port**, and that is the check.
+
+**A `useMemo` over `data ?? []` never memoises anything.** `jobs.data?.jobs ?? []`
+is a fresh array on any render without data, so `useMemo(..., [all])` re-runs
+every render — React Doctor flags it as a dependency that lies. Both screens now
+call a plain one-pass `finishedIds(jobs)`; the query key is a *string*, so the
+array's identity was never the thing that mattered.
+
+**`describeCause` said `EACCES: EACCES: permission denied`.** Bun already puts
+the errno at the front of the message. Harmless until that string became a
+sentence in a badge tooltip.
+
+### Left open, deliberately
+
+- **The check is not on a timer**, on purpose: a file does not vanish while you
+  watch it. It refetches on mount, on window focus, and on the button.
+- **A library that someone really did empty reads `unknown`**, not `missing`.
+  That is gate 2 choosing the safe direction; there is no signal that separates
+  it from an unmounted mount, and the note says so rather than pretending.
+- `POST /api/jobs/file-state` caps at **500 ids**, which is the same page the
+  jobs route caps at. Past that the answer is about the page, like the sort.
+
+---
+
 ## 2026-08-27 — The 438 MB video, answered; and transcoding as a queue
 
 Two things: the file that would not play, diagnosed and fixed, and an optional

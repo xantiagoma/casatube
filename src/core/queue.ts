@@ -460,6 +460,9 @@ export class JobQueue {
           : eq(jobs.status, filter.status),
       );
     }
+    // ⚠️ `inArray(col, [])` is `false` in Drizzle, which is exactly right here:
+    // "these zero jobs" must return zero rows, never every row.
+    if (filter.ids !== undefined) conditions.push(inArray(jobs.id, [...filter.ids]));
     if (filter.paused !== undefined) conditions.push(eq(jobs.paused, filter.paused));
     if (filter.claimedBy !== undefined) conditions.push(eq(jobs.claimedBy, filter.claimedBy));
     if (filter.fingerprint !== undefined) conditions.push(eq(jobs.fingerprint, filter.fingerprint));

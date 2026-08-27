@@ -209,3 +209,40 @@ export function useSavePluginSettings() {
     },
   });
 }
+
+// --- Which plugins would act on a URL ---------------------------------------
+
+export interface ApplicableListing {
+  url: string;
+  /** Everything whose `matches` claims this URL — **switched on or not**. */
+  plugins: PluginStatus[];
+}
+
+/**
+ * `GET /api/plugins/applicable?url=` — the answer PLAN §5 wrote this route for
+ * and nothing has asked for until now.
+ *
+ * 🔴 **Asking costs nothing and runs nothing.** `matches` is static metadata,
+ * so the server answers out of manifests it already holds: no `setup()`, no
+ * hook, no network, no plugin code of any kind. That is what makes it safe to
+ * fire the moment a URL is analyzed rather than making it a button.
+ *
+ * ⚠️ **A plugin in this list is not necessarily running.** `applicableTo`
+ * returns everything that *claims* the URL and leaves out only the broken ones,
+ * so the list mixes active and disabled plugins and the screen has to say which
+ * is which. Reading it as "these will run" is the one wrong reading.
+ *
+ * `null` closes the query — nothing is asked before there is a URL to ask about.
+ */
+export function useApplicablePlugins(url: string | null): UseQueryResult<ApplicableListing, Error> {
+  const trimmed = url?.trim() ?? "";
+  return useQuery({
+    queryKey: keys.pluginsApplicable(trimmed),
+    queryFn: async () => unwrap(await api.api.plugins.applicable.get({ query: { url: trimmed } })),
+    enabled: trimmed !== "",
+    // Manifests change when a file is saved, and every save already invalidates
+    // the `plugins` prefix this key sits under.
+    staleTime: 60_000,
+    retry: 0,
+  });
+}

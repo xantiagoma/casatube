@@ -1,5 +1,5 @@
 /**
- * Ordering, filtering, and what became of the file — as pure functions.
+ * Ordering, filtering, and reading the server's file check — as pure functions.
  *
  * 🔴 They live apart from the screens for the reason `job-view.ts` does: the
  * Queue and Downloads sort and filter the *same* jobs, and two copies of "newest
@@ -8,15 +8,19 @@
  * there is no DOM test setup in this repo, so a sort written inside a component
  * is a sort nothing checks.
  *
- * ⚠️ All of this is **client-side over the snapshot the server already sent**.
+ * ⚠️ **The sorting and the text search are client-side over the snapshot the
+ * server already sent.** The file state is not, and no longer is: it comes from
+ * `POST /api/jobs/file-state`, because the disk is not something the browser
+ * can be given a copy of.
+ *
  * `GET /api/jobs` returns up to 200 jobs ordered by priority then oldest-first,
  * with no sort or search parameters of its own; re-ordering here is therefore
  * re-ordering *that page*, not the whole history. See the report: a server-side
  * `sort`/`order`/`q` on the jobs route is what would make this exact past the
  * two-hundredth job.
  */
-import type { TrashEntry } from "../../../core/library";
 import type { Job, JobStatus, Priority } from "../../../core/types";
+import type { JobFileState } from "../../data/queries";
 import type { FileFilter, JobSort, QueueFilter, SortOrder } from "../../search-params";
 import { RUNNING, WAITING, bucketOf, jobTitle } from "./job-view";
 
@@ -161,95 +165,119 @@ export function matchesText(job: Job, needle: string): boolean {
 // --- What became of the file ------------------------------------------------
 
 /**
- * 🔴 Four states, and the fourth one is the honest one.
+ * 🔴 **Five states now, and the server established every one of them by
+ * looking.**
  *
- * - `filed` — the job recorded an output path and that path is not in the trash.
- * - `trashed` — it is in the library's trash, and the Library screen can restore it.
- * - `none` — the job says `done` and recorded no output path at all.
- * - `unknown` — nothing can be said: the job has not finished, or the trash
- *   listing could not be read.
+ * This block used to derive the answer here, in the browser, from two strings:
+ * a job's recorded `outputFile` and the library's trash listing. It could
+ * therefore say *Filed* — "CasaTube put it there" — and nothing more, and the
+ * badge's own tooltip had to admit that a file deleted outside CasaTube read
+ * exactly the same way. That was documented as a limitation and it was a fault:
+ * the screen showed a fact adjacent to the one it was asked for.
  *
- * ⚠️ **There is no `missing`.** A file removed outside CasaTube — `rm` on the
- * NAS, a folder moved, a mount that came back empty — is indistinguishable from
- * `filed` here, because nothing in `GET /api/jobs` stats the output path and
- * there is no endpoint that answers "does this path still exist" for a list of
- * jobs. Claiming "on disk" from a recorded string would be exactly the
- * measurement-that-measures-something-else this project keeps getting caught by,
- * so `filed` says what is true — *CasaTube put it there* — and no more.
+ * `POST /api/jobs/file-state` now answers it properly (`core/file-state.ts`),
+ * and the derivation is gone rather than duplicated. What is left here is the
+ * part that is genuinely the browser's: matching an answer to a row, and
+ * deciding what a filter means.
+ *
+ * | | |
+ * |---|---|
+ * | `present` | on disk, at the recorded path, when the check ran |
+ * | `missing` | the library answered and there is nothing there |
+ * | `trashed` | in CasaTube's trash — restorable from the Library screen |
+ * | `none` | finished, and no path was ever recorded |
+ * | `unknown` | nothing could be established, and `reason` says what stopped it |
  */
-export type FileState = "filed" | "trashed" | "none" | "unknown";
+export type FileState = JobFileState["state"];
 
 /**
- * The trash, indexed for lookup.
+ * Why an answer is `unknown` — the server's reasons, plus the one the browser
+ * owns.
  *
- * Two indexes because the two paths meet in the middle: a `TrashEntry.path` is
- * **library-relative** (`Videos/Foo.mkv`) and a `Job.outputFile` is
- * **absolute** (`/library/Videos/Foo.mkv`), and the browser is never told where
- * the library root is on disk.
+ * `not-checked` is not a failure: it is "no answer has arrived for this row
+ * yet", which is what every row looks like before the first check returns and
+ * what a row looks like if it was not in the batch. Distinguishing it from
+ * `mount-unavailable` is what lets the badge stay quiet during the former and
+ * speak up during the latter.
  */
-export interface TrashIndex {
-  /** `folder\0name`, built from the entry's relative path. */
-  slots: Set<string>;
-  /** The relative paths that contain a folder, for the suffix check. */
-  nested: string[];
+export type FileStateReason = NonNullable<JobFileState["reason"]> | "not-checked";
+
+export interface ResolvedFileState {
+  state: FileState;
+  reason?: FileStateReason;
+  /** The server's sentence, shown verbatim rather than re-worded here. */
+  detail?: string;
+  path?: string;
+  size?: number;
+  modifiedAt?: string;
+  trashId?: string;
+}
+
+const NOT_CHECKED: ResolvedFileState = { state: "unknown", reason: "not-checked" };
+
+/**
+ * The check's answers, by job id.
+ *
+ * `null` when there is no answer to index — the query has not run, or it
+ * failed. It travels as `null` all the way to the badge, which then draws
+ * nothing rather than inventing a verdict.
+ */
+export function indexFileStates(states: readonly JobFileState[] | undefined): Map<string, JobFileState> | null {
+  if (states === undefined) return null;
+  return new Map(states.map((state) => [state.id, state]));
 }
 
 /**
- * ⚠️ A NUL between the halves, not a slash or a space — both of those are legal
- * inside a filename, so either would let `("a", "b c")` and `("a b", "c")`
- * collide into one key: a file reported as trashed because a differently-named
- * one in a differently-named folder was.
+ * What this row should say about its file.
+ *
+ * ⚠️ An id with no answer is `not-checked`, **never** `missing`. The two cases
+ * that produce it — the check has not returned, and this job was not in the
+ * batch — are both "we have not looked", and the entire point of this work is
+ * that "we have not looked" and "it is gone" stopped being the same badge.
  */
-function slot(folder: string, name: string): string {
-  return `${folder}\u0000${name}`;
+export function fileStateOf(job: Job, index: Map<string, JobFileState> | null): ResolvedFileState {
+  if (index === null) return NOT_CHECKED;
+  const found = index.get(job.id);
+  if (found === undefined) return NOT_CHECKED;
+  const { id: _id, ...rest } = found;
+  return rest;
 }
 
-function cut(path: string): { folder: string; name: string } {
-  const at = path.lastIndexOf("/");
-  return at === -1 ? { folder: "", name: path } : { folder: path.slice(0, at), name: path.slice(at + 1) };
-}
-
-/** `""`, `"."` and `"/Videos/"` all name the same folder. */
-function normaliseFolder(folder: string): string {
-  return folder.replace(/^[./]+/, "").replace(/\/+$/, "");
-}
-
-export function indexTrash(entries: readonly TrashEntry[]): TrashIndex {
-  const slots = new Set<string>();
-  const nested: string[] = [];
-  for (const entry of entries) {
-    const { folder, name } = cut(entry.path);
-    slots.add(slot(normaliseFolder(folder), name));
-    if (folder !== "") nested.push(entry.path);
+/**
+ * Does this row belong in the current filter?
+ *
+ * ⚠️ **`unknown` deliberately excludes a job that has not finished.** A running
+ * download has no file yet, which is not the same as a file that could not be
+ * checked — and a filter called "Could not check" that returned every active
+ * job would bury the handful of rows a person is actually hunting for.
+ */
+export function matchesFile(state: ResolvedFileState, filter: FileFilter): boolean {
+  if (filter === "any") return true;
+  if (filter === "unknown") {
+    return state.state === "unknown" && state.reason !== "not-finished" && state.reason !== "not-checked";
   }
-  return { slots, nested };
+  return state.state === filter;
 }
 
 /**
- * Is this job's output in the trash?
+ * The ids worth asking the disk about: the finished ones, and nothing else.
  *
- * The primary test pairs the job's `destination` (a library subfolder, already
- * normalised by the API) with the filename off `outputFile`. The suffix test is
- * the fallback for a job whose file did not end up under its declared
- * destination — and it deliberately only considers entries that *have* a folder,
- * because `endsWith("/Foo.mkv")` would match any `Foo.mkv` anywhere.
+ * ⚠️ One pass, and **not** memoised at the call site. `jobs.data?.jobs ?? []`
+ * is a fresh array on any render where the query has no data, so a `useMemo`
+ * keyed on it re-runs every render anyway — it buys nothing and costs a
+ * dependency that lies. The answer is a *string* in the query key, so its
+ * identity does not matter; only its contents do.
  */
-export function isTrashed(job: Job, index: TrashIndex): boolean {
-  if (!job.outputFile) return false;
-  const { name } = cut(job.outputFile);
-  if (index.slots.has(slot(normaliseFolder(job.destination), name))) return true;
-  return index.nested.some((path) => job.outputFile!.endsWith(`/${path}`));
+export function finishedIds(jobs: readonly Job[]): string[] {
+  const ids: string[] = [];
+  for (const job of jobs) if (job.status === "done") ids.push(job.id);
+  return ids;
 }
 
-export function fileStateOf(job: Job, index: TrashIndex | null): FileState {
-  // Before `done` there is nothing to have become of: the file is in the temp
-  // directory, which is not a state anyone is asking about.
-  if (job.status !== "done") return "unknown";
-  if (!job.outputFile) return "none";
-  if (index === null) return "unknown";
-  return isTrashed(job, index) ? "trashed" : "filed";
-}
-
-export function matchesFile(state: FileState, filter: FileFilter): boolean {
-  return filter === "any" || state === filter;
+/** Rows whose file the server says is gone — what the re-download offer counts. */
+export function missingCount(jobs: readonly Job[], index: Map<string, JobFileState> | null): number {
+  if (index === null) return 0;
+  let total = 0;
+  for (const job of jobs) if (fileStateOf(job, index).state === "missing") total += 1;
+  return total;
 }

@@ -8,17 +8,19 @@
  */
 import { describe, expect, test } from "bun:test";
 
-import type { TrashEntry } from "../../../core/library";
 import { DEFAULT_PREFERENCES, type Job, type JobStatus, type Priority } from "../../../core/types";
+import type { JobFileState } from "../../data/queries";
 import {
   directionLabel,
   fileStateOf,
-  indexTrash,
-  isTrashed,
+  finishedIds,
+  indexFileStates,
   matchesFile,
   matchesStatus,
   matchesText,
+  missingCount,
   sortJobs,
+  type ResolvedFileState,
 } from "./job-order";
 
 function job(over: Partial<Job> & { id: string }): Job {
@@ -190,81 +192,112 @@ describe("matchesText", () => {
   });
 });
 
+/**
+ * 🔴 What is left to test here is what the *browser* decides, which is now only
+ * two things: that a row with no answer is never treated as an answer, and what
+ * each filter means. The verdict itself moved to the server — `POST
+ * /api/jobs/file-state` — and is tested against a real disk in
+ * `core/file-state.test.ts`, which is the only place it can be tested honestly.
+ */
 describe("the file's fate", () => {
-  const entry = (path: string): TrashEntry => ({
-    id: `t-${path}`,
-    deletedAt: "2026-08-27T12:00:00.000Z",
-    path,
-    name: path.slice(path.lastIndexOf("/") + 1),
-    files: [],
-    size: 0,
+  const done = job({ id: "done", status: "done", outputFile: "/library/Videos/A.mp4" });
+  const present: JobFileState = { id: "done", state: "present", path: "Videos/A.mp4", size: 10 };
+
+  test("a row is given the answer that carries its own id", () => {
+    const index = indexFileStates([
+      { id: "other", state: "missing" },
+      present,
+      { id: "third", state: "trashed" },
+    ]);
+    expect(fileStateOf(done, index).state).toBe("present");
+    expect(fileStateOf(done, index).size).toBe(10);
   });
 
-  test("a finished job whose file is in the trash says so", () => {
-    const index = indexTrash([entry("Videos/Family/Me at the zoo.mp4")]);
-    const done = job({
-      id: "done",
-      status: "done",
-      destination: "Videos/Family",
-      outputFile: "/library/Videos/Family/Me at the zoo.mp4",
-    });
-    expect(isTrashed(done, index)).toBe(true);
-    expect(fileStateOf(done, index)).toBe("trashed");
+  test("🔴 a job the check has no answer for is `not-checked`, never `missing`", () => {
+    const index = indexFileStates([{ id: "someone-else", state: "missing" }]);
+    const state = fileStateOf(done, index);
+    expect(state.state).toBe("unknown");
+    expect(state.reason).toBe("not-checked");
   });
 
-  test("a finished job whose file is not in the trash is `filed`", () => {
-    const index = indexTrash([entry("Videos/Something else.mp4")]);
-    const done = job({
-      id: "done",
-      status: "done",
-      destination: "Videos",
-      outputFile: "/library/Videos/Me at the zoo.mp4",
-    });
-    expect(fileStateOf(done, index)).toBe("filed");
+  test("🔴 no check at all is `not-checked` — the badge draws nothing, not a verdict", () => {
+    const state = fileStateOf(done, indexFileStates(undefined));
+    expect(state.state).toBe("unknown");
+    expect(state.reason).toBe("not-checked");
   });
 
-  test("🔴 a name at the library root does not match the same name in a folder", () => {
-    // `endsWith("/Foo.mp4")` would say yes here, and it would be wrong: the
-    // trashed file is the one in the root, the job's is the one in Videos/.
-    const index = indexTrash([entry("Foo.mp4")]);
-    const done = job({ id: "done", status: "done", destination: "Videos", outputFile: "/library/Videos/Foo.mp4" });
-    expect(isTrashed(done, index)).toBe(false);
+  test("the server's reason and sentence survive the trip to the row", () => {
+    const index = indexFileStates([
+      { id: "done", state: "unknown", reason: "library-empty", detail: "the library root /library is empty" },
+    ]);
+    const state = fileStateOf(done, index);
+    expect(state.reason).toBe("library-empty");
+    expect(state.detail).toContain("empty");
   });
 
-  test("a file that did not land under its declared destination is still recognised", () => {
-    const index = indexTrash([entry("Music/Track.m4a")]);
-    const done = job({ id: "done", status: "done", destination: "Videos", outputFile: "/library/Music/Track.m4a" });
-    expect(isTrashed(done, index)).toBe(true);
+  test("`any` keeps every state, including the unknown ones", () => {
+    const states: ResolvedFileState[] = [
+      { state: "present" },
+      { state: "missing" },
+      { state: "trashed" },
+      { state: "none" },
+      { state: "unknown", reason: "mount-unavailable" },
+      { state: "unknown", reason: "not-finished" },
+    ];
+    for (const state of states) expect(matchesFile(state, "any")).toBe(true);
   });
 
-  test("`.` and a trailing slash name the same folder as `''`", () => {
-    const index = indexTrash([entry("Clip.mp4")]);
-    const rooted = job({ id: "rooted", status: "done", destination: ".", outputFile: "/library/Clip.mp4" });
-    expect(isTrashed(rooted, index)).toBe(true);
+  test("a named filter keeps exactly that state", () => {
+    expect(matchesFile({ state: "missing" }, "missing")).toBe(true);
+    expect(matchesFile({ state: "present" }, "missing")).toBe(false);
+    expect(matchesFile({ state: "trashed" }, "trashed")).toBe(true);
+    expect(matchesFile({ state: "none" }, "none")).toBe(true);
   });
 
-  test("finished with no output path recorded is its own state", () => {
-    const done = job({ id: "done", status: "done", outputFile: null });
-    expect(fileStateOf(done, indexTrash([]))).toBe("none");
+  test("🔴 `Could not check` means the library, not every job still running", () => {
+    expect(matchesFile({ state: "unknown", reason: "mount-unavailable" }, "unknown")).toBe(true);
+    expect(matchesFile({ state: "unknown", reason: "timed-out" }, "unknown")).toBe(true);
+    expect(matchesFile({ state: "unknown", reason: "trash-unreadable" }, "unknown")).toBe(true);
+    // These two are "there is nothing to look at yet", which is not a fault and
+    // would bury the handful of rows the filter exists to surface.
+    expect(matchesFile({ state: "unknown", reason: "not-finished" }, "unknown")).toBe(false);
+    expect(matchesFile({ state: "unknown", reason: "not-checked" }, "unknown")).toBe(false);
   });
 
-  test("🔴 nothing is claimed about a job that has not finished", () => {
-    const running = job({ id: "running", status: "downloading", outputFile: "/library/partial.mp4" });
-    expect(fileStateOf(running, indexTrash([]))).toBe("unknown");
+  test("missingCount counts only what the server said is gone", () => {
+    const jobs = [job({ id: "a" }), job({ id: "b" }), job({ id: "c" }), job({ id: "d" })];
+    const index = indexFileStates([
+      { id: "a", state: "missing" },
+      { id: "b", state: "present" },
+      { id: "c", state: "missing" },
+      { id: "d", state: "unknown", reason: "mount-unavailable" },
+    ]);
+    expect(missingCount(jobs, index)).toBe(2);
   });
 
-  test("🔴 nothing is claimed when the trash could not be read", () => {
-    const done = job({ id: "done", status: "done", outputFile: "/library/Videos/A.mp4" });
-    // `filed` here would be a guess: the file may be sitting in the trash and
-    // this build simply cannot see it.
-    expect(fileStateOf(done, null)).toBe("unknown");
+  test("🔴 an unreadable library contributes nothing to the missing count", () => {
+    const jobs = [job({ id: "a" }), job({ id: "b" })];
+    const index = indexFileStates([
+      { id: "a", state: "unknown", reason: "mount-unavailable" },
+      { id: "b", state: "unknown", reason: "mount-unavailable" },
+    ]);
+    expect(missingCount(jobs, index)).toBe(0);
+    expect(missingCount(jobs, indexFileStates(undefined))).toBe(0);
+  });
+});
+
+describe("finishedIds", () => {
+  test("only the finished jobs, in the order they were given", () => {
+    const jobs = [
+      job({ id: "a", status: "downloading" }),
+      job({ id: "b", status: "done" }),
+      job({ id: "c", status: "failed" }),
+      job({ id: "d", status: "done" }),
+    ];
+    expect(finishedIds(jobs)).toEqual(["b", "d"]);
   });
 
-  test("`any` keeps every state, including the unknown one", () => {
-    for (const state of ["filed", "trashed", "none", "unknown"] as const) {
-      expect(matchesFile(state, "any")).toBe(true);
-    }
-    expect(matchesFile("filed", "trashed")).toBe(false);
-    expect(matchesFile("trashed", "trashed")).toBe(true);
+  test("nothing finished is an empty list, which is what disables the query", () => {
+    expect(finishedIds([job({ id: "a", status: "queued" })])).toEqual([]);
   });
 });

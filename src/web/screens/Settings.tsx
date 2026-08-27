@@ -1,15 +1,28 @@
 /**
  * Settings.
  *
- * 🔴 **Most of this screen is read-only, and that is the honest rendering of
- * the system rather than an unfinished form.** PLAN §12 puts server
- * configuration in the environment: paths, the cookies file, the poll interval
- * and the download defaults are read at boot, and there is no endpoint that
- * writes them back. A form that pretended otherwise would be a control that
- * silently does nothing — the failure mode this project exists to avoid.
+ * 🔴 **The configuration is editable, and every control says what it is really
+ * doing.** `GET/PUT/DELETE /api/settings` resolves each of the twenty-five
+ * settings through one rule — **user override > environment variable > code
+ * default** — and reports which of the three won. So each row names its
+ * environment variable *whether or not anything sets it* (the question this
+ * screen could not answer before), says where the current value came from,
+ * offers a reset that names the layer underneath, and refuses to pretend:
  *
- * What *is* editable here is editable because a real endpoint backs it: the
- * plugin toggles (`POST /api/plugins/:name/enable`), **the plugins themselves**
+ * - a variable the server could not read is shown as **ignored** rather than
+ *   silently falling through to the default;
+ * - a write to one of the eighteen restart-scoped settings is shown as
+ *   **stored and not in force**, next to the value the process is really using;
+ * - the two settings that cannot be overridden at all (`DATA_DIR`, the cookies
+ *   file) are shown with the reason, not hidden.
+ *
+ * The rows and the sentences live in `components/settings/` — `SettingRow` for
+ * one setting, `SettingsGroupCard` for a group, `setting-view.ts` for the
+ * wording, which is where it can be tested without a browser.
+ *
+ * What else is editable here is editable because a real endpoint backs it: the
+ * **credentials** (`POST`/`DELETE /api/credentials`, one-way — a secret goes in
+ * and no route can send one back), the plugin toggles (`POST /api/plugins/:name/enable`), **the plugins themselves**
  * — source and settings, `PUT /api/plugins/source` and
  * `PUT /api/plugins/:name/settings`, each of which reloads the runtime — the
  * notification purge (`DELETE /api/notifications`), and the theme, which
@@ -48,23 +61,31 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState } from "../components/common/Bits";
 import { PageHeader } from "../components/layout/AppShell";
+import { CredentialsCard } from "../components/settings/CredentialsCard";
 import { PluginEditorDialog } from "../components/settings/PluginEditorDialog";
 import { PluginSettingsDialog } from "../components/settings/PluginSettingsDialog";
+import { RestartBanner, SettingsGroupCard } from "../components/settings/SettingsGroupCard";
 import { formatBytes, formatDateTime } from "../data/format";
 import { useTrash } from "../data/library";
 import { usePurgeNotifications } from "../data/notifications";
 import { PLUGIN_TEMPLATE_URL, usePluginDocs, usePlugins, useTogglePlugin } from "../data/plugins";
-import { useJobDefaults } from "../data/queries";
+import { useSettings } from "../data/settings";
 import { useHealth, useStorage } from "../data/stats";
 import { useTheme, type ThemeChoice } from "../data/theme";
-import type { VideoCodecPreference } from "../../core/types";
+import type { SettingGroupId } from "../../core/app-settings";
 
 /** A read-only field, with the reason it is read-only attached once per card. */
 function ReadOnly({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-2 py-1.5">
       <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate font-mono text-xs font-medium">{value}</span>
+      {/* ⚠️ `flex-1 min-w-0` and not just `min-w-0`: a filesystem path is one
+          unbreakable word, and a flex item that cannot shrink sets the
+          *min-content* width of everything above it — which is how one long
+          library path made the whole Settings grid 1095 px wide inside an
+          820 px iPad. `truncate` alone does not shrink it; being allowed to is
+          what makes truncation happen. */}
+      <span className="min-w-0 flex-1 truncate text-right font-mono text-xs font-medium">{value}</span>
     </div>
   );
 }
@@ -123,67 +144,38 @@ function ThemeCard() {
 }
 
 /**
- * The default codec preference, in the same words the download form uses.
+ * What a job gets when nothing else is said — now a form.
  *
- * ⚠️ No caveat here, and that is not an omission: "no H.264 above 1080p" is a
- * fact about one video, and this screen is looking at no video at all. The
- * caveat belongs where a URL has been analyzed.
+ * 🔴 This card used to print seven values and a sentence explaining that no
+ * endpoint could write them back. That was true when it was written and stopped
+ * being true the same day: `downloads.*` is the one **live** group, so a value
+ * saved here is in force for the very next job, with no restart and nothing to
+ * reload. The rows are `SettingRow`s like every other group; only the footnote
+ * below is particular to this one.
+ *
+ * ⚠️ The codec note stays, and stays *here*: "no H.264 above 1080p" is a fact
+ * about one video and this screen is looking at none, so the caveat that belongs
+ * on an analyzed URL is not repeated on a default.
  */
-const CODEC_LABELS: Record<VideoCodecPreference, string> = {
-  auto: "auto — H.264 first, direct play on most TVs",
-  efficient: "efficient — AV1/VP9 first, smaller files, may transcode",
-  h264: "H.264 — direct play on most TVs",
-  vp9: "VP9 — smaller than H.264, widely supported",
-  hevc: "HEVC — small, decoders are uneven",
-  av1: "AV1 — smallest files, may transcode without a GPU",
-};
-
-function DefaultsCard() {
-  const defaults = useJobDefaults();
-
+function DefaultsFootnote() {
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">Download defaults</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {defaults.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : defaults.isError ? (
-          <ErrorState error={defaults.error} what="Defaults" retry={() => void defaults.refetch()} />
-        ) : (
-          <>
-            <div className="divide-y">
-              <ReadOnly label="Maximum resolution" value={`${defaults.data.resolved.maxResolution}p`} />
-              <ReadOnly
-                label="Video codec"
-                value={CODEC_LABELS[defaults.data.resolved.videoCodec] ?? defaults.data.resolved.videoCodec}
-              />
-              <ReadOnly label="Original audio only" value={String(defaults.data.resolved.originalOnly)} />
-              <ReadOnly
-                label="Audio languages"
-                value={defaults.data.resolved.audioLanguages.join(", ") || "whatever the source calls original"}
-              />
-              <ReadOnly
-                label="Subtitle languages"
-                value={defaults.data.resolved.subtitleLanguages.join(", ") || "none"}
-              />
-              <ReadOnly label="Subtitles" value={defaults.data.resolved.embedSubtitles ? "embedded" : "sidecar files"} />
-              <ReadOnly label="SponsorBlock" value={String(defaults.data.resolved.sponsorblock)} />
-            </div>
-            <ServerOwned>
-              These are what a job gets when the form sends nothing. They come from the server and there is no
-              endpoint that writes them back — change them per download in the form, which does travel with the
-              job. Audio and subtitle languages stay independent (R7), and the codec is a preselection: a named
-              one gives up resolution rather than being swapped for another codec behind your back.
-            </ServerOwned>
-          </>
-        )}
-      </CardContent>
-    </Card>
+    <ServerOwned>
+      These are the starting point, not a cage: the download form sends whatever it is showing, so a per-download
+      choice still wins. Audio and subtitle languages stay independent (R7), and the codec is a preselection — a
+      named one gives up resolution rather than being swapped for another codec behind your back.
+    </ServerOwned>
   );
 }
 
+/**
+ * Where the files actually are, and what is in the bin.
+ *
+ * ⚠️ This is deliberately **not** the settings for those paths — those are rows
+ * in the Server and Library cards, with their variables and their reset buttons.
+ * What is here is the running state: the path the process is really using (which
+ * differs from the stored one until a restart) and how much is sitting in the
+ * trash, neither of which is a setting at all.
+ */
 function PathsCard() {
   const storage = useStorage();
   const trash = useTrash();
@@ -191,7 +183,7 @@ function PathsCard() {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Storage paths</CardTitle>
+        <CardTitle className="text-base">Storage in use</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="divide-y">
@@ -207,8 +199,9 @@ function PathsCard() {
           />
         </div>
         <ServerOwned>
-          Paths come from the environment at boot (PLAN §12): <code>LIBRARY_DIR</code>, <code>TEMP_DIR</code>,{" "}
-          <code>TRASH_RETENTION_DAYS</code>. Changing one is a restart, not a form.
+          What the running process is using, which is the point: change{" "}
+          <code>LIBRARY_DIR</code>, <code>TEMP_DIR</code> or <code>TRASH_RETENTION_DAYS</code> in the cards above
+          and these keep showing the old paths until a restart — that disagreement is the honest one.
         </ServerOwned>
       </CardContent>
     </Card>
@@ -592,25 +585,63 @@ function AuthCard() {
   );
 }
 
+/**
+ * The whole configuration, fetched once.
+ *
+ * 🔴 **One query for twenty-five settings, and one banner over all of them.**
+ * `restartPending` and the merged download preferences are facts about the
+ * *set*, so the snapshot is read here and the groups are handed rows — five
+ * cards asking five times would each know only about themselves, and the
+ * "two changes are waiting" line could not be written at all.
+ */
 export function Settings() {
+  const settings = useSettings();
+  const snapshot = settings.data ?? null;
+  const rows = snapshot?.settings ?? [];
+
+  /** A group card, when the server has told us that group exists. */
+  const groupCard = (id: SettingGroupId, footer?: React.ReactNode) => {
+    const group = snapshot?.groups.find((candidate) => candidate.id === id);
+    return group ? <SettingsGroupCard group={group} settings={rows} footer={footer} /> : null;
+  };
+
   return (
     <>
       <PageHeader
         title="Settings"
-        description="What this browser controls, what the server owns, and what is deliberately not here yet."
+        description="Every value, where it comes from, and what changing it actually does."
       />
+
+      {settings.isError ? (
+        <div className="mb-4">
+          <ErrorState error={settings.error} what="The settings" retry={() => void settings.refetch()} />
+        </div>
+      ) : null}
+      <RestartBanner settings={rows} />
 
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
         <div className="space-y-4">
-          <ThemeCard />
-          <SystemCard />
+          {settings.isPending ? (
+            <Card>
+              <CardContent>
+                <p className="text-sm text-muted-foreground">Loading the configuration…</p>
+              </CardContent>
+            </Card>
+          ) : null}
+          {groupCard("downloads", <DefaultsFootnote />)}
+          {groupCard("server")}
+          {groupCard("library")}
+        </div>
+        <div className="space-y-4">
+          {groupCard("playback")}
+          {groupCard("thumbnails")}
+          <PathsCard />
           <NotificationsCard />
         </div>
         <div className="space-y-4">
-          <DefaultsCard />
-          <PathsCard />
-        </div>
-        <div className="space-y-4">
+          <ThemeCard />
+          <SystemCard />
+          <CredentialsCard />
           <PluginsCard />
           <AuthCard />
         </div>

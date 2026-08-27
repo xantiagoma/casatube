@@ -11,7 +11,10 @@ import { Result } from "better-result";
 
 import { DEFAULT_PREFERENCES, type JobStatus } from "../core/types";
 import { AppSettingsStore } from "../core/app-settings";
+import { jobFileStates } from "../core/file-state";
+import { openLibrary } from "../core/library";
 import type { AppContext } from "./context";
+import { InvalidTransition } from "../core/errors";
 import { fail } from "./errors";
 import { safeDestination } from "./destination";
 import { preferencesSchema } from "./schemas";
@@ -20,6 +23,18 @@ const KNOWN_STATUSES: readonly JobStatus[] = [
   "queued", "analyzing", "downloading", "processing", "moving",
   "waiting-for-destination", "done", "failed", "cancelled",
 ] as const;
+
+/**
+ * The budget for one whole `POST /file-state` batch.
+ *
+ * ⚠️ A constant rather than an environment variable, deliberately: this file's
+ * own `docs/DISCOVERIES.md` records two documented variables that nothing ever
+ * read, and a knob nobody turns is a knob that lies. Three seconds is longer
+ * than a healthy mount needs for 200 `stat`s by two orders of magnitude, and
+ * short enough that a sleeping NAS is reported as unknown while the screen is
+ * still being looked at.
+ */
+const FILE_STATE_BUDGET_MS = 3_000;
 
 function parseStatuses(raw: string | undefined): JobStatus[] | undefined {
   if (!raw) return undefined;
@@ -41,6 +56,15 @@ export function jobRoutes(ctx: AppContext) {
    * change nothing until the next restart.
    */
   const settings = ctx.settings ?? new AppSettingsStore({ db: ctx.db });
+
+  /**
+   * The library, opened here for exactly one thing: `POST /file-state`.
+   *
+   * `openLibrary` is a closure over paths and deadlines — no connection, no
+   * handle, nothing to close — so a second one beside `api/library.ts`'s costs
+   * nothing and keeps this route from depending on that module's assembly.
+   */
+  const library = openLibrary({ root: config.libraryDir });
 
   return (
     new Elysia({ prefix: "/jobs" })
@@ -125,6 +149,69 @@ export function jobRoutes(ctx: AppContext) {
         },
       )
 
+
+      /**
+       * 🔴 **Does the file still exist?** — the one question a job row cannot
+       * answer about itself.
+       *
+       * ## Why this is a route of its own, and not a field on `GET /jobs`
+       *
+       * The obvious design is a `fileState` computed while the listing is
+       * built. It is wrong here for a reason that is specific to this
+       * application and worth writing down:
+       *
+       * **`GET /api/jobs` and the SSE stream are the same payload.**
+       * `api/watcher.ts` re-reads the job table every **750 ms** and pushes a
+       * whole snapshot to every open tab, and `web/data/stream.ts` writes that
+       * snapshot straight into the same React Query entry the listing fills.
+       * So a `fileState` on the job row is not "200 stats when the page loads"
+       * — it is **200 stats per second, forever, against a network mount**, for
+       * as long as one browser tab is open. And the only way to avoid that is
+       * to leave the field off the pushed frames, which makes every badge
+       * flicker from checked to unknown and back, twice a second.
+       *
+       * Separating it also separates the failures, which is the part that
+       * matters when the mount is down: the queue lives in local SQLite and is
+       * always answerable, and it stays answerable while this route reports
+       * that it cannot see the disk. A queue that 503s because a NAS is asleep
+       * would be the tail wagging the dog.
+       *
+       * ## The contract
+       *
+       * - Takes the **job ids** the browser is actually looking at, not paths.
+       *   The browser has never been told where the library root is, and
+       *   `Job.outputFile` is absolute; translating it is the server's job
+       *   (`core/file-state.ts` → `libraryRelativeOutput`), and taking ids
+       *   means no browser-supplied path is ever `stat`ed.
+       * - **Never fails because of the disk.** Every way of not knowing comes
+       *   back as `state: "unknown"` with a `reason`, per job. A dead mount is
+       *   a 200 full of `unknown`, not a 503 — the caller is drawing a badge
+       *   per row and needs an answer for each one.
+       * - **Bounded.** One root check, one trash read, and a pool of at most
+       *   16 `stat`s under a {@link FILE_STATE_BUDGET_MS} budget for the whole
+       *   batch. Anything unanswered when it expires is `timed-out`, never
+       *   `missing`.
+       * - An id the queue does not know is simply **absent** from `states`. The
+       *   caller treats an id it gets no answer for as unknown, which is what
+       *   it is.
+       */
+      .post(
+        "/file-state",
+        async ({ body }) => {
+          const ids = [...new Set(body.ids)];
+          if (ids.length === 0) {
+            return { states: [], checked: 0, elapsedMs: 0, exhausted: false, budgetMs: FILE_STATE_BUDGET_MS, at: new Date().toISOString() };
+          }
+          const jobs = await queue.list({ ids, limit: ids.length });
+          const report = await jobFileStates(jobs, library, { budgetMs: FILE_STATE_BUDGET_MS });
+          return { ...report, budgetMs: FILE_STATE_BUDGET_MS };
+        },
+        {
+          body: t.Object({
+            ids: t.Array(t.String({ minLength: 1 }), { maxItems: 500 }),
+          }),
+        },
+      )
       /**
        * The defaults a fresh form starts from, so the client hard-codes none.
        *
@@ -150,6 +237,57 @@ export function jobRoutes(ctx: AppContext) {
         const cancelled = await queue.cancel(params.id);
         if (Result.isError(cancelled)) return fail(cancelled.error);
         return cancelled.value;
+      })
+
+      /**
+       * 🔴 **Download it again** — the only sensible reaction to a file that is
+       * no longer there.
+       *
+       * Not `retry`: that revives *this* row, and `retry` refuses a `done` job
+       * for a good reason — the pipeline finished, its stages are all `done`,
+       * and re-running them in place would rewrite the history of a job that
+       * did succeed. A missing file is a **new** download of the same thing.
+       *
+       * 🔴 **Rebuilt from the stored row, never from the browser.** The url,
+       * the destination and — the one that matters — the resolved
+       * `preferences` are read back out of the job, so the second copy is the
+       * same 1080p H.264 with the same audio tracks as the first. A client
+       * reconstructing that request is a client free to get it subtly wrong,
+       * and "it came back at 360p" is exactly the kind of silent substitution
+       * this project refuses to make.
+       *
+       * `force: true`, necessarily: the finished job it is copying is precisely
+       * the duplicate that would otherwise cancel it.
+       *
+       * ⚠️ It does **not** re-check the disk. The caller has just been told the
+       * file is gone, and a second `stat` here would only widen the window in
+       * which the answer could change — while making a re-download impossible
+       * for the case where someone wants one anyway.
+       */
+      .post("/:id/redownload", async ({ params }) => {
+        const found = await queue.get(params.id);
+        if (Result.isError(found)) return fail(found.error);
+        const job = found.value;
+
+        // A job still moving is already downloading this; a second copy would
+        // be two writers racing for one filename.
+        if (!["done", "failed", "cancelled"].includes(job.status)) {
+          return fail(new InvalidTransition({ jobId: job.id, from: job.status, to: "queued" }));
+        }
+
+        const enqueued = await queue.enqueue({
+          url: job.url,
+          destination: job.destination,
+          preferences: job.preferences,
+          priority: job.priority,
+          title: job.title,
+          thumbnail: job.thumbnail,
+          duration: job.duration,
+          source: job.source,
+          force: true,
+        });
+        if (Result.isError(enqueued)) return fail(enqueued.error);
+        return enqueued.value;
       })
 
       /**

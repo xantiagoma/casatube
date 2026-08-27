@@ -12,24 +12,34 @@
  * search param *is* a navigation — so opening a download near the bottom of the
  * list used to throw the page back to the top. See `docs/DISCOVERIES.md`.
  */
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useSearch } from "@tanstack/react-router";
+import { FileX2 } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
 import { useDockedPanels } from "@/hooks/use-media-query";
+import { useSetSearch } from "@/hooks/use-set-search";
 import { Sparkline } from "../components/charts/Sparkline";
 import { EmptyState, ErrorState, StatTile } from "../components/common/Bits";
 import { JobInspector } from "../components/jobs/JobInspector";
 import { FileFilterControl, FileStateBadge, SearchBox, SortControl } from "../components/jobs/JobFilters";
 import { JobTable } from "../components/jobs/JobTable";
-import { fileStateOf, indexTrash, matchesFile, matchesText, sortJobs } from "../components/jobs/job-order";
+import {
+  fileStateOf,
+  finishedIds,
+  indexFileStates,
+  matchesFile,
+  matchesText,
+  missingCount,
+  sortJobs,
+} from "../components/jobs/job-order";
 import { bucketOf } from "../components/jobs/job-view";
 import { PageHeader } from "../components/layout/AppShell";
 import { formatBytes, formatCount, formatSpeed } from "../data/format";
-import { useTrash } from "../data/library";
-import { useJobs } from "../data/queries";
+import { useJobFileStates, useJobs } from "../data/queries";
 import { useAnalytics } from "../data/stats";
 import { useJobStream } from "../data/stream";
 import { DOWNLOAD_TABS, type DownloadTab, type DownloadsSearch } from "../search-params";
@@ -43,7 +53,6 @@ const TAB_LABEL: Record<DownloadTab, string> = {
 
 export function Downloads() {
   const search = useSearch({ from: "/downloads" });
-  const navigate = useNavigate({ from: "/downloads" });
   const stream = useJobStream();
   const jobs = useJobs(stream.connection === "live");
   const analytics = useAnalytics("24h");
@@ -52,32 +61,42 @@ export function Downloads() {
   const all = jobs.data?.jobs ?? [];
 
   /**
-   * 🔴 The trash is the *only* thing that can be said about a downloaded file
-   * with any certainty, and it costs one request: the journal is small and
-   * complete, so an entry in it is proof, and its absence is proof of absence.
+   * 🔴 **The disk, asked about once for the whole screen.**
    *
-   * ⚠️ Asked for only once something has actually finished. On a fresh install
-   * there is nothing to ask about, and the library is often a network mount —
-   * so the cheapest correct request is the one not sent.
+   * Only the finished jobs, because nothing else has a file yet — and only
+   * their ids, because the server owns the translation from a recorded absolute
+   * path to something it is willing to `stat` (see `core/file-state.ts`).
+   *
+   * ⚠️ The ids are sorted into the cache key, so the same set of downloads is
+   * one entry however the table happens to be ordered — and the *only* thing
+   * that makes this refetch is a download finishing, not a progress bar moving.
+   * The alternative, a `fileState` on the job row, would be a `stat` per row on
+   * every SSE frame: two hundred a second against a network mount.
    */
-  const anyFinished = all.some((job) => job.status === "done");
-  const trash = useTrash(anyFinished);
-  // `null` is "cannot say", and it travels all the way to the badge, which then
-  // draws nothing rather than guessing. Pending counts as cannot-say.
-  const trashIndex = trash.isSuccess ? indexTrash(trash.data.entries) : null;
+  const wanted = finishedIds(all);
+  const files = useJobFileStates(wanted);
+  // `null` is "no answer yet", and it travels all the way to the badge, which
+  // then draws nothing rather than guessing. Pending counts as no answer.
+  const fileIndex = indexFileStates(files.data?.states);
 
   /** One writer for the URL, so `resetScroll: false` cannot be forgotten. */
-  const setSearch = (patch: Partial<DownloadsSearch>): void =>
-    void navigate({ search: (current) => ({ ...current, ...patch }), resetScroll: false });
+  // ⚠️ The intersection is not decoration: `useSetSearch` constrains its
+  // parameter to `Record<string, unknown>`, and an `interface` — unlike a type
+  // alias — has no implicit index signature, so `DownloadsSearch` alone does
+  // not satisfy it. Same workaround as `screens/Library.tsx`.
+  const setSearch = useSetSearch<DownloadsSearch & Record<string, unknown>>();
+  const patch = (fields: Partial<DownloadsSearch>): void =>
+    setSearch((current) => ({ ...current, ...fields }));
 
   const inTab = all.filter((job) => bucketOf(job) === search.tab);
   const shown = sortJobs(
     inTab.filter(
-      (job) => matchesText(job, search.q ?? "") && matchesFile(fileStateOf(job, trashIndex), search.file),
+      (job) => matchesText(job, search.q ?? "") && matchesFile(fileStateOf(job, fileIndex), search.file),
     ),
     search.sort,
     search.order,
   );
+  const gone = missingCount(inTab, fileIndex);
 
   const counts = Object.fromEntries(
     DOWNLOAD_TABS.map((tab) => [tab, all.filter((job) => bucketOf(job) === tab).length]),
@@ -98,8 +117,9 @@ export function Downloads() {
     <JobInspector
       job={selected}
       tab={search.panel}
-      onTab={(panel) => setSearch({ panel })}
-      onClose={() => setSearch({ job: undefined })}
+      onTab={(panel) => patch({ panel })}
+      onClose={() => patch({ job: undefined })}
+      fileState={fileStateOf(selected, fileIndex)}
     />
   ) : null;
 
@@ -112,7 +132,7 @@ export function Downloads() {
       <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_28rem]">
         <div className="min-w-0 space-y-4">
           <div className="flex flex-wrap items-center gap-3">
-            <Tabs value={search.tab} onValueChange={(next) => setSearch({ tab: next as DownloadTab })}>
+            <Tabs value={search.tab} onValueChange={(next) => patch({ tab: next as DownloadTab })}>
               <TabsList>
                 {DOWNLOAD_TABS.map((tab) => (
                   <TabsTrigger key={tab} value={tab} className="gap-1.5">
@@ -128,7 +148,7 @@ export function Downloads() {
             <SearchBox
               label="Search downloads"
               value={search.q ?? ""}
-              onChange={(next) => setSearch({ q: next === "" ? undefined : next })}
+              onChange={(next) => patch({ q: next === "" ? undefined : next })}
             />
           </div>
 
@@ -166,13 +186,40 @@ export function Downloads() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <SortControl sort={search.sort} order={search.order} onChange={setSearch} />
+            <SortControl sort={search.sort} order={search.order} onChange={patch} />
             <FileFilterControl
               value={search.file}
-              onChange={(file) => setSearch({ file })}
-              unavailable={anyFinished && !trash.isSuccess}
+              onChange={(file) => patch({ file })}
+              onRecheck={() => void files.refetch()}
+              checking={files.isFetching}
+              checkedAt={files.data?.at}
+              elapsedMs={files.data?.elapsedMs}
+              // The check itself never fails because of the disk — a dead mount
+              // is a 200 full of `unknown` — so this is only about the request.
+              unavailable={wanted.length > 0 && files.isError}
             />
           </div>
+
+          {/* 🔴 A count, not a colour on a row somebody has to find. Downloads
+              whose file has gone are the reason this screen checks the disk at
+              all, and on a tab of a hundred rows the badge alone would need
+              hunting for. One line, and it filters. */}
+          {gone > 0 && search.file !== "missing" ? (
+            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5">
+              <FileX2 className="size-4 shrink-0 text-destructive" aria-hidden />
+              <p className="min-w-0 flex-1 text-xs">
+                <span className="font-medium text-destructive">
+                  {gone} {gone === 1 ? "download has" : "downloads have"} lost {gone === 1 ? "its" : "their"} file.
+                </span>{" "}
+                <span className="text-muted-foreground">
+                  The library answered and there is nothing at the recorded path. Open one to download it again.
+                </span>
+              </p>
+              <Button variant="outline" size="sm" onClick={() => patch({ file: "missing" })}>
+                Show them
+              </Button>
+            </div>
+          ) : null}
 
           <Card>
             <CardContent className="px-0 py-2 sm:px-2">
@@ -199,8 +246,8 @@ export function Downloads() {
                 <JobTable
                   jobs={shown}
                   selectedId={search.job}
-                  onSelect={(id) => setSearch({ job: search.job === id ? undefined : id })}
-                  badge={(job) => <FileStateBadge state={fileStateOf(job, trashIndex)} />}
+                  onSelect={(id) => patch({ job: search.job === id ? undefined : id })}
+                  badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
                 />
               )}
             </CardContent>
@@ -223,7 +270,7 @@ export function Downloads() {
       <Sheet
         open={!docked && selected !== null}
         onOpenChange={(open) => {
-          if (!open) setSearch({ job: undefined });
+          if (!open) patch({ job: undefined });
         }}
       >
         {/* The inspector brings its own close button; the sheet's default one

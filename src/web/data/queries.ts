@@ -112,6 +112,39 @@ export function useRetryJob() {
   });
 }
 
+/**
+ * Hold a job in the queue — `POST /api/jobs/:id/pause`.
+ *
+ * ⚠️ **It is a hold, not a stop.** `paused` is a column the claim query filters
+ * on (`core/queue.ts`), so what it prevents is the worker *picking the job up*.
+ * Nothing in the worker reads it mid-run: pausing something that is already
+ * downloading does not interrupt the download, and the button is offered only
+ * where the distinction cannot bite — see `JobActions`.
+ */
+export function usePauseJob() {
+  const client = useQueryClient();
+  return useMutation<Job, Error, string>({
+    mutationFn: async (id) => unwrap(await api.api.jobs({ id }).pause.post()),
+    onSuccess: () => void client.invalidateQueries({ queryKey: JOBS_KEY }),
+  });
+}
+
+/**
+ * Let it be claimed again — `POST /api/jobs/:id/resume`.
+ *
+ * 🔴 The other half of pause, and it was on the server with nothing calling it:
+ * a job put on hold could not be taken off hold from anywhere in the app, which
+ * makes "pause" a one-way door dressed as a toggle. The two live in the same
+ * place, always — a screen that can pause and cannot resume is the bug.
+ */
+export function useResumeJob() {
+  const client = useQueryClient();
+  return useMutation<Job, Error, string>({
+    mutationFn: async (id) => unwrap(await api.api.jobs({ id }).resume.post()),
+    onSuccess: () => void client.invalidateQueries({ queryKey: JOBS_KEY }),
+  });
+}
+
 // --- Preview ----------------------------------------------------------------
 
 export interface ProbeResult {
@@ -213,5 +246,102 @@ export function useJobDefaults(): UseQueryResult<JobDefaults, Error> {
     queryKey: keys.jobDefaults,
     queryFn: async () => unwrap(await api.api.jobs.defaults.get()),
     staleTime: Infinity,
+  });
+}
+
+// --- What became of the file ------------------------------------------------
+
+/**
+ * The disk check, as the server reports it — `POST /api/jobs/file-state`.
+ *
+ * 🔴 **A query of its own, and that is the design.** The obvious alternative is
+ * a `fileState` field on the job row, and it is wrong here for a reason that is
+ * particular to this app: `GET /api/jobs` and the SSE stream carry the *same*
+ * payload into the *same* cache entry, and the stream re-reads the job table
+ * every 750 ms. A field on the row would therefore be a `stat` per download per
+ * frame — two hundred filesystem calls a second against a NAS, for as long as a
+ * tab is open — or, if left off the pushed frames, a badge that flickers from
+ * checked to unknown twice a second. Neither is acceptable, and the split fixes
+ * both.
+ *
+ * It also splits the *failures*, which is what matters when the library is
+ * asleep: the queue is local SQLite and keeps answering, while this query says
+ * "could not check" — instead of a screen that loses its table because a NAS
+ * did not wake up.
+ *
+ * ⚠️ **Not on an interval.** A file does not vanish while you watch; it is gone
+ * when you come back. So this refetches on mount and on window focus, and
+ * offers a button — a poll would put the load back that the split just removed.
+ */
+export interface JobFileState {
+  id: string;
+  state: "present" | "missing" | "trashed" | "none" | "unknown";
+  reason?: "not-finished" | "mount-unavailable" | "library-empty" | "timed-out" | "unreadable" | "outside-library" | "trash-unreadable";
+  detail?: string;
+  path?: string;
+  size?: number;
+  modifiedAt?: string;
+  trashId?: string;
+}
+
+export interface FileStateSnapshot {
+  states: JobFileState[];
+  /** How many paths the server actually `stat`ed. */
+  checked: number;
+  /** What the whole check cost, in ms — shown, because it is the honest label on the answer. */
+  elapsedMs: number;
+  /** True when the budget ran out and some rows are `timed-out`. */
+  exhausted: boolean;
+  budgetMs: number;
+  at: string;
+}
+
+/**
+ * @param ids The jobs to ask about. Sorted into the cache key, so the order the
+ * caller happens to hand them in cannot split one answer into two entries.
+ */
+export function useJobFileStates(ids: readonly string[]): UseQueryResult<FileStateSnapshot, Error> {
+  return useQuery({
+    queryKey: keys.jobFileState(ids),
+    queryFn: async () => unwrap(await api.api.jobs["file-state"].post({ ids: [...ids] })),
+    enabled: ids.length > 0,
+    // ⚠️ The set of finished jobs grows by one when a download completes, which
+    // is a *new key*. Without this the badges would blank out on every
+    // completion while the new answer was in flight.
+    placeholderData: (previous) => previous,
+    // A disk check that is a few seconds old is still a better answer than no
+    // answer; anything older is worth paying a `stat` for.
+    staleTime: 15_000,
+    // One retry: a mount that woke up late is the normal case. Note the route
+    // does not fail *because of* the disk — a 200 full of `unknown` is the
+    // answer for that — so a retry here is about the request, not the library.
+    retry: 1,
+  });
+}
+
+/**
+ * Download it again, from the job the server already has.
+ *
+ * 🔴 Not `retry`. A `done` job's pipeline finished and its stages all say so;
+ * re-running them in place would rewrite the history of something that did
+ * succeed. This asks for a **new** job built from the stored row — same URL,
+ * same destination, and the same resolved preferences, so the replacement is
+ * the same 1080p H.264 the first one was.
+ *
+ * ⚠️ The browser sends nothing but an id, on purpose. Reconstructing the
+ * request here would be a second copy of it, free to differ, and "it came back
+ * at 360p" is exactly the silent substitution this project refuses.
+ */
+export function useRedownload() {
+  const client = useQueryClient();
+  return useMutation<EnqueueOutcome, Error, string>({
+    mutationFn: async (id) => unwrap(await api.api.jobs({ id }).redownload.post()),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: JOBS_KEY });
+      // The new job is `queued`, so its own file state is not interesting yet —
+      // but the *old* one is about to be overwritten on disk, and the answer
+      // sitting in this cache says "missing" until something says otherwise.
+      void client.invalidateQueries({ queryKey: ["jobs", "file-state"] });
+    },
   });
 }

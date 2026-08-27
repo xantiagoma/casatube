@@ -46,6 +46,27 @@ services:
       MAX_CONCURRENT_DOWNLOADS: ${MAX_CONCURRENT_DOWNLOADS:-3}
       LOG_LEVEL: ${LOG_LEVEL:-info}
 
+      # ── Credentials at rest
+      # Cookies, passwords and API keys added in Settings → Credentials are
+      # sealed with a key derived from this string (AES-256-GCM, PBKDF2-HMAC-
+      # SHA256, 210k iterations, a fresh salt per credential).
+      #
+      # 🔴 UNSET MEANS PLAIN TEXT. Without it the secrets sit readable in
+      # /data/casatube.db for anything that can open the file — a backup, a
+      # snapshot, another container on the same volume. Nothing is hidden about
+      # it: the server prints a three-line warning at every start and the
+      # Settings screen shows a red "Not encrypted" panel instead of the
+      # "encrypted at rest" claim. Generate one and keep it out of git:
+      #
+      #   openssl rand -base64 48        # then put it in .env, next to this file
+      #
+      # ⚠️ Changing it re-encrypts nothing. Every credential records *which*
+      # key sealed it, so after a change the old rows cannot be opened — the
+      # Test button on each one names the key it was sealed with, and the fix
+      # is to paste that credential in again. Losing the key loses the
+      # credentials, and nothing else.
+      CREDENTIALS_KEY: ${CREDENTIALS_KEY:-}
+
       # ── yt-dlp
       # false: the container always starts on the version the tag names.
       # true:  `yt-dlp -U` runs on every start.
@@ -58,6 +79,9 @@ services:
 
       # ── Optional
       # COOKIES_FILE: /data/cookies.txt      # ⚠️ credentials — chmod 600
+      #   ↑ the *global* jar, one for the whole process. Per-site cookies,
+      #   logins and API keys live in Settings → Credentials instead, and a
+      #   credential whose site matches beats this file.
       # MEDIA_SERVER_URL: http://jellyfin:8096
       # MEDIA_SERVER_TOKEN: ${MEDIA_SERVER_TOKEN}
 

@@ -11,7 +11,7 @@
  * YouTube's goodwill, none of which belong in a unit test.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result } from "better-result";
@@ -56,7 +56,7 @@ let dir: string;
 let db: Db;
 let queue: JobQueue;
 
-async function makeApp(provider: Provider = fakeProvider()) {
+async function makeApp(provider: Provider = fakeProvider(), configOverrides: Record<string, unknown> = {}) {
   db = openDb({ path: join(dir, "casatube.db") });
   queue = await openJobQueue({ db, queueDbPath: join(dir, "queue.db") });
   const watcher = createQueueWatcher(queue, { pollMs: 20, heartbeatMs: 100 });
@@ -75,7 +75,7 @@ async function makeApp(provider: Provider = fakeProvider()) {
       // `key: null` rather than the ambient CREDENTIALS_KEY: a test must not
       // change behaviour because of what happens to be in the environment.
       credentials: new CredentialStore({ db, key: null, tempDir: dir, warn: () => {} }),
-      config: { ...loadConfig({}), dataDir: dir, dev: false },
+      config: { ...loadConfig({}), dataDir: dir, dev: false, ...configOverrides },
     },
     BUNDLE,
   );
@@ -339,5 +339,168 @@ describe("serving the client", () => {
     const response = await get(app, "/api/nonsense");
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toContain("json");
+  });
+});
+
+/**
+ * 🔴 The route that looks at the disk.
+ *
+ * Every test here is about the same distinction, from a different angle: a file
+ * that is gone must read `missing`, and a *library* that is gone must read
+ * `unknown` — and the second one must never be reported as the first.
+ */
+describe("POST /api/jobs/file-state", () => {
+  let library: string;
+
+  /** A finished job whose file is (or is not) at `<library>/Videos/<name>`. */
+  async function finishedJob(app: Awaited<ReturnType<typeof makeApp>>, name: string): Promise<string> {
+    const created = await post(app, "/api/jobs", { url: `https://example.com/${name}`, destination: "Videos" });
+    const { job } = (await created.json()) as { job: { id: string } };
+    const id = job.id;
+    const done = await queue.update(id, { status: "done", outputFile: join(library, "Videos", name) });
+    if (Result.isError(done)) throw new Error("could not finish the job");
+    return id;
+  }
+
+  function put(relative: string, contents = "0123456789"): void {
+    const absolute = join(library, relative);
+    mkdirSync(join(absolute, ".."), { recursive: true });
+    writeFileSync(absolute, contents);
+  }
+
+  beforeEach(() => {
+    library = mkdtempSync(join(tmpdir(), "casatube-http-library-"));
+  });
+
+  afterEach(() => {
+    rmSync(library, { recursive: true, force: true });
+  });
+
+  test("a file that is on disk comes back present", async () => {
+    const app = await makeApp(fakeProvider(), { libraryDir: library });
+    put("Videos/Talk.mkv");
+    const id = await finishedJob(app, "Talk.mkv");
+
+    const response = await post(app, "/api/jobs/file-state", { ids: [id] });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { states: { id: string; state: string; size?: number }[]; budgetMs: number };
+    expect(body.states).toHaveLength(1);
+    expect(body.states[0]?.state).toBe("present");
+    expect(body.states[0]?.size).toBe(10);
+    expect(body.budgetMs).toBeGreaterThan(0);
+  });
+
+  test("🔴 a file deleted outside CasaTube comes back missing", async () => {
+    const app = await makeApp(fakeProvider(), { libraryDir: library });
+    put("Videos/Talk.mkv");
+    put("Videos/Other.mkv");
+    const id = await finishedJob(app, "Talk.mkv");
+    rmSync(join(library, "Videos/Talk.mkv"));
+
+    const response = await post(app, "/api/jobs/file-state", { ids: [id] });
+    const body = (await response.json()) as { states: { state: string }[] };
+    expect(body.states[0]?.state).toBe("missing");
+  });
+
+  test("🔴 a library that is not there is 200 full of unknown, not a 503", async () => {
+    const app = await makeApp(fakeProvider(), { libraryDir: join(library, "not-mounted") });
+    const id = await finishedJob(app, "Talk.mkv");
+
+    const response = await post(app, "/api/jobs/file-state", { ids: [id] });
+    // 🔴 A 200. The caller is drawing a badge per row and needs an answer for
+    // each one; an error status would leave every row with nothing to render.
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { states: { state: string; reason?: string; detail?: string }[] };
+    expect(body.states[0]?.state).toBe("unknown");
+    expect(body.states[0]?.reason).toBe("mount-unavailable");
+    expect(typeof body.states[0]?.detail).toBe("string");
+  });
+
+  test("an id the queue has never heard of is simply absent from the answer", async () => {
+    const app = await makeApp(fakeProvider(), { libraryDir: library });
+    put("Videos/Talk.mkv");
+    const id = await finishedJob(app, "Talk.mkv");
+
+    const response = await post(app, "/api/jobs/file-state", { ids: [id, "not-a-job"] });
+    const body = (await response.json()) as { states: { id: string }[] };
+    expect(body.states.map((state) => state.id)).toEqual([id]);
+  });
+
+  test("an empty list of ids does no work and does not fail", async () => {
+    const app = await makeApp(fakeProvider(), { libraryDir: library });
+    const response = await post(app, "/api/jobs/file-state", { ids: [] });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { states: unknown[]; checked: number };
+    expect(body.states).toEqual([]);
+    expect(body.checked).toBe(0);
+  });
+
+  test("🔴 an empty list of ids does not answer about every job in the table", async () => {
+    const app = await makeApp(fakeProvider(), { libraryDir: library });
+    put("Videos/Talk.mkv");
+    await finishedJob(app, "Talk.mkv");
+
+    const response = await post(app, "/api/jobs/file-state", { ids: [] });
+    const body = (await response.json()) as { states: unknown[] };
+    expect(body.states).toEqual([]);
+  });
+});
+
+describe("POST /api/jobs/:id/redownload", () => {
+  test("queues a second job with the same url, destination and preferences", async () => {
+    const app = await makeApp();
+    const created = await post(app, "/api/jobs", {
+      url: "https://example.com/a",
+      destination: "Videos",
+      preferences: { maxResolution: 720 },
+    });
+    const first = ((await created.json()) as { job: { id: string } }).job;
+    if (Result.isError(await queue.update(first.id, { status: "done", outputFile: "/library/Videos/A.mkv" }))) {
+      throw new Error("could not finish the job");
+    }
+
+    const response = await post(app, `/api/jobs/${first.id}/redownload`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      outcome: string;
+      job: { id: string; url: string; destination: string; preferences: { maxResolution: number }; status: string };
+    };
+    // 🔴 `queued`, not `duplicate`: the finished job it is replacing is exactly
+    // the one duplicate detection would otherwise match.
+    expect(body.outcome).toBe("queued");
+    expect(body.job.id).not.toBe(first.id);
+    expect(body.job.url).toBe("https://example.com/a");
+    expect(body.job.destination).toBe("Videos");
+    expect(body.job.preferences.maxResolution).toBe(720);
+    expect(body.job.status).toBe("queued");
+  });
+
+  test("the original job is left exactly as it was", async () => {
+    const app = await makeApp();
+    const created = await post(app, "/api/jobs", { url: "https://example.com/a", destination: "Videos" });
+    const first = ((await created.json()) as { job: { id: string } }).job;
+    await queue.update(first.id, { status: "done", outputFile: "/library/Videos/A.mkv" });
+
+    await post(app, `/api/jobs/${first.id}/redownload`);
+    const still = await queue.get(first.id);
+    if (Result.isError(still)) throw new Error("the original job vanished");
+    expect(still.value.status).toBe("done");
+    expect(still.value.outputFile).toBe("/library/Videos/A.mkv");
+  });
+
+  test("a job that is still running is refused rather than downloaded twice", async () => {
+    const app = await makeApp();
+    const created = await post(app, "/api/jobs", { url: "https://example.com/a", destination: "Videos" });
+    const first = ((await created.json()) as { job: { id: string } }).job;
+    await queue.update(first.id, { status: "downloading" });
+
+    const response = await post(app, `/api/jobs/${first.id}/redownload`);
+    expect(response.status).toBeGreaterThanOrEqual(400);
+  });
+
+  test("a job that does not exist is a 404, not a new download", async () => {
+    const app = await makeApp();
+    const response = await post(app, "/api/jobs/nope/redownload");
+    expect(response.status).toBe(404);
   });
 });
