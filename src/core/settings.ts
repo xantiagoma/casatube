@@ -64,16 +64,6 @@ export function dbSettings(db: Db): SettingsStore {
   };
 }
 
-/** For tests and for an app assembled without a database. */
-export function memorySettings(initial: Record<string, unknown> = {}): SettingsStore {
-  const held = new Map<string, unknown>(Object.entries(initial));
-  return {
-    get: <T,>(key: string) => held.get(key) as T | undefined,
-    set: (key, value) => void held.set(key, value),
-    remove: (key) => void held.delete(key),
-  };
-}
-
 /** One namespace, so a plugin called `builtins` cannot collide with the seed record. */
 export function pluginSettingsKey(plugin: string): string {
   return `plugin.config:${plugin}`;

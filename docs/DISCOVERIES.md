@@ -596,13 +596,102 @@ result and the next person deserves to know what was already tried. If it comes
 back **inside the container**, the spawn path in `core/library.ts` is where to
 look, and the two experiments above are the ones not to repeat.
 
-## A 438 MB video that hangs on "loading" — what has been ruled out (2026-08-27)
+## Killing your own subprocess looks exactly like that subprocess failing (2026-08-27)
 
-`Videos/My Secret Agent Husband EP.mp4`, 73 min, 438 MB, played from a browser
-over the tailnet: the player sits on loading. Short videos in the same library
-play immediately.
+The transcode queue kills its ffmpeg on shutdown, which is correct — an encoder
+left running by a restart is the whole machine burning on a file nobody asked
+for. What it then did with the exit code was not: `proc.exited` returns **255**,
+`code !== 0` is the failure branch, and a real 73-minute encode interrupted by a
+`SIGTERM` came back as
 
-**Ruled out, measured against the running container:**
+```
+attempt 1/2 failed: ffmpeg exited with code 255
+```
+
+Two deploys would have retired the job for good, with an error blaming the file
+for something we did to it. Found by killing a real encode, not by a test — the
+unit test that catches it now was written *after* the run that showed it.
+
+📌 The general shape: **an exit code says how a process ended, never why.** Any
+code that kills a child has to record its own intent *before* the kill and read
+it back after, or it will misread its own decision as the child's failure. Ours
+sets `stopping` (a shutdown: leave the row alone, `recoverOnStart` requeues it)
+alongside the `cancelled` it already had (a person's decision: mark it, remove
+the partial output) — two flags, because they mean two different things and only
+one of them is worth telling the user about.
+
+## A 438 MB video that hung on "loading": 3.74 GB on the wire, and size was not the variable (2026-08-27)
+
+`Videos/My Secret Agent Husband EP.mp4` — 73 min, 438 MB, h264 High + AAC-LC,
+`moov` at 0% — sat on a spinner while short videos in the same library played
+instantly. Everything measurable about the file, the route and the container was
+correct: verdict `direct`, ranges answered in all four forms, first byte in 1 ms,
+probe and thumbnail in milliseconds.
+
+**The file is a fragmented MP4.** Not `moov` + one `mdat`, but `mvex` in the
+movie header followed by **1475 `styp`/`sidx`/`moof`/`mdat` fragments**, with no
+global index and `mvhd.duration = 0`. Counted, not guessed:
+
+```
+My Secret Agent Husband EP.mp4  {ftyp:1, moov:1, styp:1475, sidx:2950, moof:1475, mdat:1475}
+O+ (O Positive)…mp4             {ftyp:1, moov:1, free:1, mdat:1}     ← plays fine
+Me at the zoo.mp4               {ftyp:1, moov:1, free:1, mdat:1}     ← plays fine
+```
+
+A browser handed one of these learns the duration — and where any given second
+is — only by **reading every `moof` in the file**. Chrome does that with a burst
+of open-ended `Range: bytes=N-` requests marching from 0 to EOF, and abandons
+each after a few kilobytes. From the network panel, `preload="metadata"`, before
+a single frame:
+
+| | Requests | Bytes on the wire |
+|---|---|---|
+| The fragmented 437 MB file | **468** | **3.74 GB** (8.7× the file) |
+| Its own bytes remuxed to a plain MP4, 439 MB | **1** | **11.8 MB** |
+| The 59 MB plain MP4 in the same library | 1 | 11.9 MB |
+
+🔴 **So size is not the variable — container shape is.** The middle row is the
+experiment that settles it: `ffmpeg -c copy -movflags +faststart` on the same
+73 minutes, the same codecs, the same 439 MB, and the browser reads 12 MB and
+stops. A size threshold on `direct` would have punished every large file and
+still missed a fragmented small one.
+
+**Why 3.74 GB and not 468 × a few KB**: the route answered `bytes=N-` literally
+— "everything from N to the end", hundreds of megabytes — and in the deployed
+container an abandoned request had already pushed **6 to 9 MB** into the socket
+before the reset landed (measured three times). 468 × 8 MB is the 3.74 GB; the
+arithmetic closes.
+
+**Two fixes, and they are independent.**
+
+1. `decidePlayback` now looks at the **shape of the file**, not only its
+   extension and codecs: an MP4 whose `moov` declares `mvex` is served as HLS.
+   `readMp4Layout` reads 256 KB of the head and walks the top-level boxes, once
+   per (size, mtime), behind the same cache as the probe. After the change the
+   same file starts in **5.9 MB** — an index and five segments — plays, and seeks
+   to 40 minutes.
+2. An open-ended range is answered with **at most 4 MB** for inline playback
+   (RFC 9110 §14.4 allows a shorter 206). ⚠️ **Not for `?download=1`**: a
+   download manager resuming with `bytes=N-` writes what it is given and calls
+   the file finished, so a cap there is a silently truncated save.
+
+📌 The general shape, and it is the fourth time in this file: **`ffprobe`
+answered every question anyone asked and none of them was the question.** Codec,
+profile, duration, bitrate and `moov` position were all correct and all
+irrelevant. What mattered — "does the front of this file say where anything is"
+— is not a field in any probe output, and had to be read out of the boxes.
+
+⚠️ For the next person: `ffprobe` gives no hint. `{styp, sidx, moof} > 0` in a
+top-level box count does, and a twelve-line box walk is all it takes.
+
+---
+
+### The table from the first day, kept because it is still true
+
+Every one of these was measured against the running container before the cause
+was found, and every one of them came back clean. They are the checks **not** to
+repeat on the next file that will not play — none of them can see a fragmented
+container.
 
 | Suspicion | Result |
 |---|---|
@@ -613,14 +702,12 @@ play immediately.
 | Server slow to answer | No — first byte in **1 ms** |
 | Thumbnail or probe blocking the panel | No — 2 ms and 185 ms |
 
-So the file, the route and the container are all fine, and the fault is on the
-client side or in the transport. **Not yet diagnosed** — the next step is a real
-browser with the network panel open, which is where this stopped.
+That list is what made "the fault is in the client or the transport" the right
+next step, and a real browser with the network panel open is what answered it.
 
-📌 One design question it raises regardless: `direct` is chosen from container
-and codec alone, with **no regard for size**. Handing a browser a 438 MB
-progressive download may simply be the wrong shape even when it is technically
-playable — segments would let it start on the first few seconds instead.
+⚠️ The design question the first day raised — "should `direct` look at **size**?"
+— was the plausible-and-wrong one. It was tested rather than adopted: see the
+remuxed 439 MB row above.
 
 
 ## A documented limit that was never implemented (2026-08-27)

@@ -86,15 +86,20 @@ export interface TranscodePreset {
  * ⚠️ `+faststart` on every MP4. Without it the `moov` lands at the *end*, which
  * is the classic reason a file plays from disk and stalls over HTTP.
  *
- * ⚠️ **`-dn -sn`: no data tracks and no subtitle tracks.** Both were found the
- * hard way. ffmpeg wrote a `bin_data` track into the first real output measured
- * here — an unknown track in an MP4 is exactly the thing a television's decoder
- * refuses, in a preset whose entire promise is that a television will play it.
- * And an MKV's ASS subtitles cannot be copied into MP4 at all: kept, they fail
- * the whole job an hour in. They are dropped rather than converted because
- * CasaTube already keeps subtitles as sidecar files beside the video, which is
- * where every media server looks for them — so nothing is lost, and the preset
- * descriptions say so.
+ * ⚠️ **`-dn -sn`: no data streams, no subtitle streams.** An MKV's ASS
+ * subtitles have no MP4 representation, so `-c copy` on one fails the whole job
+ * — and it fails at the *end*, after the encode. They are dropped rather than
+ * converted because CasaTube already keeps subtitles as sidecar files beside
+ * the video, which is where every media server looks for them; the preset
+ * descriptions say so rather than leaving it to be discovered.
+ *
+ * 📌 What `-dn` does **not** remove, measured rather than assumed: the
+ * `bin_data` track ffprobe reports on the output. That is **chapters** — the
+ * MP4 muxer materialises them as a track, and `-dn` does not touch them because
+ * they are not a mapped stream. `-map_chapters -1` is what removes them, and it
+ * is deliberately absent: chapters are content, and dropping content quietly is
+ * the failure this project keeps refusing. Verified on a chaptered source: with
+ * `-dn -sn` the output has three tracks, with `-map_chapters -1` it has two.
  */
 export const TRANSCODE_PRESETS: readonly TranscodePreset[] = [
   {
@@ -350,7 +355,7 @@ export function createTranscodeQueue(options: TranscodeOptions): TranscodeQueue 
    * sooner, it makes Home Assistant miss its polling window. If this ever needs
    * to be two, it needs to be two on a different machine.
    */
-  let active: { id: string; proc: ReturnType<typeof Bun.spawn>; cancelled: boolean } | null = null;
+  let active: { id: string; proc: ReturnType<typeof Bun.spawn>; cancelled: boolean; stopping: boolean } | null = null;
   let looping = false;
   let loop: Promise<void> | null = null;
 
@@ -557,7 +562,7 @@ export function createTranscodeQueue(options: TranscodeOptions): TranscodeQueue 
       await failed(row, `ffmpeg could not be started: ${cause instanceof Error ? cause.message : String(cause)}`);
       return;
     }
-    active = { id: row.id, proc, cancelled: false };
+    active = { id: row.id, proc, cancelled: false, stopping: false };
 
     // ⚠️ Both pipes are drained. A process whose stderr fills its pipe buffer
     // stops writing and then stops working, and a two-hour encode produces far
@@ -589,7 +594,26 @@ export function createTranscodeQueue(options: TranscodeOptions): TranscodeQueue 
     const code = await proc.exited;
     await Promise.allSettled([readProgress, readStderr]);
     const cancelled = active?.cancelled === true;
+    const stopping = active?.stopping === true;
     active = null;
+
+    /**
+     * 🔴 A shutdown is not a failure, and this is the difference between the
+     * two — measured, not assumed. Without it a SIGTERM in the middle of a
+     * 73-minute encode came back as `attempt 1/2 failed: ffmpeg exited with
+     * code 255`, which is a sentence about a process nobody's ffmpeg wrote:
+     * *we* killed it. Two deploys would then have retired the job for good,
+     * with an error blaming the file.
+     *
+     * The row is left `running` on purpose. `recoverOnStart` turns exactly that
+     * state back into `queued` on the next boot, with the attempt count
+     * untouched — so a restart costs the work done so far and nothing else.
+     */
+    if (stopping) {
+      await rm(output.value, { force: true }).catch(() => undefined);
+      await patch(row.id, {}, ["interrupted by a shutdown; it will start again from the beginning"]);
+      return;
+    }
 
     if (cancelled) {
       await rm(output.value, { force: true }).catch(() => undefined);
@@ -678,9 +702,10 @@ export function createTranscodeQueue(options: TranscodeOptions): TranscodeQueue 
   async function stop(): Promise<void> {
     looping = false;
     if (active !== null) {
-      // 🔴 Not marked cancelled: the row stays `running`, and `recoverOnStart`
-      // turns it back into `queued` on the next boot. A shutdown must not look
-      // to the user like a decision somebody made.
+      // 🔴 Marked as a *shutdown*, not as a cancel and not as a failure — see
+      // the note in `runOne`. A shutdown must not look to the user like a
+      // decision somebody made, nor spend one of the job's attempts.
+      active.stopping = true;
       try {
         active.proc.kill();
       } catch {

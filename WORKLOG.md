@@ -5,6 +5,88 @@ session with none of this context. Newest first.
 
 ---
 
+## 2026-08-27 — The 438 MB video, answered; and transcoding as a queue
+
+Two things: the file that would not play, diagnosed and fixed, and an optional
+re-encode that is a job rather than a request.
+
+### 1. 🔴 The cause: a **fragmented** MP4, not a big one
+
+`Videos/My Secret Agent Husband EP.mp4` is not `moov` + `mdat`. It is `mvex`
+plus **1475 `moof` fragments** with no index and `mvhd.duration = 0`, so a
+browser has to read every fragment before it can play a second. Measured in a
+real Chrome with the network panel open, at `preload="metadata"`, before one
+frame: **468 range requests and 3.74 GB on the wire** — 8.7× the file. On
+loopback that is twelve seconds of spinner; over the tailnet it is the bug.
+
+⚠️ **Size was the plausible wrong answer, and it was tested rather than
+adopted.** The same 73 minutes remuxed to a plain MP4 — same codecs, same
+439 MB — is **one request and 11.8 MB**. So no size threshold was added to
+`direct`; one would have punished every large file and still missed a fragmented
+small one. Full numbers in `docs/DISCOVERIES.md`.
+
+**What changed**
+
+- `core/hls.ts`: `readMp4Layout()` walks the top-level boxes of the first 256 KB
+  and reports whether `moov` declares `mvex`. `decidePlayback` takes it as a
+  third, optional argument and routes a fragmented MP4 to **HLS**. Read once per
+  (size, mtime), behind the same cache as the probe; unreadable head → no
+  opinion, and the old behaviour stands.
+- `api/library.ts`: an open-ended `Range: bytes=N-` is answered with at most
+  **4 MB** for inline playback. ⚠️ **Never for `?download=1`** — a resumed save
+  must get the rest of the file, or it is a silent truncation.
+- `src/web` (the only change there, and it is the player): the detail panel now
+  asks `GET /api/library/hls/playback` instead of guessing from the extension.
+  The extension guess stays as the fallback until the verdict arrives.
+
+**Verified in the browser, not in a test.** After the change the same file
+starts in **5.9 MB** — index plus five segments — plays, and seeks to 40:00. The
+plain 439 MB MP4 still goes `direct`, plays and seeks with the cap in place.
+
+### 2. Transcoding — optional, one at a time, never over the original
+
+New: `core/transcode.ts`, `api/transcode.ts`, table `transcodes`
+(migration 0006). **A job in a queue, not an HTTP request that waits**, so it
+inherits progress, retries, cancellation and survival across a restart.
+
+| | |
+|---|---|
+| `GET /api/transcode/presets` | Four named outcomes, each carrying **what it costs** and `reencodesVideo` |
+| `POST /api/transcode` | One file or a batch. Returns immediately; a batch answers with `queued` **and** `rejected`, per file |
+| `GET /api/transcode` | What is queued, running and finished |
+| `DELETE /api/transcode/:id` | Cancel a queued job, or kill the running one and remove the partial file |
+
+🔴 **One at a time, always** (`concurrency: 1` is in the response so a UI does
+not have to infer it) — this box also runs Home Assistant and Zigbee.
+🔴 **Never over the original**: the output is a new file beside it, `-n` not
+`-y`, and a preset that would land on the input is refused at enqueue.
+`replaceOriginal` is opt-in and even then the original is **moved to `.trash/`**
+after the copy is verified.
+🔴 **Presets, not flags**: the route takes an id off a fixed list, so the only
+ffmpeg that can run is the ffmpeg written in `core/transcode.ts`.
+
+**Verified with a real ffmpeg**, not only the fake one in the tests: a VP9/Opus
+MKV (verdict `unsupported` — nothing can play it) → `tv` preset → `ffprobe` says
+H.264 High level 40 `yuv420p` + AAC-LC stereo 48 kHz, `moov` first, duration
+unchanged, original untouched, and the new file's verdict is `direct`. A batch
+of three ran one at a time with one clean rejection. A real 73-minute encode was
+interrupted by `SIGTERM` (requeued, attempts untouched, no ffmpeg orphan),
+resumed on restart, and cancelled through the API (killed, partial file removed).
+
+⚠️ **A bug this found**: killing our own ffmpeg on shutdown was being read as
+ffmpeg failing — `attempt 1/2 failed: ffmpeg exited with code 255`. Two deploys
+would have killed a long encode for good. See `docs/DISCOVERIES.md`.
+
+### Not done, deliberately
+
+**There is no transcode UI.** Three other agents held
+`screens/{Dashboard,Queue,Downloads,Settings}.tsx` this session and `src/web`
+was limited to the player. The cost warning and `concurrency: 1` are in the API
+answers precisely so whoever builds the screen can show them without inventing
+wording. That screen is the next piece of work.
+
+---
+
 ## 2026-08-27 — The queue reads newest-first, filters for real, and stops jumping
 
 > «el orden por defecto empieza por lo más viejo… y la página vuelve arriba.»
@@ -185,7 +267,11 @@ directory, know which environment variables it read, and know to restart.
 Now: **write one in the browser**, **fill in a form the plugin itself
 described**, and **three real plugins arrive on first boot**.
 
-**Tests: 561 → 852. `tsc` clean.**
+**+61 plugin tests (45 → 106 across five files). `tsc` clean.** The whole suite,
+with the other agents' work of the same day in it, is 867 passing / 0 failing.
+React Doctor **60 / 100**, against 57 recorded before this session; nothing this
+work added is on its list, and both remaining errors are in vendored Dice UI
+code.
 
 ### 🔴 The bug this uncovered: reload never reloaded
 
@@ -290,11 +376,26 @@ new object every render — is an infinite render loop. React ends it with error
 nobody had opened. `tsc` is happy, and the exhaustive-deps rule pushes you
 straight into it. Both dialogs now reach their mutations through refs.
 
+### One more found by clicking: a save that erased its own receipt
+
+Splitting the dialog into a shell and a `key`ed body fixed the render loop and
+introduced a smaller bug in the same move: saving a *new* plugin told the parent
+to start editing that filename, which changed the key, which **remounted the
+body** — and took the "Saved to … active" panel and the server's warning with
+it. The body remembers the name it wrote instead, and the parent is deliberately
+not told. Verified by creating, saving twice (the second must overwrite, not
+409) and deleting, all from the browser.
+
 ### Shared files touched
 
 `src/server.ts` (seeding + the settings store), `src/web/data/keys.ts` (four new
 cache keys, appended), `src/web/data/plugins.ts`, and `plugins/jellyfin.ts` was
 **moved** to `src/plugins/builtin/jellyfin.ts`.
+
+⚠️ New dependencies: `codemirror`, `@codemirror/lang-javascript`,
+`@codemirror/theme-one-dark`, `@codemirror/state`, `@codemirror/view`,
+`@codemirror/commands`. Loaded through `React.lazy`, so they are a separate
+chunk and no screen but this dialog pays for them.
 
 ---
 

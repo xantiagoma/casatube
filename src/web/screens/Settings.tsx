@@ -466,9 +466,6 @@ function PluginsCard() {
         open={editing !== undefined}
         onOpenChange={(open) => setEditing(open ? (editing ?? null) : undefined)}
         file={editing ?? null}
-        /* After a new file is saved, keep editing *that* file: the next save
-           has to be an overwrite, not a create that collides with itself. */
-        onSaved={(file) => setEditing(file)}
       />
       <PluginSettingsDialog
         open={configuring !== null}

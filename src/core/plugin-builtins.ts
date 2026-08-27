@@ -63,12 +63,12 @@ export async function readBuiltins(dir: string = BUILTIN_DIR): Promise<BuiltinPl
     // truthful answer; refusing to boot over it would be worse.
     return [];
   }
-  const out: BuiltinPlugin[] = [];
-  for (const file of names.sort()) {
-    const source = await readFile(join(dir, file), "utf8");
-    out.push({ file, source, sha: sha256(source) });
-  }
-  return out;
+  return Promise.all(
+    names.sort().map(async (file) => {
+      const source = await readFile(join(dir, file), "utf8");
+      return { file, source, sha: sha256(source) };
+    }),
+  );
 }
 
 export type SeedAction = "written" | "updated" | "kept-yours" | "kept-deleted" | "unchanged" | "failed";

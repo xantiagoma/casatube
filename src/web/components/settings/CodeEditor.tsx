@@ -79,10 +79,23 @@ export function CodeEditor({ value, onChange, docKey, dark, readOnly, ariaLabel,
   const view = useRef<EditorView | null>(null);
   /** The latest callback, so a re-render never rebuilds the editor. */
   const notify = useRef(onChange);
-  notify.current = onChange;
-  /** Read once, when the view for this `docKey` is built. */
+  /** The text to open with. Read once, when the view for this `docKey` is built. */
   const initial = useRef(value);
-  initial.current = value;
+
+  /**
+   * ⚠️ Assigned in an effect, not during render.
+   *
+   * Writing `ref.current` while rendering is a real hazard rather than a style
+   * rule: React may render a component and throw the result away, and a ref
+   * written during that render keeps the value from a render nobody kept. This
+   * effect has **no dependency array on purpose** — it must run after every
+   * render — and it is declared **before** the one below, because effects run in
+   * declaration order and the view is built from `initial.current`.
+   */
+  useEffect(() => {
+    notify.current = onChange;
+    initial.current = value;
+  });
 
   useEffect(() => {
     const parent = host.current;
@@ -102,6 +115,10 @@ export function CodeEditor({ value, onChange, docKey, dark, readOnly, ariaLabel,
           // Tab jumps to the Save button mid-line.
           keymap.of([indentWithTab]),
           layout,
+          // The label goes on CodeMirror's own `contenteditable`, which already
+          // carries `role="textbox"`. Putting a second textbox role on the
+          // wrapper would announce two.
+          EditorView.contentAttributes.of({ "aria-label": ariaLabel ?? "Plugin source" }),
           themeCompartment.of(dark ? oneDark : []),
           EditorState.readOnly.of(readOnly === true),
           EditorView.updateListener.of((update) => {
@@ -119,19 +136,11 @@ export function CodeEditor({ value, onChange, docKey, dark, readOnly, ariaLabel,
     // `dark` is deliberately absent: it is reconfigured below rather than
     // rebuilding the editor, which would discard unsaved edits on a theme change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docKey, readOnly]);
+  }, [docKey, readOnly, ariaLabel]);
 
   useEffect(() => {
     view.current?.dispatch({ effects: themeCompartment.reconfigure(dark ? oneDark : []) });
   }, [dark]);
 
-  return (
-    <div
-      ref={host}
-      role="textbox"
-      aria-label={ariaLabel ?? "Plugin source"}
-      aria-multiline="true"
-      className={className}
-    />
-  );
+  return <div ref={host} className={className} />;
 }

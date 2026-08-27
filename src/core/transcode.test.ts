@@ -91,12 +91,12 @@ describe("buildTranscodeArgs", () => {
   });
 
   /**
-   * 🔴 An unknown data track in an MP4 is precisely what a television refuses,
-   * and ffmpeg wrote one into the first real output measured here. An MKV's ASS
-   * subtitles cannot be copied into MP4 at all, and would fail the job an hour
-   * in. Both are excluded by hand in every preset that writes an MP4.
+   * 🔴 An MKV's ASS subtitles have no MP4 representation, so a preset that
+   * carried them through would fail the job *after* the encode. ⚠️ This does
+   * not cover chapters — see the note in `transcode.ts`; they survive on
+   * purpose.
    */
-  test("no MP4 preset carries a data or subtitle track through", () => {
+  test("no MP4 preset carries a data or subtitle stream through", () => {
     for (const preset of TRANSCODE_PRESETS.filter((p) => p.ext === "mp4")) {
       expect(preset.args).toContain("-dn");
       expect(preset.args).toContain("-sn");
@@ -181,6 +181,8 @@ const probe = async (): Promise<Result<MediaProbe, { _tag: string }>> =>
     durationSeconds: 10,
     bitrate: 1000,
     formatName: "matroska,webm",
+    width: null,
+    height: null,
     streams: [],
   });
 
@@ -291,7 +293,7 @@ describe("enqueue", () => {
     const queued = await queue.enqueue({ path: "Videos/Film.mkv", preset: "tv" });
 
     expect(Result.isError(queued) && queued.error._tag).toBe("TranscodeRejected");
-    expect(Result.isError(queued) && queued.error.detail).toContain("already exists");
+    expect(Result.isError(queued) && "detail" in queued.error && queued.error.detail).toContain("already exists");
   });
 
   test("an unknown preset is a refusal, not a default", async () => {
@@ -498,6 +500,34 @@ describe("cancel", () => {
     const row = await queue.get(id);
     expect(Result.isOk(row) && row.value.status).toBe("cancelled");
     expect(existsSync(join(library, "Videos/Film (TV).mp4"))).toBe(false);
+  });
+
+  /**
+   * 🔴 A shutdown is not a cancel and not a failure.
+   *
+   * Found by killing a real 73-minute encode: the job came back as
+   * `attempt 1/2 failed: ffmpeg exited with code 255` — an error about a
+   * process *we* killed. With `maxAttempts` at 2, two restarts would have
+   * retired the job for good and blamed the file for it.
+   */
+  test("🔴 stopping the queue does not charge the job an attempt or blame it", async () => {
+    queue = open(fakeFfmpeg({ sleep: "2" }));
+    put("Videos/Film.mkv");
+    const queued = await queue.enqueue({ path: "Videos/Film.mkv", preset: "tv" });
+    const id = Result.isOk(queued) ? queued.value.id : "";
+
+    const running = queue.runNext();
+    for (let i = 0; i < 100 && queue.running === null; i += 1) await Bun.sleep(20);
+    await queue.stop();
+    await running;
+
+    const row = await queue.get(id);
+    expect(Result.isOk(row) && row.value.attempts).toBe(0);
+    expect(Result.isOk(row) && row.value.error).toBeNull();
+    // Left `running`, which is precisely what `recoverOnStart` requeues.
+    expect(Result.isOk(row) && row.value.status).toBe("running");
+    expect(existsSync(join(library, "Videos/Film (TV).mp4"))).toBe(false);
+    expect(await queue.recoverOnStart()).toBe(1);
   });
 
   test("a job that does not exist is a NotFound, not a silent success", async () => {

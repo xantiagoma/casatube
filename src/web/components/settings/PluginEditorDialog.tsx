@@ -76,8 +76,6 @@ export interface PluginEditorDialogProps {
    * open. See `data/plugins.ts`.
    */
   file: string | null;
-  /** Told the filename after a successful save, so the parent can keep editing it. */
-  onSaved?: (file: string) => void;
 }
 
 const NEW_DOC_KEY = "__new__";
@@ -113,23 +111,35 @@ function StateBadge({ state }: { state: PluginStatus["state"] }) {
  * it throws away the draft, the confirmation and the last save's result for
  * free.
  */
-export function PluginEditorDialog({ open, onOpenChange, file, onSaved }: PluginEditorDialogProps) {
+export function PluginEditorDialog({ open, onOpenChange, file }: PluginEditorDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[92vh] flex-col gap-4 sm:max-w-4xl">
-        <PluginEditorBody key={file ?? NEW_DOC_KEY} file={file} onOpenChange={onOpenChange} onSaved={onSaved} />
+        <PluginEditorBody key={file ?? NEW_DOC_KEY} file={file} onOpenChange={onOpenChange} />
       </DialogContent>
     </Dialog>
   );
 }
 
-function PluginEditorBody({ file, onOpenChange, onSaved }: Omit<PluginEditorDialogProps, "open">) {
+function PluginEditorBody({ file, onOpenChange }: Omit<PluginEditorDialogProps, "open">) {
   const { resolved } = useTheme();
-  const isNew = file === null;
+  /**
+   * ⚠️ `file` drives the queries and the key; `target` drives what is written.
+   *
+   * They differ for exactly one case, and it is the case that broke first: a
+   * *new* plugin that has just been saved. Once the first save lands, the file
+   * exists, so the next save has to be an overwrite and a delete has something
+   * to delete — but re-keying the body on the new name would remount it and
+   * throw away the result panel, including the warning the server just sent.
+   * So the body remembers the name itself and stays mounted.
+   */
+  const [savedAs, setSavedAs] = useState<string | null>(null);
+  const target = file ?? savedAs;
+  const isNew = target === null;
   const docKey = file ?? NEW_DOC_KEY;
 
   const source = usePluginSource(file);
-  const template = usePluginTemplate(isNew);
+  const template = usePluginTemplate(file === null);
   const save = useSavePluginSource();
   const remove = useDeletePluginSource();
 
@@ -144,24 +154,30 @@ function PluginEditorBody({ file, onOpenChange, onSaved }: Omit<PluginEditorDial
   const [newFile, setNewFile] = useState("my-plugin.ts");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
-  const initial = isNew ? template.data : source.data?.source;
+  const initial = file === null ? template.data : source.data?.source;
   const text = draft ?? initial ?? "";
 
   const onChange = useCallback((next: string) => setDraft(next), []);
 
-  const filename = isNew ? newFile.trim() : file;
-  const loading = isNew ? template.isPending : source.isPending;
-  const loadError = isNew ? template.error : source.error;
+  const filename = target ?? newFile.trim();
+  const loading = file === null ? template.isPending : source.isPending;
+  const loadError = file === null ? template.error : source.error;
   const ready = initial !== undefined;
 
   function onSave() {
-    if (filename === null || filename === "") return;
-    save.mutate({ file: filename, source: text, overwrite: !isNew }, { onSuccess: () => onSaved?.(filename) });
+    if (filename === "") return;
+    save.mutate(
+      { file: filename, source: text, overwrite: !isNew },
+      // 🔴 The parent is deliberately *not* told. Moving `editing` to the new
+      // filename would change this body's key and remount it, which is exactly
+      // what would throw away the panel reporting the save.
+      { onSuccess: () => setSavedAs(filename) },
+    );
   }
 
   function onDelete() {
-    if (file === null) return;
-    remove.mutate(file, { onSuccess: () => onOpenChange(false) });
+    if (target === null) return;
+    remove.mutate(target, { onSuccess: () => onOpenChange(false) });
   }
 
   const saved = save.data?.saved ?? null;
@@ -171,7 +187,7 @@ function PluginEditorBody({ file, onOpenChange, onSaved }: Omit<PluginEditorDial
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <FileCode className="size-4" aria-hidden />
-          {isNew ? "New plugin" : file}
+          {target ?? "New plugin"}
         </DialogTitle>
         <DialogDescription>
           One TypeScript file. Saving writes it to the plugins directory and reloads the runtime — no restart,
@@ -207,25 +223,25 @@ function PluginEditorBody({ file, onOpenChange, onSaved }: Omit<PluginEditorDial
       ) : loadError ? (
         <ErrorState error={loadError} what="That plugin file" />
       ) : ready ? (
-      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border">
-        <Suspense
-          fallback={
-            <p className="flex h-[46vh] items-center gap-2 p-4 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-              Loading the editor…
-            </p>
-          }
-        >
-          <CodeEditor
-            value={text}
-            onChange={onChange}
-            docKey={docKey}
-            dark={resolved === "dark"}
-            ariaLabel="Plugin source"
-            className="h-[46vh] min-h-64"
-          />
-        </Suspense>
-      </div>
+        <div className="min-h-0 flex-1 overflow-hidden rounded-lg border">
+          <Suspense
+            fallback={
+              <p className="flex h-[46vh] items-center gap-2 p-4 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+                Loading the editor…
+              </p>
+            }
+          >
+            <CodeEditor
+              value={text}
+              onChange={onChange}
+              docKey={docKey}
+              dark={resolved === "dark"}
+              ariaLabel="Plugin source"
+              className="h-[46vh] min-h-64"
+            />
+          </Suspense>
+        </div>
       ) : null}
 
       {/* 🔴 Always on screen, not only after a save. See the header. */}
@@ -277,7 +293,7 @@ function PluginEditorBody({ file, onOpenChange, onSaved }: Omit<PluginEditorDial
             confirmingDelete ? (
               <>
                 <Button size="sm" variant="destructive" disabled={remove.isPending} onClick={onDelete}>
-                  Delete {file}
+                  Delete {target}
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setConfirmingDelete(false)}>
                   Keep it

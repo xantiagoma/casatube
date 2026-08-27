@@ -831,9 +831,8 @@ export function createPluginRuntime(options: PluginRuntimeOptions): PluginRuntim
   /** Leftovers from a process that died mid-load. Invisible to the loader, but not to `ls`. */
   async function sweepShadows(): Promise<void> {
     try {
-      for (const name of await readdir(dir)) {
-        if (name.startsWith(RELOAD_PREFIX)) await rm(join(dir, name), { force: true }).catch(() => undefined);
-      }
+      const stale = (await readdir(dir)).filter((name) => name.startsWith(RELOAD_PREFIX));
+      await Promise.all(stale.map((name) => rm(join(dir, name), { force: true }).catch(() => undefined)));
     } catch {
       // No directory. `candidates()` already treats that as the normal state of
       // a fresh install rather than a failure.

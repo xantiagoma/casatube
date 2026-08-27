@@ -42,7 +42,7 @@ function fakeFfmpeg(): string {
 }
 
 async function probe(): Promise<Result<MediaProbe, { _tag: string }>> {
-  return Result.ok({ path: "x", durationSeconds: 10, bitrate: 1000, formatName: "matroska,webm", streams: [] });
+  return Result.ok({ path: "x", durationSeconds: 10, bitrate: 1000, formatName: "matroska,webm", width: null, height: null, streams: [] });
 }
 
 function put(relative: string, contents = "not really a video"): void {

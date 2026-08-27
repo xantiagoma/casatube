@@ -26,7 +26,7 @@
  * environment value" where no such value exists would silently empty the field,
  * so the label names whichever layer will actually answer.
  */
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Info, Loader2, RotateCcw, Save, Settings2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -200,31 +200,37 @@ function SettingRow({
   );
 }
 
+/**
+ * 🔴 A shell, with the form in a body **keyed on the plugin**.
+ *
+ * The first version held the patch in the outer component and cleared it from
+ * an effect when `open` or `name` changed — which is "reset all state on a prop
+ * change", and which put a `useMutation` result in a dependency array. A
+ * mutation result is a new object every render, so the effect ran every render,
+ * and the `setState` inside it re-rendered: an infinite loop that React ends by
+ * turning the whole Settings page into an error boundary. Found by opening this
+ * dialog in a browser; `tsc` had no opinion, and the exhaustive-deps rule
+ * actively pushes you into it.
+ *
+ * A `key` removes the effect entirely. Radix unmounts the content when the
+ * dialog closes, so an unsaved edit cannot survive into the next opening — or
+ * into a different plugin's form, which is the version of that mistake nobody
+ * would notice until it was saved.
+ */
 export function PluginSettingsDialog({ open, onOpenChange, name }: PluginSettingsDialogProps) {
-  const settings = usePluginSettings(open ? name : null);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-xl">
+        <PluginSettingsBody key={name ?? ""} name={name} onOpenChange={onOpenChange} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PluginSettingsBody({ name, onOpenChange }: Omit<PluginSettingsDialogProps, "open">) {
+  const settings = usePluginSettings(name);
   const save = useSavePluginSettings();
   const [patch, setPatch] = useState<Patch>({});
-
-  /**
-   * 🔴 `save` is deliberately absent from the dependency list, and reached
-   * through a ref instead.
-   *
-   * A React Query mutation result is a new object every render, so listing it
-   * here runs the effect every render — and this effect calls `setPatch`, which
-   * causes a render. That is an infinite loop, and React ends it by replacing
-   * the whole screen with an error boundary ("Maximum update depth exceeded").
-   * Found by opening this dialog in a browser; the compiler had no opinion.
-   */
-  const resetSave = useRef<() => void>(() => undefined);
-  resetSave.current = save.reset;
-
-  useEffect(() => {
-    // A fresh form per opening, and per plugin. Carrying an unsaved edit from
-    // one plugin's dialog into another's is the kind of thing nobody notices
-    // until it is saved.
-    setPatch({});
-    resetSave.current();
-  }, [open, name]);
 
   function onSet(key: string, value: string | null) {
     setPatch((current) => ({ ...current, [key]: value }));
@@ -234,74 +240,72 @@ export function PluginSettingsDialog({ open, onOpenChange, name }: PluginSetting
   const dirty = Object.keys(patch).length > 0;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Settings2 className="size-4" aria-hidden />
-            {name} settings
-          </DialogTitle>
-          <DialogDescription>
-            Declared by the plugin itself, so this form exists before its code has ever run. Saving re-runs the
-            plugin's <code>setup</code> with the new values.
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <Settings2 className="size-4" aria-hidden />
+          {name} settings
+        </DialogTitle>
+        <DialogDescription>
+          Declared by the plugin itself, so this form exists before its code has ever run. Saving re-runs the
+          plugin's <code>setup</code> with the new values.
+        </DialogDescription>
+      </DialogHeader>
 
-        {settings.isPending ? (
-          <p className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" aria-hidden />
-            Loading…
-          </p>
-        ) : settings.isError ? (
-          <ErrorState error={settings.error} what="These settings" retry={() => void settings.refetch()} />
-        ) : rows.length === 0 ? (
-          <p className="py-4 text-sm text-muted-foreground">
-            This plugin declares no settings. Anything it reads comes from the environment — which is a plugin
-            worth adding a <code>settings</code> block to.
-          </p>
-        ) : (
-          <div className="scrollbar-thin max-h-[52vh] overflow-y-auto pr-1">
-            {rows.map((setting) => (
-              <SettingRow key={setting.key} setting={setting} patch={patch} onSet={onSet} />
-            ))}
-          </div>
-        )}
-
-        <p className="flex items-start gap-1.5 rounded-md bg-muted/60 p-2 text-xs text-muted-foreground">
-          <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          <span>
-            A value set here beats the environment variable of the same name, and the variable is left exactly as
-            it is — which is what the revert buttons put back. Values are stored on the server, in the same
-            database as everything else, <strong>unencrypted</strong>: a token here is as exposed as the same
-            token in a compose file.
-          </span>
+      {settings.isPending ? (
+        <p className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" aria-hidden />
+          Loading…
         </p>
+      ) : settings.isError ? (
+        <ErrorState error={settings.error} what="These settings" retry={() => void settings.refetch()} />
+      ) : rows.length === 0 ? (
+        <p className="py-4 text-sm text-muted-foreground">
+          This plugin declares no settings. Anything it reads comes from the environment — which is a plugin
+          worth adding a <code>settings</code> block to.
+        </p>
+      ) : (
+        <div className="scrollbar-thin max-h-[52vh] overflow-y-auto pr-1">
+          {rows.map((setting) => (
+            <SettingRow key={setting.key} setting={setting} patch={patch} onSet={onSet} />
+          ))}
+        </div>
+      )}
 
-        {save.isError ? <p className="text-xs text-destructive">{save.error.message}</p> : null}
-        {save.isSuccess && !dirty ? <p className="text-xs text-success">Saved, and the plugin was reloaded.</p> : null}
+      <p className="flex items-start gap-1.5 rounded-md bg-muted/60 p-2 text-xs text-muted-foreground">
+        <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+        <span>
+          A value set here beats the environment variable of the same name, and the variable is left exactly as
+          it is — which is what the revert buttons put back. Values are stored on the server, in the same
+          database as everything else, <strong>unencrypted</strong>: a token here is as exposed as the same
+          token in a compose file.
+        </span>
+      </p>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Close
-          </Button>
-          <Button
-            className="gap-1.5"
-            disabled={!dirty || save.isPending || name === null}
-            onClick={() => {
-              if (name === null) return;
-              // Only the touched keys. See the header.
-              save.mutate({ name, values: patch }, { onSuccess: () => setPatch({}) });
-            }}
-          >
-            {save.isPending ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            ) : (
-              <Save className="size-4" aria-hidden />
-            )}
-            Save and reload
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      {save.isError ? <p className="text-xs text-destructive">{save.error.message}</p> : null}
+      {save.isSuccess && !dirty ? <p className="text-xs text-success">Saved, and the plugin was reloaded.</p> : null}
+
+      <DialogFooter>
+        <Button variant="outline" onClick={() => onOpenChange(false)}>
+          Close
+        </Button>
+        <Button
+          className="gap-1.5"
+          disabled={!dirty || save.isPending || name === null}
+          onClick={() => {
+            if (name === null) return;
+            // Only the touched keys. See the header.
+            save.mutate({ name, values: patch }, { onSuccess: () => setPatch({}) });
+          }}
+        >
+          {save.isPending ? (
+            <Loader2 className="size-4 animate-spin" aria-hidden />
+          ) : (
+            <Save className="size-4" aria-hidden />
+          )}
+          Save and reload
+        </Button>
+      </DialogFooter>
+    </>
   );
 }
