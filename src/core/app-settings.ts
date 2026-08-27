@@ -339,12 +339,12 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     group: "server",
     label: "ffmpeg binary",
     description:
-      "Used by CasaTube for HLS and thumbnails. ⚠️ It does not reach yt-dlp, which finds ffmpeg on PATH only — see docs/DISCOVERIES.md.",
+      "Used by CasaTube for HLS and thumbnails, and forwarded to yt-dlp as --ffmpeg-location. Empty means whatever is on PATH. ⚠️ A value that does not resolve to an existing path is not forwarded at all, and the boot log says so.",
     kind: "string",
     envVar: "FFMPEG_BIN",
     defaultValue: "",
     effect: "restart",
-    restartReason: "The HLS manager and the thumbnail cache are constructed at boot.",
+    restartReason: "The HLS manager, the thumbnail cache and the provider registry are constructed at boot.",
     allowEmpty: true,
   },
   {

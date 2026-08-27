@@ -68,6 +68,9 @@
  * every stderr line on the way to `ctx.log` anyway. That is defence against a
  * future yt-dlp echoing an argument, not against today's.
  */
+import { existsSync, statSync } from "node:fs";
+import { dirname, join, resolve as resolvePath } from "node:path";
+
 import { Result } from "better-result";
 import {
   AuthRequired,
@@ -721,6 +724,18 @@ export interface YtdlpOptions {
   sponsorblockMark?: string;
   /** `--playlist-end` for `list`. Unset means "everything the source offers". */
   maxListItems?: number;
+  /**
+   * What `--ffmpeg-location` receives, already resolved to a path that exists.
+   *
+   * ⚠️ **Never pass an unresolved name here.** yt-dlp answers a location that
+   * does not exist with `ffmpeg-location X does not exist! Continuing without
+   * ffmpeg` — a *warning*, after which the merge fails and the thumbnail stays
+   * WebP. Forwarding `FFMPEG_BIN` verbatim would therefore be worse than
+   * forwarding nothing, because `ffmpeg` (the bare name, resolvable on `PATH`)
+   * is not a path. {@link resolveFfmpegLocation} is what turns one into the
+   * other; the caller is expected to have used it.
+   */
+  ffmpegLocation?: string;
 }
 
 const DEFAULT_SPONSORBLOCK_REMOVE = "sponsor,selfpromo,interaction";
@@ -868,6 +883,10 @@ export function buildFetchArgs(
 
   return [
     ...baseArgs(opts.binary ?? defaultBinary(), opts),
+    // ⚠️ Here and not in `baseArgs`: fetch is the only invocation that runs a
+    // post-processor. Probing and listing never touch ffmpeg, so giving them
+    // the flag would only widen the surface on which a wrong path can matter.
+    ...(opts.ffmpegLocation ? ["--ffmpeg-location", opts.ffmpegLocation] : []),
     // Quiet, but keep progress. This is what pushes `postprocess:` onto stderr
     // (YoutubeDL.py:664) and leaves stdout carrying only our own lines.
     "-q",
@@ -961,6 +980,87 @@ function jsRuntimeArgs(): string[] {
 
 function defaultBinary(): string {
   return process.env.YTDLP_BIN || "yt-dlp";
+}
+
+// --- ffmpeg, as yt-dlp needs to be told about it -----------------------------
+
+/** What {@link resolveFfmpegLocation} found. */
+export interface FfmpegLocation {
+  /** An existing path, ready to hand to `--ffmpeg-location`. */
+  path: string;
+  /**
+   * Whether an `ffprobe` sits in the same directory.
+   *
+   * 🔴 Load-bearing, not trivia. Given a *file*, yt-dlp keeps that file as
+   * ffmpeg and then builds every other program's path as
+   * `dirname(location)/<program>` — so an ffmpeg with no ffprobe beside it
+   * makes yt-dlp look for ffprobe at a path that does not exist **instead of
+   * on `PATH`, where it would have found one**. Pointing `FFMPEG_BIN` at a
+   * lone binary can therefore take ffprobe away. False here is what
+   * {@link describeFfmpegLocation} turns into a line saying so.
+   */
+  ffprobeBeside: boolean;
+}
+
+/**
+ * `FFMPEG_BIN` turned into something `--ffmpeg-location` can accept.
+ *
+ * ⚠️ The whole point is the `undefined` return. yt-dlp treats a location that
+ * does not exist as "continue without ffmpeg" — a warning, then a failed merge
+ * and a WebP thumbnail — so a value we cannot resolve must not be forwarded at
+ * all, leaving yt-dlp's own `PATH` lookup as it was.
+ *
+ * A value with a `/` is a path and is required to exist. A bare name is
+ * resolved on `PATH` here, because `PATH` is exactly what `--ffmpeg-location`
+ * does not consult.
+ */
+export function resolveFfmpegLocation(
+  binary: string | undefined,
+  env: Record<string, string | undefined> = process.env,
+): FfmpegLocation | undefined {
+  const value = binary?.trim();
+  if (!value) return undefined;
+
+  let path: string | undefined;
+  if (value.includes("/")) {
+    path = existsSync(value) ? resolvePath(value) : undefined;
+  } else {
+    path = (env.PATH ? Bun.which(value, { PATH: env.PATH }) : Bun.which(value)) ?? undefined;
+  }
+  if (path === undefined) return undefined;
+
+  // A directory is passed through as-is: yt-dlp reads every program out of it,
+  // so the ffprobe question does not arise.
+  if (statSync(path).isDirectory()) return { path, ffprobeBeside: existsSync(join(path, "ffprobe")) };
+  return { path, ffprobeBeside: existsSync(join(dirname(path), "ffprobe")) };
+}
+
+/**
+ * What the boot log should say about it — nothing, when nothing is configured.
+ *
+ * Separate from {@link resolveFfmpegLocation} so that both halves are testable
+ * without a process: this one decides what a human is told, and every branch
+ * here is a case where believing the configuration would be wrong.
+ */
+export function describeFfmpegLocation(
+  binary: string | undefined,
+  location: FfmpegLocation | undefined,
+): string[] {
+  const value = binary?.trim();
+  if (!value) return [];
+  if (location === undefined) {
+    return [
+      `FFMPEG_BIN is set to ${value}, which does not resolve to an existing path — ` +
+        `yt-dlp is being left to find ffmpeg on PATH, and merges will fail if there is none.`,
+    ];
+  }
+  if (!location.ffprobeBeside) {
+    return [
+      `yt-dlp will use ${location.path}, but there is no ffprobe beside it — ` +
+        `yt-dlp looks for ffprobe next to ffmpeg and will not fall back to PATH.`,
+    ];
+  }
+  return [`yt-dlp will use ${location.path}`];
 }
 
 // --- The provider -----------------------------------------------------------

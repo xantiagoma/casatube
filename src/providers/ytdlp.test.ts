@@ -18,12 +18,14 @@ import {
   buildListArgs,
   buildProbeArgs,
   classifyError,
+  describeFfmpegLocation,
   createYtdlpProvider,
   parseDownloadLine,
   parseFilePathLine,
   parsePostProcessLine,
   isMediaFile,
   ProgressAccumulator,
+  resolveFfmpegLocation,
   translateInfo,
   translateListing,
   type SpawnOutcome,
@@ -1038,4 +1040,94 @@ test("🔴 a failed subtitle must not take the video down with it", () => {
 test("no subtitles requested means no reason to soften error handling", () => {
   const args = buildFetchArgs(plan({ subtitles: [] }), "/tmp/work", {});
   expect(args).not.toContain("--no-abort-on-error");
+});
+
+
+// --- FFMPEG_BIN reaching yt-dlp (2026-08-27) --------------------------------
+
+describe("--ffmpeg-location", () => {
+  /** An executable file, because `Bun.which` only answers with executables. */
+  async function bin(dir: string, name: string): Promise<string> {
+    const path = join(dir, name);
+    await writeFile(path, "#!/bin/sh\n", { mode: 0o755 });
+    return path;
+  }
+
+  test("fetch forwards it; probe and list, which never run ffmpeg, do not", () => {
+    const opts = { ffmpegLocation: "/opt/ff/ffmpeg" };
+    const args = buildFetchArgs(plan(), "/tmp/w", opts);
+    expect(args[args.indexOf("--ffmpeg-location") + 1]).toBe("/opt/ff/ffmpeg");
+    expect(buildProbeArgs("u", opts)).not.toContain("--ffmpeg-location");
+    expect(buildListArgs("u", opts)).not.toContain("--ffmpeg-location");
+  });
+
+  test("no location configured means the flag is absent, not empty", () => {
+    // An empty `--ffmpeg-location` is not the same as no flag: yt-dlp would
+    // read the next argument as the location.
+    expect(buildFetchArgs(plan(), "/tmp/w", {})).not.toContain("--ffmpeg-location");
+  });
+
+  test("a bare name is resolved on PATH, because the flag does not consult it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "casatube-ffmpeg-"));
+    try {
+      const path = await bin(dir, "ffmpeg");
+      expect(resolveFfmpegLocation("ffmpeg", { PATH: dir })).toEqual({
+        path,
+        ffprobeBeside: false,
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("🔴 a name that resolves to nothing yields nothing to forward", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "casatube-ffmpeg-"));
+    try {
+      // Forwarding it anyway is worse than forwarding nothing: yt-dlp answers
+      // a missing location with "Continuing without ffmpeg", so a typo would
+      // disable the merge that PATH would otherwise have served.
+      expect(resolveFfmpegLocation("ffmpeg", { PATH: dir })).toBeUndefined();
+      expect(resolveFfmpegLocation(join(dir, "nope"), { PATH: dir })).toBeUndefined();
+      expect(resolveFfmpegLocation("   ", { PATH: dir })).toBeUndefined();
+      expect(resolveFfmpegLocation(undefined, { PATH: dir })).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an ffprobe beside it is noticed, and its absence is reported", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "casatube-ffmpeg-"));
+    try {
+      const path = await bin(dir, "ffmpeg");
+      expect(resolveFfmpegLocation(path)?.ffprobeBeside).toBe(false);
+      expect(describeFfmpegLocation(path, resolveFfmpegLocation(path))[0]).toContain("no ffprobe beside it");
+
+      await bin(dir, "ffprobe");
+      expect(resolveFfmpegLocation(path)?.ffprobeBeside).toBe(true);
+      expect(describeFfmpegLocation(path, resolveFfmpegLocation(path))).toEqual([
+        `yt-dlp will use ${path}`,
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a directory is passed through as the directory it is", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "casatube-ffmpeg-"));
+    try {
+      await bin(dir, "ffprobe");
+      expect(resolveFfmpegLocation(dir)).toEqual({ path: dir, ffprobeBeside: true });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("nothing configured says nothing; something unresolvable says so loudly", () => {
+    expect(describeFfmpegLocation(undefined, undefined)).toEqual([]);
+    expect(describeFfmpegLocation("", undefined)).toEqual([]);
+    const lines = describeFfmpegLocation("/opt/typo/ffmpeg", undefined);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("/opt/typo/ffmpeg");
+    expect(lines[0]).toContain("does not resolve");
+  });
 });

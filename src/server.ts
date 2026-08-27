@@ -30,6 +30,7 @@ import { openJobQueue } from "./core/queue";
 import { SourceScheduler } from "./core/scheduler";
 import { SourceManager, registryDiscoverer } from "./core/sources";
 import { createDefaultRegistry } from "./providers/registry";
+import { describeFfmpegLocation, resolveFfmpegLocation } from "./providers/ytdlp";
 import { loadConfig, type ServerConfig } from "./api/config";
 import type { AppContext } from "./api/context";
 import { credentialRoutes } from "./api/credentials";
@@ -190,11 +191,26 @@ async function main(): Promise<StartedServer> {
 
   const credentials = new CredentialStore({ db, tempDir: config.tempDir });
 
+  /**
+   * yt-dlp's ffmpeg, made to be the same one as ours.
+   *
+   * Until this existed, `FFMPEG_BIN` meant two things: it configured *our*
+   * ffmpeg (HLS, thumbnails) and yt-dlp used whatever `PATH` held. The visible
+   * half of that failure was a `.webp` poster no media server would render —
+   * see `docs/DISCOVERIES.md`. Resolved rather than forwarded, because yt-dlp
+   * answers a location that does not exist by continuing without ffmpeg.
+   */
+  const ffmpegLocation = resolveFfmpegLocation(config.ffmpegBinary);
+  for (const line of describeFfmpegLocation(config.ffmpegBinary, ffmpegLocation)) {
+    console.warn(`[casatube] ffmpeg ${line}`);
+  }
+
   const registry = createDefaultRegistry({
     binary: config.ytdlpBinary,
     // The global fallback from PLAN §12. A per-site credential overrides it.
     cookiesFile: config.cookiesFile,
     credentials,
+    ffmpegLocation: ffmpegLocation?.path,
   });
   /**
    * The plugins that ship with CasaTube, put into the data directory.

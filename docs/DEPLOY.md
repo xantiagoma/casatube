@@ -263,8 +263,28 @@ leave segments behind for ever.
 | `HLS_MAX_SESSIONS` | `3` | Concurrent remuxes. Over the cap, a finished session is evicted; if all are busy the request gets a retryable 503 |
 | `HLS_IDLE_MS` | `3600000` | A **finished** session with nobody reading it is removed after this. This is disk |
 | `HLS_TRANSCODE_IDLE_MS` | `300000` | A session **still remuxing** with nobody reading it is killed after this. This is CPU: it means the tab was closed |
-| `FFMPEG_BIN` | `ffmpeg` | Both are in the image; set these only to point at a specific build |
+| `FFMPEG_BIN` | `ffmpeg` | Both are in the image; set these only to point at a specific build. Also reaches yt-dlp as `--ffmpeg-location` — see below |
 | `FFPROBE_BIN` | `ffprobe` | Used for the "can a browser already play this?" verdict, cached per file |
+
+**`FFMPEG_BIN` is resolved before it is forwarded.** yt-dlp does not consult
+`PATH` for `--ffmpeg-location`, and answers a location that does not exist with
+a *warning* — `Continuing without ffmpeg` — after which the merge fails and the
+thumbnail stays WebP. So a bare name is looked up on `PATH` here and an absolute
+path is required to exist; anything that resolves to neither is **not forwarded
+at all**, leaving yt-dlp's own lookup untouched. The boot log says which of the
+three happened:
+
+```
+[casatube] ffmpeg yt-dlp will use /usr/bin/ffmpeg
+[casatube] ffmpeg yt-dlp will use /opt/ff/ffmpeg, but there is no ffprobe beside it — …
+[casatube] ffmpeg FFMPEG_BIN is set to /opt/typo/ffmpeg, which does not resolve to an existing path — …
+```
+
+⚠️ The middle line is worth reading twice. Given a *file*, yt-dlp keeps it as
+ffmpeg and builds every other program's path as `dirname/<program>` — so
+pointing `FFMPEG_BIN` at a lone binary takes **ffprobe** away from yt-dlp even
+though `PATH` has one. Point it at a directory holding both, or at a build that
+ships both side by side.
 
 ### Thumbnails
 

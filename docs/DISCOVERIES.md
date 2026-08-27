@@ -517,9 +517,20 @@ rather than insisting on the conversion having happened. The image has
 ffmpeg on `PATH`, so production converts; a development machine may not, and
 losing the picture over the format would be the wrong trade.
 
-⚠️ Worth fixing separately: passing `--ffmpeg-location` when `FFMPEG_BIN` is set
-would make one variable mean one thing. Today `FFMPEG_BIN` configures *our*
-ffmpeg (HLS, thumbnails) and yt-dlp's is whatever `PATH` finds.
+✅ **Fixed (2026-08-27).** `FFMPEG_BIN` now reaches yt-dlp as
+`--ffmpeg-location`, so one variable means one thing. The fix is not a
+pass-through, and the reason is a second trap: yt-dlp answers a location that
+does not exist with a *warning* and continues **without ffmpeg**, so forwarding
+an unresolvable value is worse than forwarding nothing — a typo would disable
+the merge that `PATH` would have served. `resolveFfmpegLocation` therefore looks
+a bare name up on `PATH` (which is exactly what the flag does not consult),
+requires a path to exist, and returns `undefined` otherwise.
+
+📌 And a third, found while writing it: given a **file**, yt-dlp keeps that file
+as ffmpeg and derives every other program as `dirname(location)/<program>`. An
+ffmpeg with no ffprobe beside it therefore takes ffprobe *away* — yt-dlp looks
+at a path that does not exist instead of falling back to `PATH`. The boot log
+says so rather than leaving it to be discovered.
 
 ## An import cycle is a runtime error that `tsc` is perfectly happy with (2026-08-27)
 
