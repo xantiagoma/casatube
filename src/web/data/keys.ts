@@ -26,4 +26,5 @@ export const keys = {
 
   notifications: (unreadOnly: boolean) => ["notifications", unreadOnly] as const,
   plugins: ["plugins"] as const,
+  pluginDocs: ["plugins", "docs"] as const,
 } as const;

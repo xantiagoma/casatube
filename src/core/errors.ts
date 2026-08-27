@@ -128,6 +128,32 @@ export class LocalProbeFailed extends TaggedError("LocalProbeFailed")<{
   detail: string;
 }> {}
 
+/**
+ * This file cannot be made playable in a browser — and saying so is the point.
+ *
+ * ⚠️ Not a defect and not a missing feature: CasaTube remuxes, it does not
+ * re-encode video (see the header of `core/hls.ts`). A VP9 stream has no
+ * MPEG-TS mapping, so the only way to deliver it as HLS would be an hour of CPU
+ * spent producing a worse picture than the file already holds. The honest answer
+ * is this error and a download button, not a spinner that never resolves.
+ */
+export class TranscodeUnavailable extends TaggedError("TranscodeUnavailable")<{
+  path: string;
+  detail: string;
+}> {}
+
+/**
+ * Every remux slot is taken. Temporary, and worth coming back for.
+ *
+ * Distinct from {@link TranscodeUnavailable} because the reactions are
+ * opposite: this one is worth retrying in a minute, that one never will be.
+ */
+export class TranscodeBusy extends TaggedError("TranscodeBusy")<{
+  path: string;
+  active: number;
+  limit: number;
+}> {}
+
 export class NotFound extends TaggedError("NotFound")<{
   what: string;
   id: string;
@@ -170,6 +196,9 @@ export type LibraryError =
   | NotFound
   | LocalProbeFailed
   | Timeout;
+
+/** What on-demand playback can fail with, on top of the library's own faults. */
+export type PlaybackError = TranscodeUnavailable | TranscodeBusy | LibraryError;
 
 export type QueueError = NotFound | InvalidTransition | LeaseLost;
 

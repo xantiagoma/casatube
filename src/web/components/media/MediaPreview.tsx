@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 /**
  * The player, in both of the moments PLAN §8 asks for it:
  *
@@ -5,14 +6,16 @@
  *    duration, so the card shows what is about to be queued. YouTube and the
  *    rest hand out no directly playable URL, so this is a poster, not a stream.
  * 2. **After downloading** — the library item is a file on the server, and
- *    `src` points at the endpoint that would serve its bytes.
+ *    `src` points at `GET /api/library/file`, which streams it and answers
+ *    range requests, so the player can seek.
  *
- * ⚠️ **There is no media-streaming endpoint in this build.** `GET
- * /api/library/file` does not exist, so playback of a finished file fails at
- * the `<video>` element and `MediaPlayerError` says so in words rather than
- * leaving a black rectangle. The component is written against the URL it will
- * have, so adding the route is the only change needed — nothing here is
- * pretending to work.
+ * ⚠️ **No `src` is a real state, and it means two different things.** Before a
+ * download there is nothing to play — YouTube hands out no playable URL — and
+ * after one there may be a container no browser will open, MKV above all.
+ * Either way the answer is the poster plus `unplayableHint` **without a play
+ * button**: a triangle that does nothing when pressed is worse than no
+ * triangle, and the caller's hint is the only place that knows which of the two
+ * happened.
  */
 import { Film, Music, Play } from "lucide-react";
 
@@ -36,6 +39,13 @@ import { cn } from "@/lib/utils";
 import { formatDuration } from "../../data/format";
 
 export interface MediaPreviewProps {
+  /**
+   * The source is an HLS playlist, so it needs `hls.js` unless the browser
+   * plays HLS natively. Set by the caller, which knows whether the file was
+   * served directly or remuxed.
+   */
+  hls?: boolean;
+
   /** Absent when nothing is playable — a probe result, or a build with no streaming route. */
   src?: string | null;
   poster?: string | null;
@@ -69,13 +79,22 @@ function Poster({
           <Icon className="size-8" aria-hidden />
         </div>
       )}
-      <div className="absolute inset-0 grid place-items-center bg-black/15">
-        <span className="grid size-12 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm">
-          <Play className="size-5 translate-x-0.5 fill-current" aria-hidden />
-        </span>
-      </div>
+      {/* No play affordance when we already know nothing will play. */}
+      {hint ? null : (
+        <div className="absolute inset-0 grid place-items-center bg-black/15">
+          <span className="grid size-12 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm">
+            <Play className="size-5 translate-x-0.5 fill-current" aria-hidden />
+          </span>
+        </div>
+      )}
       {duration ? (
-        <span className="absolute right-2 bottom-2 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-white tabular-nums">
+        <span
+          className={cn(
+            "absolute right-2 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-white tabular-nums",
+            // Clear of the hint band, which owns the bottom edge when present.
+            hint ? "bottom-8" : "bottom-2",
+          )}
+        >
           {formatDuration(duration)}
         </span>
       ) : null}
@@ -87,6 +106,7 @@ function Poster({
 }
 
 export function MediaPreview({
+  hls = false,
   src,
   poster,
   title,
@@ -95,6 +115,43 @@ export function MediaPreview({
   className,
   unplayableHint,
 }: MediaPreviewProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  /**
+   * Attach `hls.js` when the source is a playlist the browser cannot open
+   * itself.
+   *
+   * Safari plays HLS natively and that is where CasaTube is mostly watched, but
+   * Chromium answers "maybe" to `canPlayType` and then fails on exactly the
+   * case that matters: a playlist ffmpeg is still writing. So anything
+   * non-native goes through `hls.js`.
+   *
+   * The import is dynamic because it is ~400 KB and most sessions never open a
+   * file that needs it.
+   */
+  useEffect(() => {
+    if (!hls || !src) return;
+    let destroy: (() => void) | undefined;
+    let cancelled = false;
+
+    void import("hls.js").then(({ default: Hls }) => {
+      // The panel may have closed, or moved to another file, while the import
+      // resolved. Attaching then would leave a player on a detached element.
+      if (cancelled || !videoRef.current || !Hls.isSupported()) return;
+      // The playlist grows while ffmpeg writes it, so a long buffer would sit
+      // waiting for segments that do not exist yet.
+      const player = new Hls({ maxBufferLength: 30 });
+      player.loadSource(src);
+      player.attachMedia(videoRef.current);
+      destroy = () => player.destroy();
+    });
+
+    return () => {
+      cancelled = true;
+      destroy?.();
+    };
+  }, [hls, src]);
+
   if (!src) {
     return (
       <div className={className}>
@@ -114,7 +171,8 @@ export function MediaPreview({
       className={cn("h-auto w-full overflow-hidden rounded-lg border bg-black", className)}
     >
       <MediaPlayerVideo
-        src={src}
+        ref={videoRef}
+        src={hls ? undefined : src}
         poster={poster ?? undefined}
         preload="metadata"
         playsInline

@@ -44,6 +44,10 @@ const STATUS_BY_TAG: Record<string, number> = {
   // Library
   MountUnavailable: 503,
   PathOutsideRoot: 400,
+  LocalProbeFailed: 502,
+  // Playback
+  TranscodeUnavailable: 422,
+  TranscodeBusy: 503,
   // Worker
   StageFailed: 500,
   Cancelled: 409,
@@ -54,6 +58,8 @@ const STATUS_BY_TAG: Record<string, number> = {
 /** Errors where repeating the identical request is worth a try. */
 const RETRYABLE_TAGS = new Set([
   "ProbeFailed",
+  // Every slot is busy right now; in a minute one will not be.
+  "TranscodeBusy",
   "FetchFailed",
   "RateLimited",
   "Blocked",
@@ -99,6 +105,12 @@ function describe(error: Taggedish): string {
       return `The library is unreachable: ${String(error.detail ?? "")}`.trim();
     case "PathOutsideRoot":
       return "That destination escapes the library root.";
+    case "LocalProbeFailed":
+      return `ffprobe could not read that file: ${String(error.detail ?? "unknown reason")}`;
+    case "TranscodeUnavailable":
+      return `This file cannot be played in a browser: ${String(error.detail ?? "unknown reason")}`;
+    case "TranscodeBusy":
+      return `All ${String(error.limit ?? "the")} playback slots are in use. Try again in a moment.`;
     case "Timeout":
       return `${String(error.what ?? "The operation")} timed out.`;
     case "DiskFull":

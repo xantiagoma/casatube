@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   Download,
   HardDrive,
+  House,
   LayoutGrid,
   Library as LibraryIcon,
   ListVideo,
@@ -79,8 +80,12 @@ export function SidebarContent({
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       <div className={cn("flex items-center gap-2.5 px-4 py-4", collapsed && "justify-center px-2")}>
+        {/* A house, because the name is *Casa*Tube and this is the mark for the
+            whole app. A download arrow was one of the eight screens wearing the
+            badge of all of them — and it is the icon the Downloads item in the
+            nav below already uses. */}
         <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground">
-          <Download className="size-4.5" aria-hidden />
+          <House className="size-4.5" aria-hidden />
         </span>
         {!collapsed && (
           <span className="min-w-0 flex-1">

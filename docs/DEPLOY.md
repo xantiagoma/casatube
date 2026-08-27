@@ -196,6 +196,28 @@ a destination that stays down for a week must not quietly fill the data volume.
 | `MAX_CONCURRENT_DOWNLOADS` | `3` | Concurrent downloads. Limits the download stage only (PLAN §17) |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
+### Browser playback (on-demand HLS)
+
+No browser opens Matroska, so an MKV is remuxed to HLS when someone presses
+play. **The video is copied, never re-encoded** — only the audio is converted,
+and only when it has to be — so this costs a few percent of one core, not a
+transcode. A file a browser already plays (MP4 of H.264 and AAC) is served
+straight from `GET /api/library/file` and none of this happens.
+
+⚠️ **It writes real bytes to `TEMP_DIR`.** The 67 MB music video below leaves
+71 MB of segments; a film leaves several hundred. `GET /api/library/hls/sessions`
+reports what is in use. The directory is wiped on every start, so a crash cannot
+leave segments behind for ever.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `HLS_SEGMENT_SECONDS` | `6` | Target segment length. ⚠️ Approximate — with the video copied, cuts land on keyframes, so real segments vary (3–10 s is normal) |
+| `HLS_MAX_SESSIONS` | `3` | Concurrent remuxes. Over the cap, a finished session is evicted; if all are busy the request gets a retryable 503 |
+| `HLS_IDLE_MS` | `3600000` | A **finished** session with nobody reading it is removed after this. This is disk |
+| `HLS_TRANSCODE_IDLE_MS` | `300000` | A session **still remuxing** with nobody reading it is killed after this. This is CPU: it means the tab was closed |
+| `FFMPEG_BIN` | `ffmpeg` | Both are in the image; set these only to point at a specific build |
+| `FFPROBE_BIN` | `ffprobe` | Used for the "can a browser already play this?" verdict, cached per file |
+
 ### yt-dlp
 
 | Variable | Default | What it does |

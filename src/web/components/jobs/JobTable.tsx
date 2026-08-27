@@ -22,14 +22,22 @@ import { isTerminal } from "../status";
 import { StageTrack } from "./StageTrack";
 import { formatLabel, jobTitle, progressOf } from "./job-view";
 
+/**
+ * The thumbnail on a row.
+ *
+ * **128 px wide, 16:9.** It was 64, which is small enough that a video is a
+ * coloured smudge — and the thumbnail is how you recognise a row at a glance,
+ * so at that size the column was costing space without paying for it. The
+ * duration chip grew with it, for the same reason.
+ */
 function Thumb({ job }: { job: Job }) {
   return (
-    <span className="relative block h-9 w-16 shrink-0 overflow-hidden rounded bg-muted">
+    <span className="relative block h-18 w-32 shrink-0 overflow-hidden rounded-md bg-muted">
       {job.thumbnail ? (
         <img src={job.thumbnail} alt="" className="size-full object-cover" loading="lazy" />
       ) : null}
       {job.duration ? (
-        <span className="absolute right-0.5 bottom-0.5 rounded bg-black/70 px-1 text-[9px] leading-tight text-white tabular-nums">
+        <span className="absolute right-1 bottom-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] leading-tight text-white tabular-nums">
           {formatDuration(job.duration)}
         </span>
       ) : null}

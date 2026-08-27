@@ -5,6 +5,197 @@ session with none of this context. Newest first.
 
 ---
 
+## 2026-08-27 — MKVs play in the browser, and you can jump to minute three
+
+> «los MKV no se reproducen… y avanzar en el vídeo me importa.»
+
+The library is full of MKVs, because that is what yt-dlp writes when it merges
+video and audio. No browser opens Matroska, and the audio inside is usually
+Opus, which Safari — the only browser on the iPad this is watched from — does
+not decode even in a container it accepts. So the Library screen offered a
+download and nothing else.
+
+Now there is **on-demand HLS**: the H.264 stream is *copied* into MPEG-TS
+segments, only the audio is converted, and the playlist keeps every segment so
+you can jump forwards **and back**.
+
+**511 tests, 0 failures** (was 450; +61). `tsc` clean.
+
+### What was built
+
+| Where | What |
+|---|---|
+| `src/core/hls.ts` | The verdict, the ffmpeg command, sessions, limits, cleanup |
+| `src/api/hls.ts` | `/api/library/hls/{playback,index.m3u8,:segment,sessions}` |
+| `src/core/errors.ts` | `TranscodeUnavailable` (422), `TranscodeBusy` (503) |
+| `src/api/config.ts` | `FFMPEG_BIN`, `FFPROBE_BIN`, `HLS_*` |
+
+### The decision that costs nothing: asking first
+
+`GET /api/library/hls/playback?path=` answers `direct`, `hls` or `unsupported`
+and starts **nothing**. An MP4 of H.264 and AAC is `direct` — served by the
+existing `GET /api/library/file`, which already answers range requests, at zero
+CPU and zero disk. Only what a browser refuses is remuxed. The verdict is cached
+per **(size, mtime)**, not per path: a re-download over the same filename is a
+different file, and a cache keyed on the name would go on describing the old one.
+
+⚠️ `unsupported` is a real answer, not a gap. VP9 and AV1 have **no MPEG-TS
+mapping**, so `-c:v copy` is impossible and the only alternative is re-encoding
+the video — an hour of CPU on a box that also runs Home Assistant and Frigate,
+to produce a worse picture than the file already holds. Those get the download
+button and a sentence saying why.
+
+### 🔴 Three faults found by running it, not by reading it
+
+All three were invisible to the tests as written, and all three were found by
+pointing a real browser at the real 67 MB MKV.
+
+**1. Playback started at 3:28 of 4:22.** A playlist that ffmpeg is still writing
+has no `#EXT-X-ENDLIST`, which Chrome reads as *live* — and a live stream starts
+at the live edge. Nothing errored; it played the wrong part of the video. Fixed
+by injecting `#EXT-X-START:TIME-OFFSET=0,PRECISE=YES` into the playlist we serve.
+
+**2. A segment was served while ffmpeg was still writing it.** "The file exists"
+is not "the segment is finished": ffmpeg creates `00002.ts` and fills it over the
+next fraction of a second, and a player handed those first bytes gets a truncated
+MPEG-TS and fails the whole stream — `DEMUXER_ERROR_COULD_NOT_PARSE` at 0:15.
+The fix is to treat **the playlist as the authority**: ffmpeg appends a segment's
+`#EXTINF` line only after closing the file, so a name that appears in
+`index.m3u8` is complete, always. That one rule also gives the "wait a moment if
+it is being written" behaviour for free.
+
+**3. Chrome says it plays HLS, and does not.** See `docs/DISCOVERIES.md`.
+
+### The limits, because this writes real bytes to real disk
+
+The Dua Lipa MKV — 66.7 MB, 4:22, 1080p — leaves **71.1 MB** of `.ts` in 43
+segments. A film leaves several hundred. So:
+
+- **One session per file.** `ensure()` is synchronous up to `sessions.set`, and
+  that *is* the mutual exclusion: three simultaneous requests start one ffmpeg.
+  An `await` above that line would reopen the window and put two ffmpegs in the
+  same directory, corrupting the playlist as well as doubling the CPU.
+- **Three sessions at once** (`HLS_MAX_SESSIONS`). Over the cap, a *finished*
+  session is evicted to make room; if they are all mid-remux the answer is
+  `TranscodeBusy` (503, retryable), never a fourth ffmpeg.
+- **Two idle deadlines**, because they cost different things. A finished session
+  is disk: an hour (`HLS_IDLE_MS`). A session still remuxing that nobody is
+  reading from is **CPU**: five minutes (`HLS_TRANSCODE_IDLE_MS`), because that
+  is a closed tab, and an orphaned remux is the failure nobody would notice.
+- **A wipe on startup.** A crash leaves segments that no in-memory session knows
+  about and nothing would ever collect. Verified: 72 MB left behind by a hard
+  kill was gone on the next boot.
+- `GET /api/library/hls/sessions` reports the bytes, so the disk is visible
+  before it is full.
+
+### Measured, against the real file
+
+| | |
+|---|---|
+| Playlist with a playable first segment | **0.54 s** from a cold request |
+| Whole 4:22 remux | **12.3 s** — video copied, only Opus→AAC encoded |
+| Disk left | **71.1 MB**, 43 segments, 3.0–9.6 s each |
+| Seek to 3:00 | **212 ms**, then played on normally |
+| Seek back to 0:30 | **215 ms** |
+
+⚠️ Segments are 3.0–9.6 s, not 6.0. That is `-c:v copy` doing its job: cuts land
+**on keyframes**, because a segment that does not start on one decodes to grey
+mush. Forcing exactly six seconds would mean re-encoding.
+
+### `src/web`, touched as little as possible
+
+Another agent owns that folder this session. Three things only, all in the two
+places that name the route: `libraryHlsUrl()` and `canPlayHlsNatively()` in
+`data/library.ts`, and `playableUrl()` in `screens/Library.tsx` now returning the
+HLS URL instead of `null`. The download button was already there — not duplicated.
+
+---
+
+## 2026-08-27 — Seven things found by using it
+
+Santi used the built app and came back with seven. Three were red: the player,
+the double close button, and the two inspector tabs that did nothing.
+
+**455 tests, 0 failures** (was 445; +10 new). `tsc` clean.
+React Doctor **58 / 100** against **57 / 100** on `HEAD` — nothing here made it
+worse, and none of the reported issues is in a file this work touched.
+
+### 🔴 The player was waiting for an endpoint that already existed
+
+`playableUrl()` returned `null` and the panel said *"Playback needs a
+media-streaming endpoint, which this build's API does not have"*. `GET
+/api/library/file` has ranges, 206s and `Content-Range`, and has had them for a
+while: the sentence was **stale documentation rendered as a feature flag**.
+
+Now `src` is `libraryFileUrl(item.path)` and the MP4 plays — verified in a
+browser, playing and seeking (`currentTime` 3.9 → 16.9 across a seek, `video.error`
+null).
+
+⚠️ **But `null` still happens, and it is now about the container.** No browser
+plays Matroska, whatever is inside it, so an MKV gets the poster, no play
+triangle, and *"MKV is not playable in browsers — download it instead."*
+`isBrowserPlayable` (in `data/library.ts`) is deliberately conservative — `.mov`
+is not on the list, because a download offered where one browser could have
+played is a far smaller failure than a play button that does nothing.
+
+### The download button, and why it is an anchor
+
+`?download=1` on the same route swaps `Content-Disposition: inline` for
+`attachment`, with **both** filename forms — the quoted ASCII one and RFC 5987's
+`filename*` — because library names carry accents and quotation marks. It rides
+on the 206 too: a resumed download that loses its name lands as `file.bin`.
+
+In the panel it is an `<a download>`, not a button with a handler: the browser's
+own save, which shows in the download manager and needs no JavaScript. Verified
+by downloading through the browser — byte-identical to the file on disk.
+
+### 🔴 Tasks and Logs did nothing on the Downloads screen
+
+```tsx
+<JobInspector job={selected} tab="details" onTab={() => undefined} … />
+```
+
+The tabs are controlled, so this rendered three tabs that behaved as one: the
+click changed a value the component overwrote with the same constant. The Queue
+had had it right all along — `panel` in the URL — and Downloads had a copy with
+the wiring cut. `DownloadsSearch.panel` now exists and the URL carries
+`?panel=logs`.
+
+Worth naming because of *which* screen it was: this is where you go to find out
+why a download failed, and the log was on the tab that could not be opened.
+
+### 🔴 Two close buttons on every side panel
+
+`SheetContent` renders its own close and every panel inside already had one, so
+the responsive view had two X's a finger apart — which is how it reads on an
+iPad. `showCloseButton={false}` on the three sheets that wrap a panel (Queue,
+Downloads, Library). The navigation sheet keeps its own: nothing inside it
+closes anything.
+
+### The rest
+
+- **Thumbnails are 128 px wide**, twice what they were. At 64 a video is a
+  coloured smudge, and recognising the row is the whole job of that column.
+- **The plugins screen says how to start.** "No plugins installed" was the whole
+  message. Now: the annotated template as a **downloadable file**
+  (`GET /api/plugins/template`), the documentation **served** (`/api/plugins/docs`),
+  and the **exact directory**, which comes from the server because it depends on
+  `DATA_DIR`. See `docs/DISCOVERIES.md` for why those are string constants in
+  `src/` rather than the repository's own `plugins/README.md`.
+- **A house in the sidebar**, in place of the download arrow. The name is
+  *Casa*Tube, and the arrow was one screen's icon wearing the badge of all of
+  them.
+
+### The test that is worth keeping
+
+`plugins.test.ts` downloads the template through the route, writes it into a
+plugins directory, reloads the runtime and asserts it comes up. A template that
+reads well and does not load is worse than none — it fails on someone else's
+machine, after a restart, in a file they were told to trust. That test is also
+what caught the plugin-default described in `docs/DISCOVERIES.md`.
+
+---
+
 ## 2026-08-27 — The codec stopped being a decision taken for you
 
 > «hoy el códec de vídeo se muestra pero no se puede elegir.»

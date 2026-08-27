@@ -49,7 +49,7 @@ async function boot(): Promise<void> {
     log: () => {},
   });
   await runtime.load();
-  app = new Elysia({ prefix: "/api" }).use(pluginRoutes(runtime));
+  app = new Elysia({ prefix: "/api" }).use(pluginRoutes(runtime, dir));
 }
 
 async function get(path: string): Promise<Response> {
@@ -103,9 +103,62 @@ describe("GET /api/plugins", () => {
     expect(broken?.file).toBe("broken.ts");
   });
 
-  test("no plugins is an empty list", async () => {
+  test("no plugins is an empty list — and still says where they would go", async () => {
     await boot();
-    expect((await (await get("/plugins")).json()) as unknown).toEqual({ plugins: [] });
+    // 🔴 `dir` is on the empty answer too. That is the state where it matters:
+    // a screen saying "no plugins installed" and nothing else cannot be acted
+    // on, and the path depends on DATA_DIR, which only the server knows.
+    expect((await (await get("/plugins")).json()) as unknown).toEqual({ plugins: [], dir });
+  });
+});
+
+describe("starting from nothing", () => {
+  test("GET /api/plugins/template is a saveable file, named", async () => {
+    await boot();
+
+    const response = await get("/plugins/template");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/plain");
+    expect(response.headers.get("content-disposition")).toBe(`attachment; filename="casatube-plugin.ts"`);
+
+    const source = await response.text();
+    // It has to be a plugin, not prose about plugins.
+    expect(source).toContain("export default plugin;");
+    expect(source).toContain("hooks:");
+    // And it has to name *this* installation's directory, not a placeholder.
+    expect(source).toContain(dir);
+    expect(source).not.toContain("__PLUGINS_DIR__");
+  });
+
+  test("GET /api/plugins/docs answers with the reference", async () => {
+    await boot();
+
+    const body = (await (await get("/plugins/docs")).json()) as { markdown: string; filename: string; dir: string };
+    expect(body.dir).toBe(dir);
+    expect(body.filename).toBe("casatube-plugin.ts");
+    expect(body.markdown).toContain("job:completed");
+    expect(body.markdown).toContain(dir);
+  });
+
+  test("the template is a plugin the runtime actually accepts", async () => {
+    // ⚠️ The instrument that matters. A template that reads well and does not
+    // load is worse than none: it fails on someone else's machine, after a
+    // restart, with an error about a file they were told to trust. So the file
+    // the button hands over is written into a plugins directory and loaded.
+    await boot();
+    const source = await (await get("/plugins/template")).text();
+    write("from-template.ts", source);
+    await boot();
+
+    const body = (await (await get("/plugins")).json()) as { plugins: PluginStatus[] };
+    const loaded = body.plugins.find((item) => item.file === "from-template.ts");
+
+    // ⚠️ `active`, not `disabled`: a plugin the runtime has never seen defaults
+    // to enabled, so dropping a file in is enough to make it run. Worth being
+    // exact about — it is what the template and the screen have to say.
+    expect(loaded?.state).toBe("active");
+    expect(loaded?.error).toBeUndefined();
+    expect(loaded?.name).toBe("my-plugin");
   });
 });
 

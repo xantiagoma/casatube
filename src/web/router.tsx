@@ -62,6 +62,7 @@ const downloadsRoute = createRoute({
   path: "/downloads",
   validateSearch: (search: Record<string, unknown> & SearchSchemaInput): DownloadsSearch => ({
     tab: oneOf(search.tab, DOWNLOAD_TABS, "active"),
+    panel: oneOf(search.panel, INSPECTOR_TABS, "details"),
     ...(text(search.q) !== undefined ? { q: text(search.q)! } : {}),
     ...(text(search.job) !== undefined ? { job: text(search.job)! } : {}),
   }),

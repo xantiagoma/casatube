@@ -173,6 +173,81 @@ describe("GET /api/library/item", () => {
   });
 });
 
+describe("GET /api/library/file", () => {
+  test("serves the whole file, marked inline so a player can use it", async () => {
+    put("Videos/clip.mp4", "0123456789");
+
+    const response = await get("/library/file?path=Videos%2Fclip.mp4");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("accept-ranges")).toBe("bytes");
+    expect(response.headers.get("content-length")).toBe("10");
+    expect(response.headers.get("content-disposition")).toBe("inline");
+    expect(await response.text()).toBe("0123456789");
+  });
+
+  test("a range is a 206 whose content-length is the slice, not the file", async () => {
+    // The whole point of the route: without this a player cannot seek, and a
+    // 206 that claims the full length makes it give up trying.
+    put("Videos/clip.mp4", "0123456789");
+
+    const response = await appFor().handle(
+      new Request("http://local/api/library/file?path=Videos%2Fclip.mp4", { headers: { range: "bytes=2-5" } }),
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe("bytes 2-5/10");
+    expect(response.headers.get("content-length")).toBe("4");
+    expect(await response.text()).toBe("2345");
+  });
+
+  test("`?download=1` is the same bytes told to save", async () => {
+    put("Videos/clip.mp4", "0123456789");
+
+    const response = await get("/library/file?path=Videos%2Fclip.mp4&download=1");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-disposition")).toBe(
+      `attachment; filename="clip.mp4"; filename*=UTF-8''clip.mp4`,
+    );
+    expect(await response.text()).toBe("0123456789");
+  });
+
+  test("the download name survives accents and quotes", async () => {
+    // Both forms, because a client that reads only the quoted one must still
+    // get something usable — and an unescaped quote there would truncate it.
+    // (A backslash cannot be tested here: `safeDestination` refuses one in the
+    // path before this route ever sees it.)
+    const name = 'Adiós "x" ñ.mp4';
+    put(`Videos/${name}`, "z");
+
+    const response = await get(`/library/file?path=${encodeURIComponent(`Videos/${name}`)}&download=1`);
+    const header = response.headers.get("content-disposition") ?? "";
+
+    expect(header.startsWith(`attachment; filename="Adi_s _x_ _.mp4"`)).toBe(true);
+    expect(header).toContain(`filename*=UTF-8''${encodeURIComponent(name)}`);
+  });
+
+  test("`?download` also rides on a resumed (ranged) request", async () => {
+    put("Videos/clip.mp4", "0123456789");
+
+    const response = await appFor().handle(
+      new Request("http://local/api/library/file?path=Videos%2Fclip.mp4&download=1", {
+        headers: { range: "bytes=0-1" },
+      }),
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-disposition")).toContain("attachment");
+  });
+
+  test("a file outside the root is refused before it is opened", async () => {
+    expect((await get("/library/file?path=..%2Foutside.mkv")).status).toBe(400);
+  });
+
+  test("a file that is not there is 404", async () => {
+    expect((await get("/library/file?path=missing.mp4")).status).toBe(404);
+  });
+});
+
 describe("nothing outside the root", () => {
   const escapes = ["../outside.mkv", "youtube/../../outside.mkv", "/etc/passwd", "..\\outside.mkv"];
 

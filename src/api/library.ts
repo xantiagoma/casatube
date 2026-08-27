@@ -54,6 +54,21 @@ function flag(value: string | undefined, fallback: boolean): boolean {
   return !["false", "0", "no", "off"].includes(value.trim().toLowerCase());
 }
 
+/**
+ * `Content-Disposition` for a file being served.
+ *
+ * Two filename forms on purpose: the quoted one is all a client reading only
+ * ASCII can use, and `filename*` is the RFC 5987 form every current browser
+ * prefers. Library names routinely carry accents, emoji and quotation marks —
+ * "Dua Lipa - Love Again (Official Music Video).mkv" is the tame end of it —
+ * and a single ASCII form turns those into mojibake or into a truncated name.
+ */
+export function contentDisposition(name: string, download: boolean): string {
+  if (!download) return "inline";
+  const ascii = name.replace(/["\\]/g, "_").replace(/[^\x20-\x7e]/g, "_");
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
 export function libraryRoutes(ctx: AppContext) {
   const { config } = ctx;
   const library = openLibrary({
@@ -112,7 +127,8 @@ export function libraryRoutes(ctx: AppContext) {
        * never does it and this route does it one item at a time.
        */
       /**
-       * Stream a file so the browser can play it without leaving CasaTube.
+       * Stream a file so the browser can play it — or save it — without
+       * leaving CasaTube.
        *
        * `Bun.file` gives a lazy handle, so returning it streams rather than
        * loading the file into memory — a 4 GB video would otherwise be a 4 GB
@@ -132,13 +148,20 @@ export function libraryRoutes(ctx: AppContext) {
           const absolute = join(config.libraryDir, path.value);
           const file = Bun.file(absolute);
           const size = found.value.size;
+          const type = file.type || "application/octet-stream";
+          const disposition = contentDisposition(found.value.name, flag(query.download, false));
 
           const range = request.headers.get("range");
           const match = range ? /bytes=(\d*)-(\d*)/.exec(range) : null;
           if (!match) {
-            set.headers["accept-ranges"] = "bytes";
-            set.headers["content-length"] = String(size);
-            return new Response(file);
+            return new Response(file, {
+              headers: {
+                "accept-ranges": "bytes",
+                "content-length": String(size),
+                "content-type": type,
+                "content-disposition": disposition,
+              },
+            });
           }
 
           const start = match[1] ? Number(match[1]) : 0;
@@ -149,13 +172,32 @@ export function libraryRoutes(ctx: AppContext) {
             return new Response(null, { status: 416 });
           }
 
-          set.status = 206;
-          set.headers["accept-ranges"] = "bytes";
-          set.headers["content-range"] = `bytes ${start}-${end}/${size}`;
-          set.headers["content-length"] = String(end - start + 1);
-          return new Response(file.slice(start, end + 1));
+          // ⚠️ The headers go on the Response, not on `set`: Elysia derives
+          // content-length from the body it is handed, and a 206 whose
+          // content-length claims the whole file makes a player give up on
+          // seeking. Verified — `set.headers` lost this one.
+          const slice = file.slice(start, end + 1);
+          return new Response(slice, {
+            status: 206,
+            headers: {
+              "accept-ranges": "bytes",
+              "content-range": `bytes ${start}-${end}/${size}`,
+              "content-length": String(end - start + 1),
+              "content-type": type,
+              // ⚠️ Also on the 206: a download manager that resumes sends a
+              // range, and losing the filename there is how a resumed download
+              // lands as `file.bin`.
+              "content-disposition": disposition,
+            },
+          });
         },
-        { query: t.Object({ path: t.String() }) },
+        {
+          query: t.Object({
+            path: t.String(),
+            /** `?download=1` — same bytes, told to save rather than to play. */
+            download: t.Optional(t.String()),
+          }),
+        },
       )
 
       .get(

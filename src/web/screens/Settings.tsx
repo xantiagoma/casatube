@@ -19,7 +19,10 @@
  */
 import { useState } from "react";
 import {
+  BookOpen,
   CircleAlert,
+  Download,
+  FolderOpen,
   Info,
   Lock,
   Monitor,
@@ -32,6 +35,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -41,7 +45,7 @@ import { PageHeader } from "../components/layout/AppShell";
 import { formatBytes, formatDateTime } from "../data/format";
 import { useTrash } from "../data/library";
 import { usePurgeNotifications } from "../data/notifications";
-import { usePlugins, useTogglePlugin } from "../data/plugins";
+import { PLUGIN_TEMPLATE_URL, usePluginDocs, usePlugins, useTogglePlugin } from "../data/plugins";
 import { useJobDefaults } from "../data/queries";
 import { useHealth, useStorage } from "../data/stats";
 import { useTheme, type ThemeChoice } from "../data/theme";
@@ -203,6 +207,107 @@ function PathsCard() {
   );
 }
 
+/**
+ * How to write the first one.
+ *
+ * 🔴 "No plugins installed" was the whole screen, and it is the one state where
+ * the screen has something to teach: a plugin is a file in a directory, and
+ * every part of that sentence — which file, which directory, what has to be in
+ * it — was missing. The three answers are here, in the order they are needed,
+ * and none of them is a link off to somewhere that might not exist.
+ *
+ * It shows below the list as well as instead of it: the second plugin is
+ * written the same way as the first.
+ */
+function PluginStart({ dir }: { dir: string }) {
+  const [reading, setReading] = useState(false);
+  const docs = usePluginDocs(reading);
+  const where = dir === "" ? "DATA_DIR/plugins" : dir;
+
+  return (
+    <div className="rounded-lg border border-dashed p-4">
+      <p className="flex items-center gap-2 text-sm font-medium">
+        <Puzzle className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        Writing one
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        A plugin is <strong>one TypeScript file</strong>. Bun runs it directly — no build step, no
+        <code className="mx-1">npm install</code>. It declares what it matches and where it hooks in, and that
+        declaration is read before any of its code runs.
+      </p>
+
+      <ol className="mt-3 space-y-2.5 text-xs">
+        <li className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+          <span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-[10px] font-semibold">
+            1
+          </span>
+          <span className="text-muted-foreground">Start from the annotated template</span>
+          {/* An anchor with `download`, not a fetch: the browser saves it, and
+              the server's Content-Disposition gives it its name. */}
+          <Button asChild size="sm" variant="outline" className="h-7 gap-1.5">
+            <a href={PLUGIN_TEMPLATE_URL} download="casatube-plugin.ts">
+              <Download className="size-3.5" aria-hidden />
+              casatube-plugin.ts
+            </a>
+          </Button>
+        </li>
+
+        <li className="flex items-start gap-2">
+          <span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-[10px] font-semibold">
+            2
+          </span>
+          <span className="min-w-0">
+            <span className="text-muted-foreground">Save it in this exact folder, on the server:</span>
+            <span className="mt-1 flex items-start gap-1.5">
+              <FolderOpen className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              <code className="min-w-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] break-all">
+                {where}/my-plugin.ts
+              </code>
+            </span>
+          </span>
+        </li>
+
+        <li className="flex items-start gap-2">
+          <span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-[10px] font-semibold">
+            3
+          </span>
+          <span className="text-muted-foreground">
+            Restart CasaTube. It appears in this list — and a plugin the server has not seen before arrives{" "}
+            <strong>enabled</strong>, so its <code>setup</code> runs at that restart. The switch here is what
+            turns it off.
+          </span>
+        </li>
+      </ol>
+
+      <Button size="sm" variant="ghost" className="mt-3 gap-1.5" onClick={() => setReading(true)}>
+        <BookOpen className="size-3.5" aria-hidden />
+        Read the documentation
+      </Button>
+
+      <Dialog open={reading} onOpenChange={setReading}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Writing a CasaTube plugin</DialogTitle>
+            <DialogDescription>
+              The manifest, the hook points, and what <code>setup</code> is handed. Served by the server itself, so
+              it matches the version you are running.
+            </DialogDescription>
+          </DialogHeader>
+          {docs.isPending ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : docs.isError ? (
+            <ErrorState error={docs.error} what="The documentation" retry={() => void docs.refetch()} />
+          ) : (
+            <div className="scrollbar-thin max-h-[60vh] overflow-y-auto rounded-lg bg-foreground/[0.04] p-3 dark:bg-black/40">
+              <pre className="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{docs.data.markdown}</pre>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 function PluginsCard() {
   const plugins = usePlugins();
   const toggle = useTogglePlugin();
@@ -222,11 +327,14 @@ function PluginsCard() {
         ) : plugins.isError ? (
           <ErrorState error={plugins.error} what="Plugins" retry={() => void plugins.refetch()} />
         ) : plugins.data.plugins.length === 0 ? (
-          <EmptyState
-            icon={<Puzzle className="size-6" aria-hidden />}
-            title="No plugins installed"
-            hint="Drop a plugin file into the data directory's plugins folder and restart."
-          />
+          <div className="space-y-4">
+            <EmptyState
+              icon={<Puzzle className="size-6" aria-hidden />}
+              title="No plugins installed"
+              hint="Nothing is hooked into the pipeline. Here is how to change that."
+            />
+            <PluginStart dir={plugins.data.dir} />
+          </div>
         ) : (
           <ul className="divide-y">
             {plugins.data.plugins.map((plugin) => (
@@ -282,6 +390,11 @@ function PluginsCard() {
             ))}
           </ul>
         )}
+        {!plugins.isPending && !plugins.isError && plugins.data.plugins.length > 0 ? (
+          <div className="mt-4">
+            <PluginStart dir={plugins.data.dir} />
+          </div>
+        ) : null}
         {toggle.isError ? <p className="mt-2 text-xs text-destructive">{toggle.error.message}</p> : null}
       </CardContent>
     </Card>

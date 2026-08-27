@@ -59,11 +59,18 @@ export function Downloads() {
   const running = all.filter((job) => job.status === "downloading");
   const speed = running.reduce((sum, job) => sum + (job.speed ?? 0), 0);
 
+  // 🔴 The tab is read from the URL and written back to it. It used to be the
+  // literal "details" with an `onTab` that did nothing, which made the panel
+  // look like it had three tabs and behave as if it had one: clicking Tasks or
+  // Logs changed a value the component immediately overwrote with the same
+  // constant, so nothing moved and nothing said why. This is the screen where
+  // you go to find out what happened when a download failed, and the log is on
+  // the tab that could not be opened.
   const inspector = selected ? (
     <JobInspector
       job={selected}
-      tab="details"
-      onTab={() => undefined}
+      tab={search.panel}
+      onTab={(panel) => void navigate({ search: (current) => ({ ...current, panel }) })}
       onClose={() => void navigate({ search: (current) => ({ ...current, job: undefined }) })}
     />
   ) : null;
@@ -187,7 +194,9 @@ export function Downloads() {
           if (!open) void navigate({ search: (current) => ({ ...current, job: undefined }) });
         }}
       >
-        <SheetContent side="right" className="w-full p-0 sm:max-w-md">
+        {/* The inspector brings its own close button; the sheet's default one
+            would land right beside it — the double X Santi hit on the iPad. */}
+        <SheetContent side="right" className="w-full p-0 sm:max-w-md" showCloseButton={false}>
           <SheetTitle className="sr-only">Download details</SheetTitle>
           {inspector}
         </SheetContent>

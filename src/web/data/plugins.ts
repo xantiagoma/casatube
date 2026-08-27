@@ -18,12 +18,53 @@ import { keys } from "./keys";
 
 export interface PluginListing {
   plugins: PluginStatus[];
+  /** Where a plugin file goes on this server — the answer an empty list needs. */
+  dir: string;
 }
+
+/**
+ * The starter plugin, as a file.
+ *
+ * A plain URL rather than an Eden call because the browser is doing the
+ * fetching: this is the `href` of a download link, and the server sends it with
+ * `Content-Disposition`, so it lands already named. Same shape as
+ * `libraryFileUrl` in `library.ts`, and here for the same reason — the folder
+ * that knows the API is this one (R3).
+ */
+export const PLUGIN_TEMPLATE_URL = "/api/plugins/template";
 
 export function usePlugins(): UseQueryResult<PluginListing, Error> {
   return useQuery({
     queryKey: keys.plugins,
     queryFn: async () => unwrap(await api.api.plugins.get()),
+    retry: 0,
+  });
+}
+
+export interface PluginDocs {
+  markdown: string;
+  filename: string;
+  dir: string;
+}
+
+/**
+ * The documentation, served by the API rather than linked to a file.
+ *
+ * ⚠️ It cannot be a link to `plugins/README.md`: the repository is not in the
+ * image, so that link 404s exactly where someone is most likely to click it.
+ * The server holds a condensed copy and hands it over — see
+ * `api/plugin-template.ts`.
+ *
+ * Fetched only when the dialog opens: it is a few kilobytes nobody needs on the
+ * way past.
+ */
+export function usePluginDocs(enabled: boolean): UseQueryResult<PluginDocs, Error> {
+  return useQuery({
+    queryKey: keys.pluginDocs,
+    queryFn: async () => unwrap(await api.api.plugins.docs.get()),
+    enabled,
+    // It changes when the server is upgraded, and not otherwise.
+    staleTime: Number.POSITIVE_INFINITY,
     retry: 0,
   });
 }

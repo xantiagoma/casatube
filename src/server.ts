@@ -30,6 +30,7 @@ import { loadConfig, type ServerConfig } from "./api/config";
 import type { AppContext } from "./api/context";
 import { destinationRoutes } from "./api/destinations";
 import { eventRoutes } from "./api/events";
+import { createLibraryHlsManager, hlsRoutes } from "./api/hls";
 import { notificationRoutes } from "./api/notifications";
 import { statsRoutes } from "./api/stats";
 import { jobRoutes } from "./api/jobs";
@@ -56,6 +57,9 @@ function apiRoutes(ctx: AppContext) {
     .use(probeRoutes(ctx))
     .use(destinationRoutes(ctx))
     .use(libraryRoutes(ctx))
+    // After `libraryRoutes`, and a separate module: these own ffmpeg processes
+    // and temp disk, which nothing else under `/library` does. See `api/hls.ts`.
+    .use(hlsRoutes(ctx))
     .use(sourceRoutes(ctx))
     .use(statsRoutes(ctx))
     .use(notificationRoutes(ctx))
@@ -68,6 +72,10 @@ function apiRoutes(ctx: AppContext) {
     .use(
       pluginRoutes(
         ctx.plugins ?? createPluginRuntime({ dir: pluginsDir(ctx.config.dataDir), registry: ctx.registry }),
+        // Where a plugin file goes. The runtime knows it and keeps it to
+        // itself, so the layout function answers again here — an empty plugins
+        // screen has to be able to say where the directory is.
+        pluginsDir(ctx.config.dataDir),
       ),
     )
     .use(eventRoutes(ctx));
@@ -151,7 +159,11 @@ async function main(): Promise<StartedServer> {
     onError: (sourceId, error) => console.error(`[casatube] source ${sourceId}:`, error),
   });
 
-  const ctx: AppContext = { db, queue, registry, watcher, config, sources, scheduler, plugins };
+  // Built here, not in the route, because it has to be stopped — it holds a
+  // sweep timer and, at any moment, up to `HLS_MAX_SESSIONS` ffmpeg processes.
+  const hls = createLibraryHlsManager(config);
+
+  const ctx: AppContext = { db, queue, registry, watcher, config, sources, scheduler, plugins, hls };
 
   const bundle = await buildClient({ dev: config.dev });
   if (bundle.error) console.error(`[casatube] client bundle failed:\n${bundle.error}`);
@@ -180,12 +192,16 @@ async function main(): Promise<StartedServer> {
 
   console.log(`[casatube] listening on http://localhost:${config.port}`);
   console.log(`[casatube] data dir ${config.dataDir}, library ${config.libraryDir}`);
+  console.log(`[casatube] hls sessions in ${hls.root} (max ${config.hls.maxSessions})`);
   if (recovered > 0) console.log(`[casatube] recovered ${recovered} job(s) from the last run`);
   console.log(`[casatube] ${plugins.list().length} plugin(s) loaded`);
 
   const stop = async (): Promise<void> => {
     worker.stop();
     scheduler.stop();
+    // Before the port closes: an ffmpeg left behind by a restart is a core
+    // burning on a file nobody is watching, and nothing would ever reap it.
+    await hls.stop();
     await scheduler.drain();
     watcher.stop();
     await app.stop();

@@ -35,6 +35,10 @@ export interface DashboardSearch {
   range: StatsRange;
 }
 
+/** The inspector's tabs. Shared: Downloads and Queue both open the same panel. */
+export const INSPECTOR_TABS = ["details", "tasks", "logs"] as const;
+export type InspectorTab = (typeof INSPECTOR_TABS)[number];
+
 export const DOWNLOAD_TABS = ["active", "completed", "failed", "scheduled"] as const;
 export type DownloadTab = (typeof DOWNLOAD_TABS)[number];
 
@@ -42,13 +46,20 @@ export interface DownloadsSearch {
   tab: DownloadTab;
   q?: string;
   job?: string;
+  /**
+   * Which tab of the inspector is open.
+   *
+   * 🔴 Here for the same reason the Queue has it: the inspector's tabs are
+   * controlled, so their state has to live somewhere, and a screen that passed
+   * a constant instead left Tasks and Logs unclickable. Being in the URL also
+   * makes "this job, on its log" a link — which is the state worth sending
+   * someone when something failed.
+   */
+  panel: InspectorTab;
 }
 
 export const QUEUE_FILTERS = ["all", "waiting", "running", "done", "failed"] as const;
 export type QueueFilter = (typeof QUEUE_FILTERS)[number];
-
-export const INSPECTOR_TABS = ["details", "tasks", "logs"] as const;
-export type InspectorTab = (typeof INSPECTOR_TABS)[number];
 
 export interface QueueSearch {
   status: QueueFilter;

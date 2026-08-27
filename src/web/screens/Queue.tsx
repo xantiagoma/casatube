@@ -171,7 +171,9 @@ export function Queue() {
           if (!open) void navigate({ search: (current) => ({ ...current, job: undefined }) });
         }}
       >
-        <SheetContent side="right" className="w-full p-0 sm:max-w-md">
+        {/* The inspector brings its own close button; the sheet's default one
+            would land right beside it — the double X Santi hit on the iPad. */}
+        <SheetContent side="right" className="w-full p-0 sm:max-w-md" showCloseButton={false}>
           <SheetTitle className="sr-only">Job inspector</SheetTitle>
           {inspector}
         </SheetContent>

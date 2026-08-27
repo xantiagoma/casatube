@@ -12,7 +12,7 @@
  *
  * The routes take the runtime directly instead of `AppContext`. A plugin
  * registry is not a database or a queue, and passing it explicitly is what lets
- * a test stand these four endpoints up over a temporary directory with no
+ * a test stand these endpoints up over a temporary directory with no
  * SQLite file anywhere near it.
  */
 import { Elysia, status, t } from "elysia";
@@ -21,6 +21,7 @@ import { Result } from "better-result";
 import { NotFound } from "../core/errors";
 import type { PluginRuntime, PluginStatus } from "../core/plugin-runtime";
 import { fail } from "./errors";
+import { PLUGIN_TEMPLATE_FILENAME, pluginDocs, pluginTemplate } from "./plugin-template";
 
 /**
  * A plugin as the browser sees it.
@@ -34,6 +35,15 @@ export interface PluginView extends PluginStatus {}
 
 export interface PluginListing {
   plugins: PluginView[];
+  /**
+   * The absolute directory a plugin file goes in.
+   *
+   * 🔴 Part of the listing rather than something the browser guesses, because
+   * an empty list is exactly when it is needed: "No plugins installed" with no
+   * path is a dead end, and the path depends on `DATA_DIR`, which only the
+   * server knows.
+   */
+  dir: string;
 }
 
 export interface ApplicableListing {
@@ -42,11 +52,51 @@ export interface ApplicableListing {
   plugins: PluginView[];
 }
 
-export function pluginRoutes(runtime: PluginRuntime) {
+/**
+ * @param dir The plugins directory, for the three answers a screen with no
+ * plugins on it needs to give: where the file goes, what to start from, and
+ * where the documentation is. The runtime knows it and does not expose it, so
+ * it is passed in beside it.
+ */
+export function pluginRoutes(runtime: PluginRuntime, dir = "") {
   return (
     new Elysia({ prefix: "/plugins" })
       /** Everything found, broken ones included — a plugin that failed to load is the one you most need to see. */
-      .get("/", (): PluginListing => ({ plugins: runtime.list() }))
+      .get("/", (): PluginListing => ({ plugins: runtime.list(), dir }))
+
+      /**
+       * A starter plugin, as a file to save.
+       *
+       * 🔴 A download rather than a snippet to copy out of a `<pre>`: the thing
+       * being asked for is a file in a directory, and handing over the file is
+       * one step instead of three. `Content-Disposition` carries the name, so
+       * what lands in ~/Downloads is already called `casatube-plugin.ts`.
+       *
+       * `text/plain` on purpose — a browser must never be tempted to do
+       * anything with this but save it.
+       */
+      .get(
+        "/template",
+        () =>
+          new Response(pluginTemplate(dir === "" ? "DATA_DIR/plugins" : dir), {
+            headers: {
+              "content-type": "text/plain; charset=utf-8",
+              "content-disposition": `attachment; filename="${PLUGIN_TEMPLATE_FILENAME}"`,
+            },
+          }),
+      )
+
+      /**
+       * The documentation, served rather than linked.
+       *
+       * A link to a file in the repository is a link a running server cannot
+       * honour — the image has no repository in it. See `plugin-template.ts`.
+       */
+      .get("/docs", () => ({
+        markdown: pluginDocs(dir === "" ? "DATA_DIR/plugins" : dir),
+        filename: PLUGIN_TEMPLATE_FILENAME,
+        dir,
+      }))
 
       /**
        * Which plugins would act on this URL.

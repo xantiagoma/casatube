@@ -14,6 +14,7 @@ import { useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   ArrowDownUp,
+  Download,
   Film,
   Folder,
   FolderOpen,
@@ -44,6 +45,11 @@ import { PageHeader } from "../components/layout/AppShell";
 import { MediaPreview } from "../components/media/MediaPreview";
 import { formatBytes, formatDateTime, formatDuration, splitPath } from "../data/format";
 import {
+  canPlayHlsNatively,
+  isBrowserPlayable,
+  libraryFileUrl,
+  libraryHlsUrl,
+  normaliseExt,
   useEmptyTrash,
   useLibrary,
   useLibraryItem,
@@ -62,12 +68,33 @@ function kindOf(item: LibraryItem): "video" | "audio" {
 }
 
 /**
- * ⚠️ There is no media-streaming endpoint in this build — see the note in
- * `MediaPreview`. Returning `null` is the truthful answer, and it is the single
- * place that changes when `GET /api/library/file` exists.
+ * The URL a `<video>` can play, or `null` when the browser cannot play this
+ * container at all.
+ *
+ * Three answers, not two. A container the browser opens is served straight
+ * from `GET /api/library/file`, ranges and all. Anything else — an MKV holding
+ * perfectly ordinary H.264, which Chrome refuses on the container alone — goes
+ * through `GET /api/library/hls/index.m3u8`, where the server copies the video
+ * into HLS segments on demand.
+ *
+ * 🔴 `null` is now about **this browser**, not the file. The HLS route works
+ * for every one of these; playing its output without `hls.js` is a thing only
+ * Safari and iOS can do, and that is where this is watched. On a desktop Chrome
+ * the panel says so and offers the download — see `unplayableHint` below.
  */
-function playableUrl(_item: LibraryItem): string | null {
-  return null;
+function playableUrl(item: LibraryItem): string | null {
+  if (isBrowserPlayable(item.ext)) return libraryFileUrl(item.path);
+  // An MKV, or anything else no browser opens: the server remuxes it to HLS on
+  // demand — the video copied, not re-encoded. Safari plays that natively and
+  // everything else goes through `hls.js`, so this no longer returns null for
+  // a browser: only for a file nothing can play.
+  return libraryHlsUrl(item.path);
+}
+
+/** Why there is no player, said in terms of the thing that is actually wrong. */
+function unplayableReason(item: LibraryItem): string {
+  const ext = normaliseExt(item.ext).toUpperCase();
+  return `${ext || "This container"} plays here over HLS, which this browser cannot do on its own — open CasaTube in Safari, or download the file.`;
 }
 
 function ItemCard({
@@ -140,7 +167,8 @@ function DetailPanel({ path, onClose }: { path: string; onClose(): void }) {
           title={item.name}
           duration={probe?.durationSeconds ?? null}
           kind={kindOf(item)}
-          unplayableHint="Playback needs a media-streaming endpoint, which this build's API does not have."
+          unplayableHint={src ? undefined : unplayableReason(item)}
+          hls={src?.includes("/hls/") ?? false}
         />
 
         <dl className="divide-y text-xs">
@@ -205,11 +233,22 @@ function DetailPanel({ path, onClose }: { path: string; onClose(): void }) {
         ) : null}
       </div>
 
-      <div className="border-t p-3">
+      <div className="flex flex-wrap gap-2 border-t p-3">
+        {/* An anchor, not a button with an onClick: `download` on a same-origin
+            link is the browser's own save, so it survives a navigation, shows
+            in the download manager and needs no JavaScript at all. The server
+            sends `Content-Disposition: attachment`, which is what names the
+            file when the anchor's own hint is ignored. */}
+        <Button asChild variant="outline" size="sm" className="flex-1 gap-1.5">
+          <a href={libraryFileUrl(item.path, { download: true })} download={item.name}>
+            <Download className="size-3.5" aria-hidden />
+            Download
+          </a>
+        </Button>
         <Button
           variant="outline"
           size="sm"
-          className="w-full gap-1.5 text-destructive hover:text-destructive"
+          className="flex-1 gap-1.5 text-destructive hover:text-destructive"
           onClick={() => setConfirming(true)}
         >
           <Trash2 className="size-3.5" aria-hidden />
@@ -610,7 +649,11 @@ export function LibraryScreen() {
           if (!open) update({ item: undefined });
         }}
       >
-        <SheetContent side="right" className="w-full p-0 sm:max-w-md">
+        {/* 🔴 `showCloseButton={false}`: the panel inside has its own close, and
+            the sheet's would sit on top of it — two X's a finger apart, which is
+            how it looked on the iPad. The panel's is the one that stays, because
+            it is the same control the docked panel shows on a wide screen. */}
+        <SheetContent side="right" className="w-full p-0 sm:max-w-md" showCloseButton={false}>
           <SheetTitle className="sr-only">Item details</SheetTitle>
           {detail}
         </SheetContent>

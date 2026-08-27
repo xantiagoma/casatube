@@ -6,6 +6,12 @@
  * §12 names, because the default is what happens when nobody is watching.
  */
 import { dataDir } from "../core/db";
+import {
+  DEFAULT_IDLE_MS,
+  DEFAULT_MAX_SESSIONS,
+  DEFAULT_SEGMENT_SECONDS,
+  DEFAULT_TRANSCODE_IDLE_MS,
+} from "../core/hls";
 
 export interface ServerConfig {
   port: number;
@@ -18,6 +24,17 @@ export interface ServerConfig {
   /** ⚠️ Credentials. Never echoed back through the API — PLAN §12. */
   cookiesFile?: string;
   ytdlpBinary?: string;
+  /**
+   * ffmpeg and ffprobe, when they are not simply on `PATH`.
+   *
+   * Both are in the image, so the defaults are right in production. They exist
+   * because a development machine often has neither — and because pointing at a
+   * specific build is the only way to reproduce a codec problem.
+   */
+  ffmpegBinary?: string;
+  ffprobeBinary?: string;
+  /** On-demand HLS playback — see `core/hls.ts`. */
+  hls: HlsConfig;
   /**
    * How often the queue is re-read to decide whether the SSE stream has
    * anything new to say.
@@ -36,6 +53,25 @@ export interface ServerConfig {
   trashRetentionDays: number;
   /** Rebuild the client bundle on every page load. Off in the image. */
   dev: boolean;
+}
+
+/**
+ * The knobs on on-demand playback.
+ *
+ * ⚠️ Every one of these is a limit on **temp disk or CPU**, not a preference.
+ * A remux leaves hundreds of megabytes under `TEMP_DIR` and an orphaned ffmpeg
+ * burns a core indefinitely, so the defaults are chosen to fail small: three
+ * sessions, five minutes of grace for a remux nobody is reading, an hour for
+ * one that has finished.
+ */
+export interface HlsConfig {
+  /** Target segment length. ⚠️ Approximate: `-c:v copy` cuts at keyframes. */
+  segmentSeconds: number;
+  /** A finished session with nobody reading it is removed after this. */
+  idleMs: number;
+  /** A session still remuxing with nobody reading it is **killed** after this. */
+  transcodeIdleMs: number;
+  maxSessions: number;
 }
 
 function int(value: string | undefined, fallback: number): number {
@@ -57,7 +93,15 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     libraryDir: env.LIBRARY_DIR ?? "/library",
     cookiesFile: str(env.COOKIES_FILE),
     ytdlpBinary: str(env.YTDLP_BIN),
+    ffmpegBinary: str(env.FFMPEG_BIN),
+    ffprobeBinary: str(env.FFPROBE_BIN),
     eventsPollMs: int(env.EVENTS_POLL_MS, 750),
+    hls: {
+      segmentSeconds: int(env.HLS_SEGMENT_SECONDS, DEFAULT_SEGMENT_SECONDS),
+      idleMs: int(env.HLS_IDLE_MS, DEFAULT_IDLE_MS),
+      transcodeIdleMs: int(env.HLS_TRANSCODE_IDLE_MS, DEFAULT_TRANSCODE_IDLE_MS),
+      maxSessions: int(env.HLS_MAX_SESSIONS, DEFAULT_MAX_SESSIONS),
+    },
     trashRetentionDays: int(env.TRASH_RETENTION_DAYS, 30),
     dev: env.NODE_ENV !== "production" && str(env.CASATUBE_DEV) !== undefined,
   };

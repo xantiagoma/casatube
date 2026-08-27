@@ -16,6 +16,100 @@ import type { EmptyTrashResult, LibraryListing, MediaProbe, RestoreResult, Trash
 import { api, unwrap } from "./client";
 import { keys } from "./keys";
 
+/**
+ * Containers a browser will actually play, as extensions without the dot.
+ *
+ * 🔴 The codec inside is not the question. An MKV holding H.264 is still an
+ * MKV, and Chrome and Safari refuse the container regardless — so a player
+ * pointed at one produces a black rectangle and an error nobody can act on.
+ * The honest answer for those is the download button, and `Library` says so in
+ * words rather than showing a player that cannot work.
+ *
+ * ⚠️ Deliberately conservative. `.mov` is absent because Firefox does not play
+ * it; offering a download for something one browser could have played is a far
+ * smaller failure than a play button that does nothing.
+ */
+const PLAYABLE_CONTAINERS = new Set([
+  "mp4",
+  "m4v",
+  "webm",
+  "ogv",
+  "mp3",
+  "m4a",
+  "aac",
+  "ogg",
+  "oga",
+  "opus",
+  "flac",
+  "wav",
+]);
+
+/** An extension, lower-cased and without its dot — the form everything here compares. */
+export function normaliseExt(ext: string): string {
+  return ext.toLowerCase().replace(/^\./, "");
+}
+
+export function isBrowserPlayable(ext: string): boolean {
+  return PLAYABLE_CONTAINERS.has(normaliseExt(ext));
+}
+
+/**
+ * The URL that serves a library file's bytes — `GET /api/library/file`, which
+ * answers range requests, so a player can seek in it.
+ *
+ * 🔴 It lives in the data layer with everything else that names a server route
+ * (R3), even though the consumers are a `<video src>` and an `<a href>` rather
+ * than a query: the point of the rule is that one folder knows the API, and a
+ * path built inside a component is exactly the thing that survives a rename.
+ *
+ * ⚠️ Not an Eden call, and it cannot be one — a media element fetches its own
+ * bytes and a download is the browser's, not ours. Both need a URL string.
+ */
+export function libraryFileUrl(path: string, options: { download?: boolean } = {}): string {
+  const query = new URLSearchParams({ path });
+  if (options.download === true) query.set("download", "1");
+  return `/api/library/file?${query.toString()}`;
+}
+
+/**
+ * The HLS index for a file no browser opens directly — `GET
+ * /api/library/hls/index.m3u8`, which starts an on-demand remux of the video
+ * stream (copied, never re-encoded) and answers as soon as the first segment
+ * exists. Seeking works because every segment stays listed in the index.
+ */
+export function libraryHlsUrl(path: string): string {
+  const query = new URLSearchParams({ path });
+  return `/api/library/hls/index.m3u8?${query.toString()}`;
+}
+
+/**
+ * Whether this browser plays HLS by itself.
+ *
+ * 🔴 A **capability check, not a feature flag**. Safari and everything on iOS —
+ * which is where this is actually watched — play an `.m3u8` from a plain
+ * `<video src>`. Firefox does not, and needs `hls.js`. When the player learns
+ * `hls.js`, this function is the single place that changes.
+ *
+ * ⚠️ **Chromium is excluded even though it says yes**, and that is the whole
+ * reason this is not a one-line `canPlayType`. Chrome 152 answers `"maybe"` for
+ * `application/vnd.apple.mpegurl` and does play a *finished* playlist — but a
+ * playlist that is still being written has no `#EXT-X-ENDLIST`, so Chrome reads
+ * it as live and its MPEG-TS pipeline dies a few seconds in with
+ * `DEMUXER_ERROR_COULD_NOT_PARSE`. Every *first* play is a playlist still being
+ * written. Verified against the real 67 MB MKV: hls.js played and seeked it
+ * throughout, Chrome's own player failed at 0:19 — on byte-identical segments.
+ *
+ * 📌 So the honest answer for Chromium today is the download button, until the
+ * player carries `hls.js` — at which point the browser sniff below goes and
+ * this becomes "does anything here play HLS at all".
+ */
+export function canPlayHlsNatively(): boolean {
+  if (typeof document === "undefined") return false;
+  if (typeof navigator !== "undefined" && /Chrome|Chromium|Edg\//.test(navigator.userAgent)) return false;
+  const probe = document.createElement("video");
+  return probe.canPlayType("application/vnd.apple.mpegurl") !== "";
+}
+
 export interface LibraryParams {
   folder?: string;
   q?: string;

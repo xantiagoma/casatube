@@ -31,6 +31,7 @@
     "drizzle-orm": "^0.45.2",
     "elysia": "^1.4.29",
     "filenamify": "^7.0.2",
+    "hls.js": "^1.7.1",
     "lucide-react": "^1.34.0",
     "media-chrome": "^4.19.2",
     "ohash": "^2.0.12",
