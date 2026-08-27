@@ -382,3 +382,29 @@ that improvised binary, not our spawn path.
 result and the next person deserves to know what was already tried. If it comes
 back **inside the container**, the spawn path in `core/library.ts` is where to
 look, and the two experiments above are the ones not to repeat.
+
+## A 438 MB video that hangs on "loading" — what has been ruled out (2026-08-27)
+
+`Videos/My Secret Agent Husband EP.mp4`, 73 min, 438 MB, played from a browser
+over the tailnet: the player sits on loading. Short videos in the same library
+play immediately.
+
+**Ruled out, measured against the running container:**
+
+| Suspicion | Result |
+|---|---|
+| Goes through HLS and stalls | No — verdict is `direct`; HLS is never involved |
+| `moov` atom at the end of the file | No — it is the second box, at 0% |
+| Exotic codec or profile | No — h264 High, `yuv420p`, level 30, AAC-LC stereo |
+| Range requests broken | No — `bytes=0-1023`, a tail range, `bytes=0-` and no header all correct |
+| Server slow to answer | No — first byte in **1 ms** |
+| Thumbnail or probe blocking the panel | No — 2 ms and 185 ms |
+
+So the file, the route and the container are all fine, and the fault is on the
+client side or in the transport. **Not yet diagnosed** — the next step is a real
+browser with the network panel open, which is where this stopped.
+
+📌 One design question it raises regardless: `direct` is chosen from container
+and codec alone, with **no regard for size**. Handing a browser a 438 MB
+progressive download may simply be the wrong shape even when it is technically
+playable — segments would let it start on the first few seconds instead.
