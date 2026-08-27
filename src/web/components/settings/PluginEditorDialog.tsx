@@ -30,7 +30,7 @@
  * plugin file lives in the data directory and the editor is not a version
  * control system; the copy that matters is wherever its author keeps it.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useState } from "react";
 import { CircleAlert, CircleCheck, FileCode, Loader2, Save, ShieldAlert, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -55,7 +55,15 @@ import {
 } from "../../data/plugins";
 import { useTheme } from "../../data/theme";
 import { ErrorState } from "../common/Bits";
-import { CodeEditor } from "./CodeEditor";
+/**
+ * 🔴 Loaded on demand, not with the page.
+ *
+ * CodeMirror is ~250 kB — comfortably the largest thing in this bundle — and it
+ * is needed by exactly one dialog that most visits to Settings never open.
+ * `lazy` keeps it out of the first paint of every other screen; the fallback
+ * below is what a reader sees for the few hundred milliseconds it takes.
+ */
+const CodeEditor = lazy(async () => ({ default: (await import("./CodeEditor")).CodeEditor }));
 
 export interface PluginEditorDialogProps {
   open: boolean;
@@ -90,76 +98,65 @@ function StateBadge({ state }: { state: PluginStatus["state"] }) {
   );
 }
 
+/**
+ * 🔴 The dialog is a shell, and everything else lives in a body that is
+ * **keyed on the file**.
+ *
+ * The first version kept the draft, the "which file is loaded" marker and the
+ * mutation results in the outer component and reset them from effects when
+ * `open` or `file` changed. That is the shape React has a name for — adjusting
+ * state on a prop change — and it produced a chain of effects, a derived value
+ * copied into state, and a mutation reset that had to be reached through a ref.
+ *
+ * A `key` does all of it with no code: a different file is a different
+ * component, and Radix unmounts the content when the dialog closes, so closing
+ * it throws away the draft, the confirmation and the last save's result for
+ * free.
+ */
 export function PluginEditorDialog({ open, onOpenChange, file, onSaved }: PluginEditorDialogProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[92vh] flex-col gap-4 sm:max-w-4xl">
+        <PluginEditorBody key={file ?? NEW_DOC_KEY} file={file} onOpenChange={onOpenChange} onSaved={onSaved} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PluginEditorBody({ file, onOpenChange, onSaved }: Omit<PluginEditorDialogProps, "open">) {
   const { resolved } = useTheme();
   const isNew = file === null;
   const docKey = file ?? NEW_DOC_KEY;
 
-  const source = usePluginSource(open ? file : null);
-  const template = usePluginTemplate(open && isNew);
+  const source = usePluginSource(file);
+  const template = usePluginTemplate(isNew);
   const save = useSavePluginSource();
   const remove = useDeletePluginSource();
 
-  const [draft, setDraft] = useState("");
+  /**
+   * `null` means "nothing typed yet", so the loaded text is what shows.
+   *
+   * ⚠️ Not `useState(initial)` and not an effect that copies it in. The source
+   * arrives asynchronously, and either of those would put the fetched text back
+   * over something half-typed the moment React Query re-rendered.
+   */
+  const [draft, setDraft] = useState<string | null>(null);
   const [newFile, setNewFile] = useState("my-plugin.ts");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  /**
-   * Which document the editor is currently holding.
-   *
-   * The gate that stops the loaded text being written over an edit: once a
-   * `docKey` has been loaded, nothing loads it again until the dialog is closed.
-   */
-  const [loadedFor, setLoadedFor] = useState<string | null>(null);
 
   const initial = isNew ? template.data : source.data?.source;
-
-  /**
-   * 🔴 The mutations are reached through a ref, and they are **not** in any
-   * dependency array.
-   *
-   * A React Query mutation result is a **new object on every render**. Putting
-   * one in a dependency list makes the effect run on every render, and an
-   * effect that also calls `setState` then re-renders, which runs the effect,
-   * which… React kills it with "Maximum update depth exceeded" and the whole
-   * screen becomes an error boundary. It happened here, and it was found by
-   * clicking, not by reading — the types are perfectly happy with it.
-   */
-  const resetMutations = useRef<() => void>(() => undefined);
-  resetMutations.current = () => {
-    save.reset();
-    remove.reset();
-  };
-
-  // Everything resets on close, including the last save's result — a warning
-  // from the previous save has no business being on screen for the next one.
-  useEffect(() => {
-    if (open) return;
-    setLoadedFor(null);
-    setConfirmingDelete(false);
-    resetMutations.current();
-  }, [open]);
-
-  // The document, loaded once per file. `loadedFor` is what stops a re-render
-  // putting the saved text back over something half-typed.
-  useEffect(() => {
-    if (!open || initial === undefined || loadedFor === docKey) return;
-    setDraft(initial);
-    setLoadedFor(docKey);
-  }, [open, initial, docKey, loadedFor]);
+  const text = draft ?? initial ?? "";
 
   const onChange = useCallback((next: string) => setDraft(next), []);
 
   const filename = isNew ? newFile.trim() : file;
   const loading = isNew ? template.isPending : source.isPending;
   const loadError = isNew ? template.error : source.error;
-  const ready = loadedFor === docKey;
+  const ready = initial !== undefined;
 
   function onSave() {
     if (filename === null || filename === "") return;
-    save.mutate(
-      { file: filename, source: draft, overwrite: !isNew },
-      { onSuccess: () => onSaved?.(filename) },
-    );
+    save.mutate({ file: filename, source: text, overwrite: !isNew }, { onSuccess: () => onSaved?.(filename) });
   }
 
   function onDelete() {
@@ -170,137 +167,144 @@ export function PluginEditorDialog({ open, onOpenChange, file, onSaved }: Plugin
   const saved = save.data?.saved ?? null;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[92vh] flex-col gap-4 sm:max-w-4xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <FileCode className="size-4" aria-hidden />
-            {isNew ? "New plugin" : file}
-          </DialogTitle>
-          <DialogDescription>
-            One TypeScript file. Saving writes it to the plugins directory and reloads the runtime — no restart,
-            and a file that does not compile is recorded against itself and nothing else.
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <FileCode className="size-4" aria-hidden />
+          {isNew ? "New plugin" : file}
+        </DialogTitle>
+        <DialogDescription>
+          One TypeScript file. Saving writes it to the plugins directory and reloads the runtime — no restart,
+          and a file that does not compile is recorded against itself and nothing else.
+        </DialogDescription>
+      </DialogHeader>
 
-        {isNew ? (
-          <div className="space-y-1.5">
-            <Label htmlFor="plugin-file">Filename</Label>
-            <Input
-              id="plugin-file"
-              value={newFile}
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(event) => setNewFile(event.target.value)}
-              className="font-mono text-xs"
-              placeholder="my-plugin.ts"
-            />
-            <p className="text-xs text-muted-foreground">
-              Ending in <code>.ts</code>, <code>.mts</code>, <code>.js</code> or <code>.mjs</code>. Names starting
-              with <code>.</code> or <code>_</code> are never loaded, so they are refused rather than silently
-              accepted.
-            </p>
-          </div>
-        ) : null}
-
-        {loading ? (
-          <p className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" aria-hidden />
-            Loading the file…
+      {isNew ? (
+        <div className="space-y-1.5">
+          <Label htmlFor="plugin-file">Filename</Label>
+          <Input
+            id="plugin-file"
+            value={newFile}
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(event) => setNewFile(event.target.value)}
+            className="font-mono text-xs"
+            placeholder="my-plugin.ts"
+          />
+          <p className="text-xs text-muted-foreground">
+            Ending in <code>.ts</code>, <code>.mts</code>, <code>.js</code> or <code>.mjs</code>. Names starting
+            with <code>.</code> or <code>_</code> are never loaded, so they are refused rather than silently
+            accepted.
           </p>
-        ) : loadError ? (
-          <ErrorState error={loadError} what="That plugin file" />
-        ) : ready ? (
-          <div className="min-h-0 flex-1 overflow-hidden rounded-lg border">
-            <CodeEditor
-              value={draft}
-              onChange={onChange}
-              docKey={docKey}
-              dark={resolved === "dark"}
-              ariaLabel="Plugin source"
-              className="h-[46vh] min-h-64"
-            />
-          </div>
-        ) : null}
+        </div>
+      ) : null}
 
-        {/* 🔴 Always on screen, not only after a save. See the header. */}
-        <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning">
-          <ShieldAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          <span>
-            <strong>This runs inside CasaTube, with CasaTube's privileges.</strong> The capabilities a plugin
-            declares are a contract for this interface, not a sandbox — only <code>network</code> is really
-            withheld, and an in-process module can reach the filesystem, your cookies file and any binary this
-            server can run. Read what you save.
-          </span>
+      {loading ? (
+        <p className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" aria-hidden />
+          Loading the file…
         </p>
-
-        {save.isError ? <p className="text-xs text-destructive">{save.error.message}</p> : null}
-        {remove.isError ? <p className="text-xs text-destructive">{remove.error.message}</p> : null}
-
-        {save.data ? (
-          <div
-            className={cn(
-              "space-y-2 rounded-lg border p-3 text-xs",
-              saved?.state === "error" ? "border-destructive/40 bg-destructive/5" : "border-success/40 bg-success/5",
-            )}
-          >
-            <p className="flex flex-wrap items-center gap-2 font-medium">
-              {saved?.state === "error" ? (
-                <CircleAlert className="size-3.5 text-destructive" aria-hidden />
-              ) : (
-                <CircleCheck className="size-3.5 text-success" aria-hidden />
-              )}
-              Saved to <code className="font-mono">{filename}</code>
-              {saved ? <StateBadge state={saved.state} /> : null}
-              {saved ? <span className="text-muted-foreground">as “{saved.name}”</span> : null}
+      ) : loadError ? (
+        <ErrorState error={loadError} what="That plugin file" />
+      ) : ready ? (
+      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border">
+        <Suspense
+          fallback={
+            <p className="flex h-[46vh] items-center gap-2 p-4 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+              Loading the editor…
             </p>
-            {saved?.error ? (
-              // The reason the import failed, verbatim. This is the whole point
-              // of reloading on save: the answer arrives here instead of in a
-              // log nobody is reading.
-              <pre className="scrollbar-thin max-h-32 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] whitespace-pre-wrap">
-                {saved.error}
-              </pre>
-            ) : null}
-            <p className="text-muted-foreground">{save.data.warning}</p>
-          </div>
-        ) : null}
+          }
+        >
+          <CodeEditor
+            value={text}
+            onChange={onChange}
+            docKey={docKey}
+            dark={resolved === "dark"}
+            ariaLabel="Plugin source"
+            className="h-[46vh] min-h-64"
+          />
+        </Suspense>
+      </div>
+      ) : null}
 
-        <DialogFooter className="gap-2 sm:justify-between">
-          <div className="flex items-center gap-2">
-            {!isNew ? (
-              confirmingDelete ? (
-                <>
-                  <Button size="sm" variant="destructive" disabled={remove.isPending} onClick={onDelete}>
-                    Delete {file}
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setConfirmingDelete(false)}>
-                    Keep it
-                  </Button>
-                </>
-              ) : (
-                <Button size="sm" variant="ghost" className="gap-1.5" onClick={() => setConfirmingDelete(true)}>
-                  <Trash2 className="size-3.5" aria-hidden />
-                  Delete
+      {/* 🔴 Always on screen, not only after a save. See the header. */}
+      <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning">
+        <ShieldAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+        <span>
+          <strong>This runs inside CasaTube, with CasaTube's privileges.</strong> The capabilities a plugin
+          declares are a contract for this interface, not a sandbox — only <code>network</code> is really
+          withheld, and an in-process module can reach the filesystem, your cookies file and any binary this
+          server can run. Read what you save.
+        </span>
+      </p>
+
+      {save.isError ? <p className="text-xs text-destructive">{save.error.message}</p> : null}
+      {remove.isError ? <p className="text-xs text-destructive">{remove.error.message}</p> : null}
+
+      {save.data ? (
+        <div
+          className={cn(
+            "space-y-2 rounded-lg border p-3 text-xs",
+            saved?.state === "error" ? "border-destructive/40 bg-destructive/5" : "border-success/40 bg-success/5",
+          )}
+        >
+          <p className="flex flex-wrap items-center gap-2 font-medium">
+            {saved?.state === "error" ? (
+              <CircleAlert className="size-3.5 text-destructive" aria-hidden />
+            ) : (
+              <CircleCheck className="size-3.5 text-success" aria-hidden />
+            )}
+            Saved to <code className="font-mono">{filename}</code>
+            {saved ? <StateBadge state={saved.state} /> : null}
+            {saved ? <span className="text-muted-foreground">as “{saved.name}”</span> : null}
+          </p>
+          {saved?.error ? (
+            // The reason the import failed, verbatim. This is the whole point
+            // of reloading on save: the answer arrives here instead of in a
+            // log nobody is reading.
+            <pre className="scrollbar-thin max-h-32 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] whitespace-pre-wrap">
+              {saved.error}
+            </pre>
+          ) : null}
+          <p className="text-muted-foreground">{save.data.warning}</p>
+        </div>
+      ) : null}
+
+      <DialogFooter className="gap-2 sm:justify-between">
+        <div className="flex items-center gap-2">
+          {!isNew ? (
+            confirmingDelete ? (
+              <>
+                <Button size="sm" variant="destructive" disabled={remove.isPending} onClick={onDelete}>
+                  Delete {file}
                 </Button>
-              )
-            ) : null}
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
-              Close
-            </Button>
-            <Button className="gap-1.5" disabled={save.isPending || !ready || filename === ""} onClick={onSave}>
-              {save.isPending ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden />
-              ) : (
-                <Save className="size-4" aria-hidden />
-              )}
-              Save and reload
-            </Button>
-          </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+                <Button size="sm" variant="ghost" onClick={() => setConfirmingDelete(false)}>
+                  Keep it
+                </Button>
+              </>
+            ) : (
+              <Button size="sm" variant="ghost" className="gap-1.5" onClick={() => setConfirmingDelete(true)}>
+                <Trash2 className="size-3.5" aria-hidden />
+                Delete
+              </Button>
+            )
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Close
+          </Button>
+          <Button className="gap-1.5" disabled={save.isPending || !ready || filename === ""} onClick={onSave}>
+            {save.isPending ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+            ) : (
+              <Save className="size-4" aria-hidden />
+            )}
+            Save and reload
+          </Button>
+        </div>
+      </DialogFooter>
+    </>
   );
 }

@@ -2,6 +2,93 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## A query string does not bust Bun's module cache, so "reload the plugin" reloaded nothing (2026-08-27)
+
+`plugin-runtime.ts` reloaded by importing `file:///…/plugin.ts?g=<generation>`,
+with a comment explaining that the cache-buster was what made an edited plugin
+take effect. It is not. **Bun keys its module registry on the resolved path and
+drops the query and the hash from a `file:` URL**, so every reload after the
+first handed back the first evaluation.
+
+Measured against Bun 1.4, editing the file between each import:
+
+| | |
+|---|---|
+| `import(href)` | `first` |
+| `import(href + "?g=2")` | `first` |
+| `import(href + "?t=" + Date.now())` | `first` |
+| `import(href + "#" + Date.now())` | `first` |
+| `import(<a different filename>)` | **`second`** |
+
+Nothing errored. The old plugin simply kept running, with the new source sitting
+on disk — and the *manifest* shown in the UI was the old one too, so there was
+not even a disagreement between two layers to notice.
+
+The fix is a throwaway copy: each file is copied to a hidden sibling
+(`.casatube-reload-<generation>-<name>.ts`), imported, and deleted. A **sibling**
+rather than a temp directory, because `import.meta.dir` and any relative path
+inside the plugin have to resolve the way they would from the real file; and
+hidden because that is exactly what the loader skips and what the editor refuses
+to write. The error message is rewritten back to the real filename, so a syntax
+error names the file the user typed.
+
+⚠️ It is done on **every** load, not only reloads. Two runtimes over the same
+directory in one process — which is what a test suite is — would otherwise have
+a first load that behaved differently from every load after it.
+
+📌 It was invisible for as long as it existed, because nobody edits a plugin
+without also restarting the process. **An editor is what turned a dormant bug
+into the main feature not working.** The regression test is in
+`plugin-runtime.test.ts` → *"reloading actually reloads"*, and it asserts both
+halves: the manifest moved, **and** the hook returns the new value. Asserting
+only the manifest would pass with `setup` never re-run.
+
+## A React Query mutation in a dependency array is an infinite render loop (2026-08-27)
+
+```tsx
+useEffect(() => {
+  setPatch({});
+  save.reset();
+}, [open, name, save]);        // ← `save` is new on every render
+```
+
+`useMutation` returns a **new result object every render**. Listing it as a
+dependency makes the effect run every render; the effect calls `setState`, which
+renders; which runs the effect. React ends it with *Minified React error #185*
+("Maximum update depth exceeded") and the whole screen becomes an error
+boundary — in this case the entire Settings page, from one dialog nobody had
+opened yet.
+
+`tsc` is perfectly happy, and the lint rule that exists for the opposite mistake
+(*missing* dependencies) actively pushes you into this one.
+
+📌 The fix is a ref: `resetSave.current = save.reset` on every render, and
+`[open, name]` as the dependency list. The general shape — and it is the third
+time this project has met it — is **a value whose identity changes more often
+than its meaning**. Query results, mutation results and inline object literals
+all qualify.
+
+⚠️ Found by clicking, not by reading or by a test. It needed a browser, a real
+render, and the specific click that mounted the dialog.
+
+## A plugin's own log is API output, and no server-side rule can redact it (2026-08-27)
+
+`GET /api/plugins` returns each plugin's recent `log` lines, and a setting marked
+`secret` is stripped from every value the API reports. A test asserting "the
+token never appears in any response" still failed — because the *test plugin*
+did `log("TOKEN=" + config.TOKEN)`, and the runtime dutifully stored and served
+what it was given.
+
+That is not a leak in the redaction rule; it is the boundary of one. The server
+can refuse to echo a value it was asked to keep, and it cannot know that a string
+a plugin chose to print is that same value.
+
+📌 So `plugins/README.md` says it plainly — do not log a value you declared
+`secret` — and the test plugin logs `TOKEN_LEN=7` instead. Worth noticing that
+the honest version of the test is also the one that *proves the value arrived*:
+asserting only that "hunter2" is absent would pass just as well if the setting
+had never been stored at all.
+
 ## The scroll jumps to the top because the *router* scrolls it, not React (2026-08-27)
 
 Scroll to the bottom of the queue, click a row, and the page snaps back to the
@@ -555,3 +642,38 @@ document, a compose file and a Dockerfile still looked like a feature from every
 angle** — three places agreeing with each other and none of them agreeing with
 the code. Documentation is not evidence of behaviour, however much of it there
 is.
+
+## Two ports, two servers, one number (2026-08-27)
+
+Bun binds with `SO_REUSEPORT`, so **starting a second server on a port already
+in use succeeds** and the kernel splits requests between them. A leftover
+process kept serving a stale bundle alongside the new one, half the requests got
+old code, and an agent "fixed" a bug that was already fixed.
+
+Check with `ss -lptn`; the tell is curling twice and comparing the asset hash.
+
+📌 The general shape again: a check that answers, but not about the thing you
+think it is about.
+
+## Radix restores focus by scrolling to it (2026-08-27)
+
+A `Select` on a long page yanked the reader back to the top on close. It looked
+like the TanStack Router scroll reset — and routing it through `useSetSearch`
+**did not fix it**.
+
+Instrumenting showed `scrollTop` going 350 → 0 with `scrollHeight` unchanged and
+**neither `window.scrollTo` nor the `scrollTop` setter ever called**. Radix
+restores focus to the trigger with a bare `focus()`, and focusing an off-screen
+element scrolls it into view — the browser did it, not our code.
+
+```ts
+onPointerDown={(event) => event.currentTarget.focus({ preventScroll: true })}
+```
+
+Fixed once in `components/ui/select.tsx` rather than per screen: the version of
+this bug that survives is always the one somebody forgot in their own corner —
+which is exactly how the router half of it lived on six screens.
+
+⚠️ **Two independent causes wearing the same symptom.** The first fix was real
+and the bug stayed, which is the moment to suspect a second cause rather than to
+doubt the first fix.

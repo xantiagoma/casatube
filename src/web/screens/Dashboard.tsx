@@ -124,7 +124,6 @@ export function Dashboard() {
             <SelectTrigger
               className="w-28"
               aria-label="Analytics window"
-              onPointerDown={(event) => event.currentTarget.focus({ preventScroll: true })}
             >
               <SelectValue />
             </SelectTrigger>

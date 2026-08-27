@@ -34,7 +34,7 @@ import { TranscodeRejected } from "../core/errors";
 import type { ServerConfig } from "./config";
 import type { AppContext } from "./context";
 import { safeDestination } from "./destination";
-import { fail } from "./errors";
+import { fail, toApiError } from "./errors";
 
 /**
  * The process-wide queue.
@@ -145,7 +145,10 @@ export function transcodeRoutes(ctx: AppContext) {
 
           return {
             queued: outcome.queued,
-            rejected: [...rejected, ...outcome.rejected],
+            rejected: [
+              ...rejected,
+              ...outcome.rejected.map(({ path, error }) => ({ path, reason: toApiError(error).message })),
+            ],
             /**
              * ⚠️ Repeated in the answer as well as on `/presets`, because this
              * is the response a confirmation dialog is holding when it decides

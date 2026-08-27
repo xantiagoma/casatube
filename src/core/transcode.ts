@@ -85,19 +85,29 @@ export interface TranscodePreset {
  *
  * ⚠️ `+faststart` on every MP4. Without it the `moov` lands at the *end*, which
  * is the classic reason a file plays from disk and stalls over HTTP.
+ *
+ * ⚠️ **`-dn -sn`: no data tracks and no subtitle tracks.** Both were found the
+ * hard way. ffmpeg wrote a `bin_data` track into the first real output measured
+ * here — an unknown track in an MP4 is exactly the thing a television's decoder
+ * refuses, in a preset whose entire promise is that a television will play it.
+ * And an MKV's ASS subtitles cannot be copied into MP4 at all: kept, they fail
+ * the whole job an hour in. They are dropped rather than converted because
+ * CasaTube already keeps subtitles as sidecar files beside the video, which is
+ * where every media server looks for them — so nothing is lost, and the preset
+ * descriptions say so.
  */
 export const TRANSCODE_PRESETS: readonly TranscodePreset[] = [
   {
     id: "tv",
     label: "Compatible with a TV",
     description:
-      "H.264 High and AAC stereo in an MP4 — the combination every television, phone and browser made in the last decade decodes in hardware.",
+      "H.264 High and AAC stereo in an MP4 — the combination every television, phone and browser made in the last decade decodes in hardware. Embedded subtitles are dropped; sidecar .srt files beside the video are untouched.",
     cost: "Re-encodes the video. Expect roughly the length of the film on a busy machine, and a file of a similar size.",
     ext: "mp4",
     suffix: " (TV)",
     reencodesVideo: true,
     args: [
-      "-map", "0:v:0?", "-map", "0:a?",
+      "-map", "0:v:0?", "-map", "0:a?", "-dn", "-sn",
       "-c:v", "libx264", "-preset", "medium", "-crf", "20",
       "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
       "-c:a", "aac", "-b:a", "192k", "-ac", "2",
@@ -114,7 +124,7 @@ export const TRANSCODE_PRESETS: readonly TranscodePreset[] = [
     suffix: " (small)",
     reencodesVideo: true,
     args: [
-      "-map", "0:v:0?", "-map", "0:a?",
+      "-map", "0:v:0?", "-map", "0:a?", "-dn", "-sn",
       // ⚠️ `-2` on the width, not `-1`: H.264 needs even dimensions and an odd
       // one fails the encode outright rather than rounding.
       "-vf", "scale='min(1280,iw)':-2",
@@ -144,12 +154,12 @@ export const TRANSCODE_PRESETS: readonly TranscodePreset[] = [
     id: "mp4-remux",
     label: "Repack as MP4 (no re-encode)",
     description:
-      "Moves the existing video and audio into an MP4 untouched. Only works when what is inside is already H.264 or H.265 with AAC, MP3 or AC-3.",
+      "Moves the existing video and audio into an MP4 untouched. Only works when what is inside is already H.264 or H.265 with AAC, MP3 or AC-3. Embedded subtitles are dropped; sidecar files are untouched.",
     cost: "Nearly free — the streams are copied, not encoded. Seconds to a couple of minutes.",
     ext: "mp4",
     suffix: "",
     reencodesVideo: false,
-    args: ["-map", "0:v:0?", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart"],
+    args: ["-map", "0:v:0?", "-map", "0:a?", "-dn", "-sn", "-c", "copy", "-movflags", "+faststart"],
   },
 ] as const;
 
@@ -302,7 +312,13 @@ export interface TranscodeQueue {
    */
   enqueueMany(paths: readonly string[], request: Omit<TranscodeRequest, "path">): Promise<{
     queued: TranscodeRow[];
-    rejected: { path: string; reason: string }[];
+    /**
+     * ⚠️ The **error object**, not a sentence. Turning a tagged error into
+     * prose is `api/errors.ts`'s job and it does it in one place; a message
+     * composed here would be a second wording of the same failure, free to
+     * drift from the one every other route produces.
+     */
+    rejected: { path: string; error: TranscodeError }[];
   }>;
   list(filter?: { status?: TranscodeStatus[]; limit?: number }): Promise<TranscodeRow[]>;
   get(id: string): Promise<Result<TranscodeRow, NotFound>>;
@@ -432,12 +448,12 @@ export function createTranscodeQueue(options: TranscodeOptions): TranscodeQueue 
   async function enqueueMany(
     paths: readonly string[],
     request: Omit<TranscodeRequest, "path">,
-  ): Promise<{ queued: TranscodeRow[]; rejected: { path: string; reason: string }[] }> {
+  ): Promise<{ queued: TranscodeRow[]; rejected: { path: string; error: TranscodeError }[] }> {
     const queued: TranscodeRow[] = [];
-    const rejected: { path: string; reason: string }[] = [];
+    const rejected: { path: string; error: TranscodeError }[] = [];
     for (const path of paths) {
       const one = await enqueue({ ...request, path });
-      if (Result.isError(one)) rejected.push({ path, reason: one.error.message });
+      if (Result.isError(one)) rejected.push({ path, error: one.error });
       else queued.push(one.value);
     }
     return { queued, rejected };

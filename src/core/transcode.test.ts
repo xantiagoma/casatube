@@ -90,6 +90,19 @@ describe("buildTranscodeArgs", () => {
     expect(args.indexOf("-i")).toBeLessThan(args.indexOf("libx264"));
   });
 
+  /**
+   * 🔴 An unknown data track in an MP4 is precisely what a television refuses,
+   * and ffmpeg wrote one into the first real output measured here. An MKV's ASS
+   * subtitles cannot be copied into MP4 at all, and would fail the job an hour
+   * in. Both are excluded by hand in every preset that writes an MP4.
+   */
+  test("no MP4 preset carries a data or subtitle track through", () => {
+    for (const preset of TRANSCODE_PRESETS.filter((p) => p.ext === "mp4")) {
+      expect(preset.args).toContain("-dn");
+      expect(preset.args).toContain("-sn");
+    }
+  });
+
   test("an MP4 output is always faststart — otherwise it stalls over HTTP", () => {
     for (const preset of TRANSCODE_PRESETS.filter((p) => p.ext === "mp4")) {
       expect(buildTranscodeArgs("in", "out.mp4", preset)).toContain("+faststart");
@@ -304,6 +317,9 @@ describe("enqueueMany", () => {
     expect(outcome.queued.map((row) => row.sourcePath)).toEqual(["Videos/One.mkv", "Videos/Two.mkv"]);
     expect(outcome.rejected).toHaveLength(1);
     expect(outcome.rejected[0]?.path).toBe("Videos/ghost.mkv");
+    // ⚠️ The error itself, so the HTTP layer writes the sentence — see the note
+    // on `enqueueMany`.
+    expect(outcome.rejected[0]?.error._tag).toBe("NotFound");
   });
 });
 
