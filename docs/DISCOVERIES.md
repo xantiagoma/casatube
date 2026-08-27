@@ -2,6 +2,116 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## `min-w-0` + `flex-1` + `truncate` still lets one long path widen the whole grid (2026-08-27)
+
+The Settings screen overflowed sideways on an iPad: `innerWidth` 820,
+`document.documentElement.scrollWidth` **1095**. Every card measured 785 px
+wide, and no card was asking for it — the *grid column* was.
+
+The driver was one row in the storage card:
+
+```tsx
+<div className="flex flex-wrap items-baseline justify-between gap-2">
+  <span>Library</span>
+  <span className="min-w-0 flex-1 truncate font-mono">{longPath}</span>
+</div>
+```
+
+A filesystem path is a single unbreakable word. Inside a **wrapping** flex row,
+Chrome gives such an item a min-content contribution of its whole width —
+`min-width: 0` and `flex: 1 1 0%` are both applied (verified in the computed
+style) and neither stops it. Measured with `style.width = "min-content"`:
+
+| | min-content |
+|---|---|
+| the row with `truncate` | **785 px** |
+| the same row with `break-all` | ~40 px |
+| the card's other rows | 65–108 px |
+
+📌 `truncate` is `overflow:hidden` + `white-space:nowrap`, and *nowrap is the
+problem*: an item that cannot break cannot shrink, and a flex item that cannot
+shrink sets the min-content width of every ancestor, up to and including a
+single-column grid track. The fix is to let the text break (`break-all`), which
+also reads better — the whole path is visible instead of cut off.
+
+⚠️ Only reproducible with a genuinely long value: the same screen with
+`DATA_DIR=/data` looks perfect. It was found with a scratch directory whose path
+is 90 characters, and the check that proves it is one number —
+`document.documentElement.scrollWidth` against `innerWidth`, on the width you
+actually care about.
+
+## An `interface` does not satisfy `Record<string, unknown>`, so `useSetSearch<LibrarySearch>` does not compile (2026-08-27)
+
+Adopting the scroll fix on the Library screen looked like one line:
+
+```ts
+const setSearch = useSetSearch<LibrarySearch>();
+//                             ^ Type 'LibrarySearch' does not satisfy the
+//                               constraint 'Record<string, unknown>'.
+```
+
+`useSetSearch<S extends Record<string, unknown>>` accepts the Dashboard's
+`useSetSearch<{ range: StatsRange }>()` and rejects the Library's, and the two
+look identical. **A type alias for an object literal gets an implicit index
+signature; a declared `interface` does not** — the compiler assumes an interface
+may be augmented later with a member of another type, so it refuses to promise
+anything about unknown keys.
+
+Three fixes, and only two are honest: widen the call site
+(`useSetSearch<LibrarySearch & Record<string, unknown>>()`, which is what
+`screens/Library.tsx` does), or turn the declaration in `search-params.ts` into
+a `type`. Loosening the hook's own constraint is the third, and it would remove
+the check from every screen to spare one.
+
+📌 Worth knowing because **every remaining screen with the scroll bug is an
+`interface` in `search-params.ts`** — Sources, Storage and Settings will each
+meet this the moment they are fixed, and the error names the constraint rather
+than the cause.
+
+## `matches: []` claims **every** URL, not none (2026-08-27)
+
+`manifestMatches` reads an empty `matches` as *no restriction*:
+
+```ts
+if (patterns === undefined || patterns.length === 0) return true;
+```
+
+That is deliberate — the Jellyfin refresh and the webhook are plugins about the
+*result*, not the source, and both ship `matches: []` — and it is the exact
+opposite of what the array looks like it says. Two of the three built-ins are
+therefore returned by `GET /api/plugins/applicable?url=` for **any** URL you
+paste.
+
+📌 It matters the moment a screen puts the answer into words. "2 plugins claim
+this URL" is wrong for a plugin that claims every URL, and the wrongness is
+invisible from the outside: the list is correct, the sentence is not. The
+download window says *"Applies to every download"* for an empty `matches` and
+*"Claims bit.ly, t.co, …"* only when there is a list.
+
+⚠️ Read the other way round, this is also the trap for anyone writing a plugin:
+omitting `matches` because "it doesn't match anything yet" ships a plugin that
+runs on everything.
+
+## The per-download plugin override does not exist on the server (2026-08-27)
+
+PLAN §5 promises two controls: a **global default** per plugin, and a
+**per-download override** in the download window. Only the first one is built.
+`POST /api/jobs` takes `url`, `destination`, `preferences`, `priority`, `force`
+and four metadata fields — **nothing about plugins** — there is no per-job
+column for it, and `runtime.run()` dispatches to whatever is enabled
+process-wide at the moment a hook fires.
+
+📌 Written down because the natural thing to build from that paragraph of the
+plan is a switch per plugin in the download panel, and it would be the third
+control in this file that moves and changes nothing (`MAX_CONCURRENT_DOWNLOADS`
+and `LOG_LEVEL` are the other two — and the first of those has since been
+wired up). What the panel does instead is show which plugins apply, what each
+would do, whether it is on, and a link to the one screen that can change that.
+
+⚠️ The wiring, when it is wanted, is a per-job field and a dispatch that reads
+it — not a UI change. `applicableTo` is already the right answer to show; only
+the decision has nowhere to live.
+
 ## A *value* imported from `core/` into `src/web` breaks the bundle, and `tsc` says nothing (2026-08-27)
 
 The credentials screen needed the four credential types to draw its type

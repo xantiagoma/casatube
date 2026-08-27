@@ -994,6 +994,14 @@ export function openLibrary(options: LibraryOptions): Library {
     }
 
     // Gate 2 — the root answered. Is there anything in it?
+    //
+    // ⚠️ A full `readdir` where "is there at least one entry" would do.
+    // `opendir` + one `read()` is O(1) and would be the better call on a
+    // directory of thousands — but it hands back a handle that has to be
+    // closed, and a handle abandoned at a deadline is a leak on exactly the
+    // dead mount this function exists to survive. The top level of a media
+    // library is a handful of folders; `readdir` is the trade that keeps the
+    // failure path simple.
     const entries = await readdirUnder(root, Math.min(timeoutMs, Math.max(1, remaining())));
     if (Result.isError(entries)) {
       return everything("mount-unavailable", `the library root could not be read: ${entries.error.detail}`);

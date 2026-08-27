@@ -79,13 +79,16 @@ function ReadOnly({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-2 py-1.5">
       <span className="text-sm text-muted-foreground">{label}</span>
-      {/* ⚠️ `flex-1 min-w-0` and not just `min-w-0`: a filesystem path is one
-          unbreakable word, and a flex item that cannot shrink sets the
-          *min-content* width of everything above it — which is how one long
-          library path made the whole Settings grid 1095 px wide inside an
-          820 px iPad. `truncate` alone does not shrink it; being allowed to is
-          what makes truncation happen. */}
-      <span className="min-w-0 flex-1 truncate text-right font-mono text-xs font-medium">{value}</span>
+      {/* ⚠️ `break-all`, not `truncate`, and it is a layout fix rather than a
+          taste one: a filesystem path is a single unbreakable word, and inside a
+          **wrapping** flex row Chrome gives such an item a min-content
+          contribution of its whole width — `min-w-0` and `flex-1` together do
+          not stop it (measured: the row's min-content stayed 785 px). One long
+          library path was therefore making the entire Settings grid 1095 px wide
+          inside an 820 px iPad. Letting the text break collapses that to one
+          character, and it also means the whole path is readable rather than
+          cut off. */}
+      <span className="min-w-0 flex-1 text-right font-mono text-xs font-medium break-all">{value}</span>
     </div>
   );
 }

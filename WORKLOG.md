@@ -5,6 +5,98 @@ session with none of this context. Newest first.
 
 ---
 
+## 2026-08-27 — Transcoding has a screen, and it says what it costs
+
+> «la transcodificación existe entera en el servidor y no hay ni un botón.»
+
+The queue, the presets, the progress and the cancellation landed earlier the
+same day with **no UI at all** — deliberately, because three other agents held
+the screens. This is the other half: a **Conversions** tab on the Library, a
+*Convert…* button on the detail panel, and multi-select in the grid and the
+list so a batch is one press.
+
+**+27 tests (971 → 998 in the tree). `tsc` clean. React Doctor 60/100 with
+nothing in a file this work created or touched.** Not committed.
+
+### What it says, and where the words come from
+
+🔴 **Every claim on this screen is the server's sentence, not a second one
+written in the browser.** `core/transcode.ts` puts `cost` on the preset and
+`api/transcode.ts` puts `concurrency` on `/presets` and a `warning` on the
+`POST` answer *precisely so a UI does not invent them* — so the dialog renders
+`preset.cost` verbatim, the receipt renders `warning` verbatim, and a rejection
+renders the reason the route composed.
+
+| The thing that must be understood | How it is said |
+|---|---|
+| **It re-encodes, and it is expensive** | A standing warning contrasting it with playback — which *remuxes*, copying the video — plus the preset's own `cost` line under every option, and a `Re-encodes the video` / `Copies the streams` badge from `reencodesVideo` |
+| **One at a time** | `concurrency` from `/presets`, the count already waiting *before* the button is pressed, and — the part that matters — **"1 conversion ahead of it"** on every waiting row |
+| **The original is never overwritten** | Said in the dialog, and then *shown*: every row carries both filenames. `replaceOriginal` is offered, off, and worded as what it is — the original is **moved to `.trash/` after the copy is verified**, restorable, and untouched if the job fails or is cancelled |
+
+🔴 **Five rows reading "Waiting" is what this feature looks like when it is
+working**, and rendered as a bare status it reads as five things that have
+stopped. The queue position is the whole difference between a queue and a
+stall, which is why it is a tested pure function rather than a string in a
+component.
+
+### What was built
+
+| Where | What |
+|---|---|
+| `web/data/transcode.ts` | The four hooks. **Polled, not pushed** — `/api/events` is the download queue's stream and knows nothing about transcodes — at 1.5 s while something is active and 15 s when not |
+| `components/library/transcode-view.ts` | Order, queue position, progress, the batch summary. Pure, **+27 tests** |
+| `components/library/TranscodeDialog.tsx` | The presets, the three warnings, the receipt with `queued` **and** `rejected` |
+| `components/library/TranscodeJobs.tsx` | The list, the progress bar, cancel-with-consequences |
+| `components/library/{FolderSidebar,LibraryToolbar}.tsx` | Lifted out of the screen — see below |
+| `screens/Library.tsx` | Three tabs, selection mode, the Convert button, and `useSetSearch` |
+
+⚠️ **No ffmpeg flag is reachable from the browser, by construction.** The
+dialog sends a preset id off the list the server sent; there is no free-text
+field anywhere in it, which is the same rule the route enforces from its side.
+
+### Two things fixed while in there
+
+- **The Library was the seventh screen with the scroll bug.** Every navigation
+  now goes through `useSetSearch`. Measured on the running app: scrolled to 218,
+  opened an item, still 218. ⚠️ It cost a compile error first — see
+  `docs/DISCOVERIES.md` on `interface` and `Record<string, unknown>`.
+- **`trash: boolean` became `tab: "media" | "conversions" | "trash"`.** Two
+  independent booleans would have had an impossible combination between them.
+  ⚠️ `?trash=true` still opens the Trash: the router reads it as the *default*
+  for `tab`, so an old bookmark does not silently land on the media grid.
+
+### Verified in a browser against a real ffmpeg, not only in tests
+
+A scratch library of VP9/Opus MKVs, `PORT=8703`, a real `ffmpeg` and `ffprobe`:
+
+| | |
+|---|---|
+| A 12 s clip → `tv` preset, watched to `Done` | `ffprobe`: **H.264 High, level 40, `yuv420p` + AAC-LC 48 kHz stereo**, `moov` immediately after `ftyp`, duration 12.007 s against the source's 12.008 |
+| The original | **still there**, same bytes, same mtime — in every one of these runs |
+| Two queued at once | One `running` at 3 → 19 → 39 %, the other `queued` at 0 with *"1 conversion ahead of it"*, until the first ended |
+| Cancel at 58 % (and again at 38 %) | ffmpeg killed, `cancelled`, **the partial `.mp4` deleted**, the source untouched, and the waiting job started by itself |
+| A batch of two where one output already existed | *"1 file queued; 1 could not be"*, with the server's sentence: *"Videos/Short Clip (TV).mp4 already exists…"* |
+| `replaceOriginal` on an `audio` conversion | `Second Clip.m4a` written, `Second Clip.mkv` in `.trash/` with `reason: "transcode"`, restorable from the Trash tab |
+
+Light and dark, and at 1024×768 for the iPad: the selection ticks are 24 px and
+sit on their own background, because they are drawn over a picture.
+
+### One thing worth keeping
+
+⚠️ **`row.status` is a `string`, not `TranscodeStatus`** — the column is a plain
+`text()` with no `$type<>()`. Every lookup in `transcode-view.ts` is keyed on
+`string` with a fallback, and there is a test for a status this build has never
+heard of; the exhaustive version type-checks and renders `undefined` on the one
+row that would matter.
+
+📌 **React Doctor caught the screen growing.** `LibraryScreen` was not flagged
+at `HEAD` and was flagged with this work on it — verified by running the scan
+against a copy of the tree holding `HEAD`'s version of that one file. The
+sidebar and the toolbar came out into `components/library/`, and the finding
+went with them.
+
+---
+
 ## 2026-08-27 — Credentials, on a screen at last (and `CREDENTIALS_KEY` in the deploy)
 
 The store, the encryption and the four endpoints landed earlier the same day
@@ -164,9 +256,9 @@ Measured against a running server, 200 jobs, single instance (see the
 
 | | |
 |---|---|
-| `GET /api/jobs`, 200 jobs | **16 ms** warm, 59 ms cold |
-| `POST /api/jobs/file-state`, 199 ids → **199 `stat`s** | **5 ms** server-side, 11–16 ms round trip |
-| Same, cold | 13–19 ms server-side |
+| `GET /api/jobs`, 200 jobs | **16 ms** warm, 40–59 ms cold |
+| `POST /api/jobs/file-state`, ~175–199 ids → one `stat` each | **2–5 ms** server-side, **8–13 ms** round trip (nine warm samples; the outliers are 10 ms / 22 ms) |
+| Same, first call after a restart | 13–26 ms server-side |
 | `file-state` requests during **20 s of live SSE** | **0** — verified with a positive control |
 
 ### 🔴 The three gates that keep `missing` honest

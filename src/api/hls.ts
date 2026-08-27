@@ -114,6 +114,28 @@ export function hlsRoutes(ctx: AppContext) {
       )
 
       /** What is running, and what it is costing. See the disk warning in `core/hls.ts`. */
+      /**
+       * Stop a playback session and reclaim its segments.
+       *
+       * The card that lists sessions had no button because this did not exist,
+       * and a Close that quietly did nothing would have been the fourth control
+       * in this repo that moves without changing anything.
+       *
+       * ⚠️ Safe while ffmpeg is still writing: `discard` kills the process
+       * before removing the directory, so a session someone is watching stops
+       * rather than having the floor pulled out from under it.
+       */
+      .delete(
+        "/sessions",
+        async ({ query }) => {
+          const path = safeDestination(query.path, config.libraryDir);
+          if (Result.isError(path)) return fail(path.error);
+          const freed = await manager.close(path.value);
+          return { discarded: freed > 0, path: path.value, freedBytes: freed };
+        },
+        { query: t.Object({ path: t.String() }) },
+      )
+
       .get("/sessions", () => manager.stats())
 
       /**

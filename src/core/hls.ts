@@ -597,6 +597,14 @@ export interface HlsManager {
   sweep(at?: number): Promise<number>;
   /** Stop the timer and kill everything. */
   stop(): Promise<void>;
+  /**
+   * Stop one session and reclaim its segments. Returns the bytes freed.
+   *
+   * Exists because the screen that lists sessions had no way to end one, and a
+   * Close button with nothing behind it would have been the fourth control in
+   * this project that moves without changing anything.
+   */
+  close(relPath: string): Promise<number>;
 }
 
 function describeCause(cause: unknown): string {
@@ -1066,5 +1074,20 @@ export function createHlsManager(options: HlsOptions): HlsManager {
     await Promise.all([...removals, ...all.map((session) => session.proc?.exited ?? Promise.resolve(0))]);
   }
 
-  return { root, verdict, playlist, segment, stats, sweep, stop };
+  /**
+   * Stop one session and reclaim its segments.
+   *
+   * Safe while ffmpeg is still writing: `discard` kills the process before
+   * removing the directory, so a session someone is watching stops cleanly
+   * rather than having the floor pulled out from under it.
+   */
+  async function close(relPath: string): Promise<number> {
+    const session = sessions.get(relPath);
+    if (!session) return 0;
+    const freed = await bytesOf(session.dir).catch(() => 0);
+    await discard(session, "closed from the interface");
+    return freed;
+  }
+
+  return { root, verdict, playlist, segment, stats, sweep, stop, close };
 }
