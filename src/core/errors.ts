@@ -175,6 +175,48 @@ export class NotFound extends TaggedError("NotFound")<{
   id: string;
 }> {}
 
+// --- Credentials ------------------------------------------------------------
+
+/**
+ * A credential was rejected, or could not be opened.
+ *
+ * 🔴 `field` and `detail` are the whole value of this error. A cookie jar that
+ * is one tab short fails **twenty minutes into an 800 MB download**, three
+ * layers away from the paste that caused it — so the rejection has to happen at
+ * the moment of writing and it has to say which line and what is wrong with it.
+ *
+ * ⚠️ Neither field ever carries the secret. `detail` names positions, counts and
+ * domains; a value out of the file would end up in an HTTP response and a log
+ * line, which is exactly what the credential store exists to prevent.
+ */
+export class InvalidCredential extends TaggedError("InvalidCredential")<{
+  /** Which part was wrong: `scope`, `cookies`, `username`, `password`, `secret`… */
+  field: string;
+  detail: string;
+}> {}
+
+// --- Settings ---------------------------------------------------------------
+
+/**
+ * A setting was refused, and the refusal names the constraint.
+ *
+ * 🔴 Refused rather than coerced. `maxResolution: "1080p"` coerced becomes
+ * `NaN`, the screen renders a number, and the worker uses something else — a
+ * control that looks like it worked and did not. `detail` is what the form puts
+ * next to the field, so it states the rule ("Must be at most 4320") rather than
+ * saying that something went wrong.
+ *
+ * It also carries the settings that exist and cannot be written: `DATA_DIR`,
+ * because the database that would hold the override lives inside it, and
+ * `COOKIES_FILE`, because credentials do not travel through the API (PLAN §12).
+ * Both are answered with the reason rather than with a 404 pretending they are
+ * not there.
+ */
+export class InvalidSettingValue extends TaggedError("InvalidSettingValue")<{
+  key: string;
+  detail: string;
+}> {}
+
 // --- Queue ------------------------------------------------------------------
 
 /**
@@ -221,6 +263,12 @@ export type PlaybackError = TranscodeUnavailable | TranscodeBusy | LibraryError;
 
 export type QueueError = NotFound | InvalidTransition | LeaseLost;
 
+/** What reading or writing a setting can fail with. */
+export type SettingsError = NotFound | InvalidSettingValue;
+
+/** What storing or opening a credential can fail with. */
+export type CredentialError = InvalidCredential | NotFound;
+
 /**
  * Should the system slow down because of this error?
  *
@@ -230,3 +278,21 @@ export type QueueError = NotFound | InvalidTransition | LeaseLost;
 export function demandsBackoff(e: { _tag: string }): boolean {
   return e._tag === "RateLimited" || e._tag === "Blocked";
 }
+
+/**
+ * A transcode that will not be started, and the reason.
+ *
+ * 🔴 Separate from {@link TranscodeUnavailable}, which is about *playback* —
+ * "this file cannot reach a browser". This one is about a **request to
+ * re-encode** that is being refused before any CPU is spent: the output name is
+ * taken, the same file is already queued, the preset does not exist, or the
+ * conversion would land on top of the original. Every one of those is something
+ * the asker can fix, and none of them is a fault in the file.
+ *
+ * ⚠️ It is deliberately *not* retryable. Retrying "that name is taken" produces
+ * the same answer for ever; the fix is a different name or a different preset.
+ */
+export class TranscodeRejected extends TaggedError("TranscodeRejected")<{
+  path: string;
+  detail: string;
+}> {}

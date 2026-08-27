@@ -46,6 +46,10 @@ export interface DownloadsSearch {
   tab: DownloadTab;
   q?: string;
   job?: string;
+  sort: JobSort;
+  order: SortOrder;
+  /** What became of the downloaded file — see `components/jobs/job-order`. */
+  file: FileFilter;
   /**
    * Which tab of the inspector is open.
    *
@@ -63,12 +67,38 @@ export type QueueFilter = (typeof QUEUE_FILTERS)[number];
 
 export interface QueueSearch {
   status: QueueFilter;
+  q?: string;
+  sort: JobSort;
+  order: SortOrder;
   job?: string;
   panel: InspectorTab;
 }
 
+/**
+ * How the two job screens order their rows.
+ *
+ * 🔴 In the URL rather than in a `useState` for the reason everything else here
+ * is: "the biggest failed downloads, oldest first" is a view worth sending
+ * someone, and a sort that lives in a component is a sort that a reload throws
+ * away. `date` + `desc` is the default on both screens — a queue is read
+ * newest-first, and the API's own order (priority, then oldest) is the wrong
+ * one to show.
+ */
+export const JOB_SORTS = ["date", "status", "priority", "size", "duration"] as const;
+export type JobSort = (typeof JOB_SORTS)[number];
+
+/**
+ * Downloads' file-state filter.
+ *
+ * ⚠️ There is no `missing`: nothing on the wire says whether a recorded output
+ * path still exists. `components/jobs/job-order.ts` carries the full note.
+ */
+export const FILE_FILTERS = ["any", "filed", "trashed", "none"] as const;
+export type FileFilter = (typeof FILE_FILTERS)[number];
+
 export const LIBRARY_SORTS = ["modified", "name", "size"] as const;
 export const SORT_ORDERS = ["asc", "desc"] as const;
+export type SortOrder = (typeof SORT_ORDERS)[number];
 export const LIBRARY_VIEWS = ["grid", "list"] as const;
 
 export interface LibrarySearch {

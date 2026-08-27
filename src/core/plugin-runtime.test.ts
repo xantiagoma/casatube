@@ -17,7 +17,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Result } from "better-result";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -553,6 +553,76 @@ describe("enabling and disabling", () => {
   });
 });
 
+describe("reloading actually reloads", () => {
+  /**
+   * 🔴 The regression test for a bug that had been shipped and believed fixed.
+   *
+   * `load()` used to import `file.ts?g=<generation>` with a comment saying the
+   * query string was what made a reload see new source. It is not: Bun keys its
+   * module registry on the resolved **path** and drops the query and the hash
+   * from a `file:` URL, so every reload handed back the first evaluation and
+   * editing a plugin did nothing at all. Nothing errored; the old plugin simply
+   * kept running.
+   *
+   * That was invisible until there was an editor, because nobody edited a
+   * plugin without also restarting the process. See `docs/DISCOVERIES.md`.
+   */
+  function version(n: number): string {
+    return `export default {
+      name: "v",
+      description: "version ${n}",
+      hooks: [{ at: "url:resolve", kind: "transform" }],
+      setup({ on }) { on("url:resolve", (url) => url + "|${n}"); },
+    };`;
+  }
+
+  test("an edited file is re-read, in the manifest and in the code", async () => {
+    write("v.ts", version(1));
+    const runtime = await runtimeFor();
+    expect(runtime.list()[0]?.description).toBe("version 1");
+    expect(ok(await runtime.run("url:resolve", "u"))).toBe("u|1");
+
+    write("v.ts", version(2));
+    await runtime.load();
+
+    expect(runtime.list()[0]?.description).toBe("version 2");
+    // The manifest moving is not enough on its own: `setup` has to have run
+    // again, or the hook still points at the old closure.
+    expect(ok(await runtime.run("url:resolve", "u"))).toBe("u|2");
+  });
+
+  test("a reload leaves nothing behind in the plugins directory", async () => {
+    // The import goes through a hidden sibling copy, which is the only thing
+    // that busts the cache. A copy left on disk would be litter in a directory
+    // the user browses, and one left with a loadable name would be a duplicate
+    // plugin.
+    write("v.ts", version(1));
+    const runtime = await runtimeFor();
+    await runtime.load();
+    await runtime.load();
+
+    expect(readdirSync(dir)).toEqual(["v.ts"]);
+    expect(runtime.list()).toHaveLength(1);
+  });
+
+  test("a file that becomes broken, then fixed, follows the source both ways", async () => {
+    write("v.ts", version(1));
+    const runtime = await runtimeFor();
+    expect(runtime.list()[0]?.state).toBe("active");
+
+    write("v.ts", "export default { unclosed");
+    await runtime.load();
+    expect(runtime.list()[0]?.state).toBe("error");
+    // The message names the file the user wrote, not the internal copy.
+    expect(runtime.list()[0]?.error).not.toContain("casatube-reload");
+
+    write("v.ts", version(3));
+    await runtime.load();
+    expect(runtime.list()[0]?.state).toBe("active");
+    expect(ok(await runtime.run("url:resolve", "u"))).toBe("u|3");
+  });
+});
+
 describe("providers from plugins", () => {
   test("are registered, and stop claiming URLs when the plugin is switched off", async () => {
     write(
@@ -649,7 +719,7 @@ describe("the jellyfin plugin", () => {
     // The file that ships in the repo, loaded the way a user's copy would be.
     // The type-only import in it is erased before it ever runs, which is why
     // copying it out of the repo does not break it.
-    writeFileSync(join(dir, "jellyfin.ts"), readFileSync(join(import.meta.dir, "../../plugins/jellyfin.ts"), "utf8"));
+    writeFileSync(join(dir, "jellyfin.ts"), readFileSync(join(import.meta.dir, "../plugins/builtin/jellyfin.ts"), "utf8"));
   }
 
   test("asks for a library scan when a job completes", async () => {

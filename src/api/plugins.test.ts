@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createPluginRuntime, type PluginRuntime, type PluginStatus } from "../core/plugin-runtime";
+import { memoryPluginSettings, type ResolvedSetting } from "../core/plugin-settings";
 import { pluginRoutes } from "./plugins";
 
 let root: string;
@@ -41,11 +42,12 @@ function plugin(name: string, matches: string[], extra = ""): string {
   };`;
 }
 
-async function boot(): Promise<void> {
+async function boot(config: Record<string, unknown> = {}): Promise<void> {
   runtime = createPluginRuntime({
     dir,
     stateFile: join(root, "plugin-state.json"),
-    config: {},
+    config,
+    settings: memoryPluginSettings(),
     log: () => {},
   });
   await runtime.load();
@@ -58,6 +60,17 @@ async function get(path: string): Promise<Response> {
 
 async function post(path: string): Promise<Response> {
   return app.handle(new Request(`http://local/api${path}`, { method: "POST" }));
+}
+
+async function send(method: "PUT" | "DELETE", path: string, body?: unknown): Promise<Response> {
+  return app.handle(
+    new Request(`http://local/api${path}`, {
+      method,
+      ...(body === undefined
+        ? {}
+        : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+    }),
+  );
 }
 
 beforeEach(() => {
@@ -274,5 +287,287 @@ describe("POST /api/plugins/:name/enable and /disable", () => {
     expect(body.state).toBe("error");
     expect(body.error).toContain("no config file");
     expect(body.enabled).toBe(false);
+  });
+});
+
+/**
+ * The editor's endpoints.
+ *
+ * These are the ones that write to disk and run code, so the assertions are
+ * about the two things that must stay true whatever anybody types into the box:
+ * a save takes effect **without a restart**, and a file that does not compile
+ * takes **nothing else** down with it.
+ */
+describe("writing plugin files", () => {
+  const source = (name: string, extra = "") => `export default {
+    name: ${JSON.stringify(name)},
+    description: "written through the API",
+    hooks: [{ at: "job:completed", kind: "observe" }],
+    setup({ on }) { on("job:completed", () => {}); ${extra} }
+  };`;
+
+  test("create, list, read back", async () => {
+    await boot();
+
+    const created = await send("PUT", "/plugins/source", { file: "made.ts", source: source("made") });
+    expect(created.status).toBe(200);
+    const body = (await created.json()) as { saved: PluginStatus | null; warning: string; plugins: PluginStatus[] };
+
+    // 🔴 Loaded, not merely written. A save that leaves the runtime holding the
+    // previous generation is a control that appears to work and does nothing —
+    // which is exactly what a restart used to be required for.
+    expect(body.saved?.name).toBe("made");
+    expect(body.saved?.state).toBe("active");
+    expect(body.plugins.map((plugin) => plugin.file)).toContain("made.ts");
+
+    const read = (await (await get("/plugins/source?file=made.ts")).json()) as { file: string; source: string };
+    expect(read.source).toContain(`name: "made"`);
+  });
+
+  test("editing replaces the file, and the new manifest is what the list shows", async () => {
+    await boot();
+    await send("PUT", "/plugins/source", { file: "made.ts", source: source("made") });
+
+    const edited = source("made", "").replace('description: "written through the API"', 'description: "edited"');
+    const response = await send("PUT", "/plugins/source", { file: "made.ts", source: edited, overwrite: true });
+    expect(response.status).toBe(200);
+
+    const listed = (await (await get("/plugins")).json()) as { plugins: PluginStatus[] };
+    expect(listed.plugins.find((plugin) => plugin.file === "made.ts")?.description).toBe("edited");
+  });
+
+  test("saving over an existing file without asking to is refused", async () => {
+    // Not a nicety: "New plugin" prefills a filename, and two people who both
+    // accept the default would otherwise silently overwrite one another.
+    await boot();
+    await send("PUT", "/plugins/source", { file: "made.ts", source: source("made") });
+
+    const clash = await send("PUT", "/plugins/source", { file: "made.ts", source: source("other") });
+    expect(clash.status).toBe(409);
+    expect(((await clash.json()) as { tag: string }).tag).toBe("PluginFileExists");
+  });
+
+  test("delete removes the file and the plugin with it", async () => {
+    await boot();
+    await send("PUT", "/plugins/source", { file: "made.ts", source: source("made") });
+
+    const removed = await send("DELETE", "/plugins/source?file=made.ts");
+    expect(removed.status).toBe(200);
+    expect(((await removed.json()) as { plugins: PluginStatus[] }).plugins).toEqual([]);
+
+    expect((await get("/plugins/source?file=made.ts")).status).toBe(404);
+    expect((await send("DELETE", "/plugins/source?file=made.ts")).status).toBe(404);
+  });
+
+  test("a filename that would never load is refused, and nothing is written", async () => {
+    await boot();
+    for (const file of ["../escape.ts", "_draft.ts", "notes.md", "a.test.ts"]) {
+      const response = await send("PUT", "/plugins/source", { file, source: source("x") });
+      expect(`${file}: ${response.status}`).toBe(`${file}: 400`);
+      expect(((await response.json()) as { tag: string }).tag).toBe("InvalidPluginFile");
+    }
+    expect(((await (await get("/plugins")).json()) as { plugins: PluginStatus[] }).plugins).toEqual([]);
+  });
+
+  test("🔴 a plugin with a syntax error is saved, reported, and takes nothing else down", async () => {
+    await boot();
+    await send("PUT", "/plugins/source", { file: "good.ts", source: source("good") });
+
+    const broken = await send("PUT", "/plugins/source", { file: "bad.ts", source: "export default { unclosed" });
+    // 200, because the write happened. The plugin's *state* carries the failure
+    // — reporting it as a failed request would claim nothing was saved.
+    expect(broken.status).toBe(200);
+    const body = (await broken.json()) as { saved: PluginStatus | null; plugins: PluginStatus[] };
+
+    expect(body.saved?.state).toBe("error");
+    expect(body.saved?.error).toContain("could not be imported");
+
+    // The whole point: everything else is still loaded and still working.
+    const good = body.plugins.find((plugin) => plugin.file === "good.ts");
+    expect(good?.state).toBe("active");
+    expect(good?.error).toBeUndefined();
+
+    // And it is still fixable from here — the broken file opens by filename,
+    // because it has no manifest and therefore no name.
+    const reopened = (await (await get("/plugins/source?file=bad.ts")).json()) as { source: string };
+    expect(reopened.source).toBe("export default { unclosed");
+
+    const fixed = await send("PUT", "/plugins/source", { file: "bad.ts", source: source("bad"), overwrite: true });
+    expect(((await fixed.json()) as { saved: PluginStatus }).saved.state).toBe("active");
+  });
+
+  test("a plugin whose setup throws does not stop the others loading either", async () => {
+    await boot();
+    await send("PUT", "/plugins/source", { file: "good.ts", source: source("good") });
+
+    const response = await send("PUT", "/plugins/source", {
+      file: "boom.ts",
+      source: `export default { name: "boom", description: "throws", setup() { throw new Error("nope"); } };`,
+    });
+    const body = (await response.json()) as { saved: PluginStatus | null; plugins: PluginStatus[] };
+
+    expect(body.saved?.state).toBe("error");
+    expect(body.saved?.error).toContain("nope");
+    expect(body.plugins.find((plugin) => plugin.file === "good.ts")?.state).toBe("active");
+  });
+
+  test("every save carries the sandbox warning, not just the first", async () => {
+    // ⚠️ An editor makes running code on the server easy, which makes this
+    // sentence matter more rather than less — and a warning shown once is a
+    // warning shown to whoever set the machine up, not to whoever is editing.
+    await boot();
+    const first = await send("PUT", "/plugins/source", { file: "made.ts", source: source("made") });
+    const second = await send("PUT", "/plugins/source", {
+      file: "made.ts",
+      source: source("made"),
+      overwrite: true,
+    });
+
+    for (const response of [first, second]) {
+      const { warning } = (await response.json()) as { warning: string };
+      expect(warning).toContain("not a sandbox");
+      expect(warning).toContain("privileges");
+    }
+  });
+
+  test("the template is what the editor starts from, and it loads through this route", async () => {
+    await boot();
+    const template = await (await get("/plugins/template")).text();
+
+    const response = await send("PUT", "/plugins/source", { file: "from-template.ts", source: template });
+    const body = (await response.json()) as { saved: PluginStatus | null };
+    expect(body.saved?.state).toBe("active");
+    expect(body.saved?.name).toBe("my-plugin");
+  });
+});
+
+/**
+ * Declared settings over HTTP.
+ *
+ * 🔴 The load-bearing test in here is the last one: a secret's value must not
+ * appear in **any** response, and the way to check that is to search the whole
+ * serialised body for the string rather than to check the one field somebody
+ * remembered to redact.
+ */
+describe("plugin settings", () => {
+  const configurable = `export default {
+    name: "conf",
+    description: "has settings",
+    settings: [
+      { key: "SITE", label: "Site", default: "http://default.local" },
+      { key: "TOKEN", label: "Token", secret: true, required: true }
+    ],
+    hooks: [{ at: "job:completed", kind: "observe" }],
+    setup({ on, log, config }) {
+      // ⚠️ The length, never the value. A plugin's log is returned by the API,
+      // and nothing on the server can redact what a plugin chose to print — so
+      // a test that logged the token would be proving the leak rather than
+      // catching it. The length is enough to show the value arrived.
+      log("SITE=" + String(config.SITE) + " TOKEN_LEN=" + String(config.TOKEN ? String(config.TOKEN).length : 0));
+      on("job:completed", () => {});
+    }
+  };`;
+
+  async function settingsOf(): Promise<ResolvedSetting[]> {
+    const body = (await (await get("/plugins/conf/settings")).json()) as { settings: ResolvedSetting[] };
+    return body.settings;
+  }
+
+  test("the declaration travels on the listing, so the form exists before setup ran", async () => {
+    write("conf.ts", configurable);
+    await boot();
+
+    const body = (await (await get("/plugins")).json()) as { plugins: PluginStatus[] };
+    const conf = body.plugins.find((plugin) => plugin.name === "conf");
+    expect(conf?.settings?.map((setting) => setting.key)).toEqual(["SITE", "TOKEN"]);
+    // A required setting with nothing behind it is reported, because "active
+    // and doing nothing" looks exactly like "working".
+    expect(conf?.missingSettings).toEqual(["TOKEN"]);
+  });
+
+  test("each value reports the layer it came from", async () => {
+    write("conf.ts", configurable);
+    await boot({ SITE: "http://from-env" });
+
+    const before = await settingsOf();
+    expect(before.find((setting) => setting.key === "SITE")?.source).toBe("environment");
+    expect(before.find((setting) => setting.key === "SITE")?.value).toBe("http://from-env");
+
+    const saved = await send("PUT", "/plugins/conf/settings", { values: { SITE: "http://typed" } });
+    expect(saved.status).toBe(200);
+
+    const after = await settingsOf();
+    const site = after.find((setting) => setting.key === "SITE");
+    expect(site?.source).toBe("stored");
+    expect(site?.value).toBe("http://typed");
+    // 🔴 The environment underneath was never written to. That is what makes
+    // the revert button honest rather than a second guess.
+    expect(site?.fallback).toBe("environment");
+    expect(site?.fallbackValue).toBe("http://from-env");
+
+    // And the plugin was actually re-run with it.
+    expect(runtime.list().find((plugin) => plugin.name === "conf")?.log.join("\n")).toContain("SITE=http://typed");
+  });
+
+  test("null reverts to the environment value", async () => {
+    write("conf.ts", configurable);
+    await boot({ SITE: "http://from-env" });
+    await send("PUT", "/plugins/conf/settings", { values: { SITE: "http://typed" } });
+
+    await send("PUT", "/plugins/conf/settings", { values: { SITE: null } });
+
+    const site = (await settingsOf()).find((setting) => setting.key === "SITE");
+    expect(site?.source).toBe("environment");
+    expect(site?.value).toBe("http://from-env");
+    expect(runtime.list().find((plugin) => plugin.name === "conf")?.log.join("\n")).toContain("SITE=http://from-env");
+  });
+
+  test("a key the plugin never declared is a 400, not a silent write", async () => {
+    write("conf.ts", configurable);
+    await boot();
+    const response = await send("PUT", "/plugins/conf/settings", { values: { NOPE: "x" } });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { tag: string }).tag).toBe("UnknownPluginSetting");
+  });
+
+  test("settings for a plugin that is not there is a 404", async () => {
+    await boot();
+    expect((await get("/plugins/ghost/settings")).status).toBe(404);
+  });
+
+  test("🔴 a secret's value never leaves the server, through any of these routes", async () => {
+    write("conf.ts", configurable);
+    await boot();
+    await send("PUT", "/plugins/conf/settings", { values: { TOKEN: "hunter2" } });
+
+    // It reached the plugin — otherwise this test would pass for the wrong
+    // reason, by asserting that a value nobody stored is absent.
+    expect(runtime.list().find((plugin) => plugin.name === "conf")?.log.join("\n")).toContain("TOKEN_LEN=7");
+
+    for (const path of ["/plugins", "/plugins/conf/settings", "/plugins/applicable?url=https%3A%2F%2Fe.com%2Fa"]) {
+      const text = await (await get(path)).text();
+      expect(`${path}: ${text.includes("hunter2")}`).toBe(`${path}: false`);
+    }
+
+    // The presence is reported, because the form has to be able to say whether
+    // a token is set at all.
+    const token = (await settingsOf()).find((setting) => setting.key === "TOKEN");
+    expect(token?.configured).toBe(true);
+    expect(token?.source).toBe("stored");
+    expect(token?.value).toBeUndefined();
+  });
+
+  test("a secret declared with a default does not leak it on the listing either", async () => {
+    write(
+      "leaky.ts",
+      `export default {
+         name: "leaky",
+         description: "declares a secret with a default",
+         settings: [{ key: "TOKEN", label: "Token", secret: true, default: "hunter2" }],
+         setup() {}
+       };`,
+    );
+    await boot();
+    expect(await (await get("/plugins")).text()).not.toContain("hunter2");
   });
 });

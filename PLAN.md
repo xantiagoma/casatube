@@ -749,7 +749,8 @@ Everything by environment variable, so the image is the only artefact.
 | `TEMP_DIR` | `/data/tmp` | Downloads land here first |
 | `LIBRARY_DIR` | `/library` | Destination root. Often a network mount |
 | `MAX_CONCURRENT_DOWNLOADS` | `3` | Limits the **download stage** only — see §17 |
-| `COOKIES_FILE` | unset | See below |
+| `COOKIES_FILE` | unset | Global cookie jar. See below |
+| `CREDENTIALS_KEY` | unset | Encrypts the credential store. **Unset = plain text, and the server says so at startup** |
 | `MEDIA_SERVER_URL` / `MEDIA_SERVER_TOKEN` | unset | Refresh hook after a job completes |
 | `LOG_LEVEL` | `info` | |
 | `PUID` / `PGID` | `1000` | Ownership of files written to the library — see §15 |
@@ -767,6 +768,37 @@ never in the repository, never in a log line, and never echoed back through the
 API. They also **expire within hours**, and reusing them from a different IP than
 the one that created them is itself a signal — so treat them as a mitigation, not
 a fix.
+
+### Credentials, per site (`core/credentials.ts`)
+
+`COOKIES_FILE` is one jar for the whole process, which is enough for one YouTube
+account and nothing else. The credential store is the general version: a
+credential has a **scope** (`youtube.com`, `*.odysee.com`, `*`), a **type**
+(`cookies`, `password`, `apiKey`, `custom`) and a secret, and the most specific
+scope that matches a job's URL wins. `COOKIES_FILE` stays as the fallback for
+whatever no credential claims.
+
+**Encrypted at rest with `CREDENTIALS_KEY`.** PBKDF2-HMAC-SHA256 (210k
+iterations, a random 16-byte salt per credential) derives an AES-256-GCM key;
+WebCrypto throughout, nothing hand-rolled.
+
+⚠️ **With no `CREDENTIALS_KEY` the secrets are stored in plain text and the
+server says so in three lines at startup**, and every listing carries the same
+warning. That is deliberate: the Settings screen claims *"Cookies are encrypted
+at rest"*, and the only honest way to run without a key is to contradict that
+claim loudly rather than to fake the encryption.
+
+🔴 **Writing is one-way.** `GET /api/credentials` answers with metadata —
+scope, type, when it was created, when it was last used, how many cookies and
+which domains — and there is no endpoint that returns a secret. The store's read
+methods never load the `secret` column, so there is no variable in scope for a
+future handler to return by accident.
+
+⚠️ **A `password` credential reaches yt-dlp as `--password`, in argv**, where
+anything that can read the process list on the host can see it. yt-dlp offers no
+file-based alternative short of `.netrc`, whose keying by "machine" does not
+survive the scope model. Accepted for a single-tenant home server, and reported
+by the test endpoint rather than hidden.
 
 ## 13. What this is not
 

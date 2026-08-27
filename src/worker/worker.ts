@@ -13,6 +13,7 @@ import type { ProviderRegistry } from "../providers/registry";
 import type { DownloadPlan, FetchResult, Job, ProgressUpdate, StageName } from "../core/types";
 import { buildDownloadPlan, videoCodecNotice } from "../core/selection";
 import { demandsBackoff } from "../core/errors";
+import { Semaphore } from "./semaphore";
 import {
   clearRunning, initialStages, markDone, markFailed, markRunning,
   resumeFrom, statusForStage,
@@ -29,6 +30,24 @@ export interface WorkerOptions {
   /** How long a claim stays ours before it lapses. Renewed while we work. */
   leaseMs?: number;
   pollMs?: number;
+  /**
+   * How many jobs may be in flight at once.
+   *
+   * Higher than the download limit on purpose: a job spends most of its life
+   * uploading to the library or running ffmpeg, neither of which the source
+   * cares about, and holding the queue still during those would waste the
+   * limit rather than respect it.
+   */
+  maxActiveJobs?: number;
+  /**
+   * How many may be in the **download** stage at once — the only stage that
+   * touches the source, and therefore the only number the IP budget cares
+   * about (PLAN §17).
+   *
+   * 3 follows metube, which has run that for seven years across roughly ten
+   * times the users of the tool this replaces.
+   */
+  maxConcurrentDownloads?: number;
   now?: () => Date;
   /**
    * Told when a job ends, so the bell has something in it.
@@ -48,12 +67,15 @@ export class Worker {
   #o: Required<WorkerOptions>;
   #running = false;
   #active = new Map<string, AbortController>();
+  #downloads: Semaphore;
 
   constructor(o: WorkerOptions) {
     this.#o = {
       workerId: `slot-1`, leaseMs: 60_000, pollMs: 1_000,
+      maxActiveJobs: 4, maxConcurrentDownloads: 3,
       now: () => new Date(), notifier: undefined as never, ...o,
     };
+    this.#downloads = new Semaphore(this.#o.maxConcurrentDownloads);
   }
 
   /** Cancel a job that is running right now. Queue state is the queue's business. */
@@ -67,12 +89,24 @@ export class Worker {
   async start(): Promise<void> {
     this.#running = true;
     while (this.#running) {
+      // Claim only while there is room. Claiming eagerly would take jobs off
+      // the queue to sit in memory, which is exactly the state a restart
+      // cannot recover — the lease would lapse and they would come back, but
+      // the queue would have lied about them in the meantime.
+      if (this.#active.size >= this.#o.maxActiveJobs) {
+        await Bun.sleep(this.#o.pollMs);
+        continue;
+      }
+
       const claimed = await this.#o.queue.claimNext(this.#o.workerId);
       if (Result.isError(claimed) || !claimed.value) {
         await Bun.sleep(this.#o.pollMs);
         continue;
       }
-      await this.run(claimed.value);
+
+      // Not awaited: the loop goes back for the next job while this one runs.
+      // `run` handles its own failures and always clears itself from `#active`.
+      void this.run(claimed.value);
     }
   }
 
@@ -232,12 +266,16 @@ export class Worker {
         if (Result.isError(provider)) return provider;
 
         await mkdir(ctx.workDir, { recursive: true });
-        const got = await provider.value.fetch(ctx.plan, {
-          workDir: ctx.workDir,
-          signal: ctx.controller.signal,
-          onProgress: ctx.onProgress,
-          log: ctx.log,
-        });
+        // The one stage the source sees. Everything else in the pipeline runs
+        // free; this is where the IP budget is actually spent.
+        const got = await this.#downloads.run(() =>
+          provider.value.fetch(ctx.plan!, {
+            workDir: ctx.workDir,
+            signal: ctx.controller.signal,
+            onProgress: ctx.onProgress,
+            log: ctx.log,
+          }),
+        );
         if (Result.isError(got)) return got;
         return Result.ok({ downloaded: got.value });
       }

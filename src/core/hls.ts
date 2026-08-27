@@ -148,6 +148,111 @@ const PLAYABLE_AUDIO: ReadonlySet<string> = new Set([
   "pcm_s24le",
 ]);
 
+// --- What the front of the file says about its own shape ---------------------
+
+/**
+ * How many bytes of the head are enough to answer "is this fragmented?".
+ *
+ * The `moov` of a fragmented MP4 carries **no sample tables** — that is the
+ * point of fragmenting — so it is tiny: the real file measured here has a
+ * 1370-byte `moov` describing 73 minutes. A non-fragmented `moov` is large, but
+ * we do not have to read it: `mvex` is a direct child of `moov`, so either it
+ * appears within the first boxes or the file is not fragmented. 256 KB is far
+ * more than any fragmented `moov` and cheap to read once per (size, mtime).
+ */
+export const MP4_HEAD_BYTES = 256 * 1024;
+
+/** Extensions whose head is worth parsing as ISO base media. */
+const ISO_BMFF_CONTAINERS: ReadonlySet<string> = new Set(["mp4", "m4v", "m4a", "mov"]);
+
+export interface ContainerLayout {
+  /**
+   * The `moov` declares `mvex`, so the samples are in `moof` fragments and the
+   * movie header describes **nothing about where anything is**.
+   */
+  fragmented: boolean;
+}
+
+/**
+ * Read the shape of an MP4 out of the first bytes of the file.
+ *
+ * 🔴 This is the question `ffprobe` does not answer. `ffprobe` reports codecs,
+ * durations and bitrates — every one of which was *correct and reassuring* on
+ * the file that would not play. What it never says is that the file has no
+ * sample table at the front, which is the only thing that mattered.
+ *
+ * A **fragmented** MP4 (`moov` → `mvex`) stores its samples in a chain of
+ * `moof`/`mdat` pairs and keeps no index of them anywhere. A browser handed one
+ * over HTTP therefore learns the duration, and where any given second lives, by
+ * **reading every `moof` in the file** — measured on the real 438 MB file as
+ * 468 range requests and 3.74 GB on the wire before the first frame. The same
+ * content remuxed to a plain `moov`+`mdat` MP4, at the same 439 MB, took **one
+ * request and 11.8 MB**. See `docs/DISCOVERIES.md`.
+ *
+ * ⚠️ Returns `undefined` when the head is not ISO base media at all — a WebM, a
+ * truncated file, an MP3. "I cannot tell" and "it is not fragmented" are
+ * different answers and the caller must not confuse them.
+ */
+export function readMp4Layout(head: Uint8Array): ContainerLayout | undefined {
+  const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
+
+  /** The type of the box starting at `at`, or undefined when it does not fit. */
+  function boxAt(at: number): { type: string; body: number; next: number } | undefined {
+    if (at + 8 > head.byteLength) return undefined;
+    let size = view.getUint32(at);
+    let header = 8;
+    if (size === 1) {
+      if (at + 16 > head.byteLength) return undefined;
+      // 64-bit sizes beyond 2^53 cannot happen in a real file and would break
+      // the arithmetic below; treat one as "cannot tell" rather than guessing.
+      const large = view.getBigUint64(at + 8);
+      if (large > BigInt(Number.MAX_SAFE_INTEGER)) return undefined;
+      size = Number(large);
+      header = 16;
+    } else if (size === 0) {
+      // "To the end of the file" — legal for the last box, and it means this
+      // box has no sibling after it.
+      size = head.byteLength - at;
+    }
+    if (size < header) return undefined;
+    let type = "";
+    for (let i = at + 4; i < at + 8; i += 1) type += String.fromCharCode(head[i] ?? 0);
+    return { type, body: at + header, next: at + size };
+  }
+
+  const first = boxAt(0);
+  // Every ISO base media file starts with `ftyp`. Anything else is a container
+  // this parser has no business guessing about.
+  if (first === undefined || first.type !== "ftyp") return undefined;
+
+  for (let at = 0; at < head.byteLength; ) {
+    const box = boxAt(at);
+    if (box === undefined || box.next <= at) break;
+    if (box.type === "moov") {
+      // `mvex` is a direct child of `moov`, so one level of walking is enough.
+      const end = Math.min(box.next, head.byteLength);
+      for (let child = box.body; child < end; ) {
+        const inner = boxAt(child);
+        if (inner === undefined || inner.next <= child) break;
+        if (inner.type === "mvex") return { fragmented: true };
+        child = inner.next;
+      }
+      // A `moov` we read to the end with no `mvex` in it is a plain MP4. A
+      // `moov` that ran off the end of the head is one we could not finish —
+      // but it is also, by construction, far bigger than any fragmented `moov`,
+      // which is itself the answer.
+      return { fragmented: false };
+    }
+    at = box.next;
+  }
+  return undefined;
+}
+
+/** Whether this container is one `readMp4Layout` can say anything about. */
+export function isIsoBmff(container: string): boolean {
+  return ISO_BMFF_CONTAINERS.has(container);
+}
+
 /**
  * Video codecs MPEG-TS can carry, which is the real limit on `-c:v copy`.
  *
@@ -180,6 +285,13 @@ export interface PlaybackVerdict {
   audioCodec?: string;
   /** Whether the HLS pass would also have to re-encode the audio. */
   transcodesAudio: boolean;
+  /**
+   * Set when the file is a **fragmented** MP4 — the one shape a browser opens
+   * and still cannot stream. Reported rather than merely acted on, because the
+   * panel has to be able to say why a file the browser "supports" is being
+   * remuxed anyway.
+   */
+  fragmented?: boolean;
 }
 
 function firstOfKind(probe: MediaProbe, kind: "video" | "audio"): string | undefined {
@@ -199,12 +311,53 @@ function firstOfKind(probe: MediaProbe, kind: "video" | "audio"): string | undef
  * decision. That is what makes it testable without a media file, and what lets
  * the answer be cached — nothing here reads the disk.
  */
-export function decidePlayback(ext: string, probe: MediaProbe): PlaybackVerdict {
+export function decidePlayback(ext: string, probe: MediaProbe, layout?: ContainerLayout): PlaybackVerdict {
   const container = ext.toLowerCase().replace(/^\./, "");
   const videoCodec = firstOfKind(probe, "video");
   const audioCodec = firstOfKind(probe, "audio");
 
   const base = { container, ...(videoCodec ? { videoCodec } : {}), ...(audioCodec ? { audioCodec } : {}) };
+
+  /**
+   * 🔴 **A fragmented MP4 is not a direct download, whatever its codecs say.**
+   *
+   * This is the case the container-and-codec check got wrong, and it got it
+   * wrong in the most convincing way: MP4, H.264 High, AAC-LC, `moov` first,
+   * range requests all correct, first byte in 1 ms — every measurement said
+   * "serve it directly", and the browser sat on a spinner. The samples are in
+   * 1475 `moof` fragments and nothing indexes them, so Chrome read the *whole
+   * file* to find the duration: 468 range requests, **3.74 GB on the wire for a
+   * 437 MB file**, before a single frame.
+   *
+   * ⚠️ **It is not about size.** The same 73 minutes remuxed to a plain
+   * `moov`+`mdat` MP4 — same codecs, same 439 MB — took one request and 11.8 MB.
+   * A size threshold would have punished every large file and still missed a
+   * fragmented small one.
+   *
+   * HLS is the right answer because ffmpeg reads the fragments once,
+   * sequentially, and the player then asks for six seconds at a time. The video
+   * is still copied, never re-encoded.
+   */
+  if (layout?.fragmented === true && isIsoBmff(container)) {
+    const transcodes = audioCodec !== undefined && !TS_COPYABLE_AUDIO.has(audioCodec);
+    if (videoCodec === undefined || TS_COPYABLE_VIDEO.has(videoCodec)) {
+      return {
+        ...base,
+        mode: "hls",
+        fragmented: true,
+        transcodesAudio: transcodes,
+        reason:
+          "This MP4 is fragmented: the samples live in `moof` fragments with no index, so a browser has to read the whole file before it can play a second of it. Served as HLS segments instead — the video is still copied, not re-encoded.",
+      };
+    }
+    return {
+      ...base,
+      mode: "unsupported",
+      fragmented: true,
+      transcodesAudio: false,
+      reason: `This MP4 is fragmented, so it cannot be streamed directly, and ${videoCodec.toUpperCase()} cannot be carried by HLS segments without re-encoding the video, which CasaTube does not do. Download the file instead.`,
+    };
+  }
 
   if (PLAYABLE_CONTAINERS.has(container)) {
     const videoOk = videoCodec === undefined || PLAYABLE_VIDEO.has(videoCodec);
@@ -510,6 +663,34 @@ export function createHlsManager(options: HlsOptions): HlsManager {
 
   // --- verdict cache ------------------------------------------------------
 
+  /**
+   * The head of an MP4, so the verdict can see the one thing `ffprobe` never
+   * reports: whether the file is fragmented.
+   *
+   * ⚠️ **A failure here is not a failure of the verdict.** The read is a
+   * 256 KB optimisation on a mount that may be slow or gone; if it cannot be
+   * done, the answer is `undefined` — "I could not tell" — and `decidePlayback`
+   * falls back to deciding on container and codec alone, exactly as before.
+   * Turning an unreadable head into a playback error would take a file that
+   * plays fine and make it unplayable.
+   *
+   * 📌 Called once per (size, mtime), behind the same cache as the probe.
+   */
+  async function readLayout(absolute: string, ext: string): Promise<ContainerLayout | undefined> {
+    if (!isIsoBmff(ext.replace(/^\./, ""))) return undefined;
+    const raced = await withDeadline(
+      Bun.file(absolute)
+        .slice(0, MP4_HEAD_BYTES)
+        .bytes()
+        .then((bytes) => readMp4Layout(bytes))
+        .catch(() => undefined),
+      STAT_TIMEOUT_MS,
+      absolute,
+      "reading a file",
+    );
+    return Result.isError(raced) ? undefined : raced.value;
+  }
+
   async function verdict(relPath: string): Promise<Result<PlaybackVerdict, HlsError>> {
     const absolute = resolveInRoot(libraryRoot, relPath);
     if (Result.isError(absolute)) return absolute;
@@ -545,7 +726,8 @@ export function createHlsManager(options: HlsOptions): HlsManager {
     }
 
     const ext = relPath.includes(".") ? relPath.slice(relPath.lastIndexOf(".") + 1) : "";
-    const decided = decidePlayback(ext, probed.value);
+    const layout = await readLayout(absolute.value, ext.toLowerCase());
+    const decided = layout === undefined ? decidePlayback(ext, probed.value) : decidePlayback(ext, probed.value, layout);
     verdicts.set(relPath, { key, verdict: decided });
     return Result.ok(decided);
   }

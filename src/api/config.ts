@@ -53,6 +53,11 @@ export interface ServerConfig {
    */
   eventsPollMs: number;
   /**
+   * Jobs that may be in the download stage at once — the only stage the source
+   * sees. Was documented everywhere and read nowhere until 2026-08-27.
+   */
+  maxConcurrentDownloads: number;
+  /**
    * How long a deleted item stays in `.trash/` before a purge may remove it.
    *
    * Deleting moves rather than unlinks, so this is the width of the undo
@@ -123,6 +128,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ffmpegBinary: str(env.FFMPEG_BIN),
     ffprobeBinary: str(env.FFPROBE_BIN),
     eventsPollMs: int(env.EVENTS_POLL_MS, 750),
+    maxConcurrentDownloads: int(env.MAX_CONCURRENT_DOWNLOADS, 3),
     hls: {
       segmentSeconds: int(env.HLS_SEGMENT_SECONDS, DEFAULT_SEGMENT_SECONDS),
       idleMs: int(env.HLS_IDLE_MS, DEFAULT_IDLE_MS),

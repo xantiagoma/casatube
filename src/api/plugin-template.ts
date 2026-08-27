@@ -3,11 +3,16 @@
  * over: **a file to start from**, and **the documentation**.
  *
  * 🔴 They are string constants rather than files read off disk, and that is the
- * point. `plugins/README.md` and `plugins/jellyfin.ts` live in the repository,
- * and the repository is not in the image — the Dockerfile copies `src`,
- * `drizzle` and two JSON files and nothing else. A route that read them from
- * the working directory would work in development and 404 in the only place it
- * matters. This module ships inside `src`, so it ships everywhere `src` does.
+ * point. `plugins/README.md` lives in the repository, and the repository is not
+ * in the image — the Dockerfile copies `src`, `drizzle` and two JSON files and
+ * nothing else. A route that read it from the working directory would work in
+ * development and 404 in the only place it matters. This module ships inside
+ * `src`, so it ships everywhere `src` does.
+ *
+ * 📌 The same rule is why the **built-in plugins** live in `src/plugins/builtin`
+ * rather than in the repository's `plugins/` folder: they are seeded into
+ * `DATA_DIR/plugins` at boot, which means the server has to be able to read
+ * them.
  *
  * ⚠️ `plugins/README.md` is still the full reference and still the source of
  * truth for the contract. What is here is the condensed version, and it says so
@@ -29,13 +34,19 @@ const TEMPLATE = `/**
  *     __PLUGINS_DIR__/my-plugin.ts
  *
  * One file, any name ending in \`.ts\`. Bun imports TypeScript directly, so there
- * is no build step, no \`package.json\` and no \`npm install\`. Drop the file in
- * and restart CasaTube: the plugin appears in Settings → Plugins with
- * everything it declares on display.
+ * is no build step, no \`package.json\` and no \`npm install\`.
  *
- * ⚠️ A plugin CasaTube has not seen before arrives **enabled** — \`setup\` runs
- * at that restart. The switch on that screen is what turns it off, and the
+ * Saving from **Settings → Plugins** writes the file and **reloads the runtime**
+ * — no restart. Dropping the file in by hand works too; that one needs a
+ * restart, or a save from the editor, to be picked up.
+ *
+ * ⚠️ A plugin CasaTube has not seen before arrives **enabled**, so \`setup\` runs
+ * as soon as it loads. The switch on that screen is what turns it off, and the
  * choice is remembered in \`DATA_DIR/plugin-state.json\`.
+ *
+ * ⚠️ And a plugin runs **in-process, with CasaTube's own privileges**. \`needs\`
+ * below is a contract for the interface, not a sandbox: only \`network\` is
+ * really withheld. Read what you save.
  *
  * ## The two halves, which is the whole design
  *
@@ -106,6 +117,45 @@ const plugin = {
    */
   hooks: [{ at: "job:completed", kind: "observe" }],
 
+  /**
+   * What this plugin needs configured, so Settings can draw a **form** for it
+   * instead of you having to know which environment variables to set.
+   *
+   * Static, like \`matches\`, and read at the same moment — so the form exists
+   * before \`setup\` has ever run, which is the only way a plugin can be
+   * configured before it is switched on.
+   *
+   *   key         the name in \`config\`. An environment variable name.
+   *   label       the form label, for someone who has not read this file
+   *   description one or two sentences: what it is for, where to get it
+   *   secret      🔴 never returned by the API. Stored, used, never echoed.
+   *   default     what \`config\` holds when nothing else does
+   *   required    shown as a warning; nothing is enforced — an unconfigured
+   *               plugin must still behave
+   *   type        text | number | boolean | url | select  (a hint for the form)
+   *   options     for \`select\`
+   *
+   * ⚠️ Every value arrives as a **string**, booleans and numbers included,
+   * because the layer underneath is the process environment. Compare against
+   * \`"true"\`; parse the numbers yourself.
+   *
+   * The order, highest first: what was typed in Settings, then the \`config\`
+   * block in \`DATA_DIR/plugin-state.json\`, then the environment, then
+   * \`default\`. Nothing ever writes to the environment, which is why Settings
+   * can put a value back to it with one button.
+   */
+  settings: [
+    {
+      key: "MY_PLUGIN_URL",
+      label: "Where to POST",
+      description: "The endpoint this plugin talks to.",
+      type: "url",
+      required: true,
+      placeholder: "http://something.local:8080/hook",
+    },
+    // { key: "MY_PLUGIN_TOKEN", label: "Token", secret: true },
+  ],
+
   setup({ on, log, config /*, fetch, addProvider */ }) {
     /**
      * \`config\` is frozen: the process environment plus any per-plugin block in
@@ -115,7 +165,7 @@ const plugin = {
      */
     const target = typeof config.MY_PLUGIN_URL === "string" ? config.MY_PLUGIN_URL.trim() : "";
     if (target === "") {
-      log("not configured (set MY_PLUGIN_URL); doing nothing");
+      log("not configured (set it in Settings); doing nothing");
       return;
     }
 
@@ -183,6 +233,42 @@ which runs only once the plugin is enabled.
 | \`matches\` | no | Hosts or patterns claimed. Absent or empty means everything. |
 | \`hooks\` | no | Every hook you intend to register, with its kind. |
 | \`needs\` | no | Capabilities requested. Shown before enabling. |
+| \`settings\` | no | What you need configured. Settings draws a form from it. |
+
+## Settings
+
+\`\`\`ts
+settings: [
+  { key: "JELLYFIN_URL", label: "Jellyfin URL", type: "url", required: true },
+  { key: "JELLYFIN_TOKEN", label: "API key", secret: true, required: true },
+  { key: "TIMEOUT_MS", label: "Timeout (ms)", type: "number", default: "10000" },
+]
+\`\`\`
+
+Declared like \`matches\`, and read at the same moment — so the form exists
+**before \`setup\` has ever run**, which is the only way a plugin can be
+configured before it is switched on.
+
+| | |
+|---|---|
+| \`key\` | The name in \`config\`. An environment variable name. |
+| \`label\` / \`description\` | Written for whoever is filling the form in. |
+| \`secret\` | 🔴 **Never returned by the API.** Stored, used, never echoed back. |
+| \`default\` | What \`config\` holds when no layer above supplies a value. |
+| \`required\` | Shown as a warning. Nothing is enforced — an unconfigured plugin must still behave. |
+| \`type\` | \`text\` \| \`number\` \| \`boolean\` \| \`url\` \| \`select\` — a hint for the form. |
+| \`options\` | For \`select\`. |
+
+**The order, highest first:** what was typed in Settings → the \`config\` block in
+\`DATA_DIR/plugin-state.json\` → the process environment → \`default\`. Nothing
+ever writes to the environment, which is why one button in Settings can put a
+value back to it.
+
+⚠️ Every value is a **string**, booleans and numbers included, because the layer
+underneath is the environment and an environment variable is a string.
+
+⚠️ Values are stored in \`DATA_DIR/casatube.db\` **unencrypted** — as exposed as
+the same token in a compose file, which is where it lived before.
 
 ## Hook points
 
@@ -207,15 +293,42 @@ which runs only once the plugin is enabled.
 ## What \`setup\` is handed
 
 \`setup({ on, addProvider, fetch, log, config })\` — \`fetch\` only if you declared
-\`needs: ["network"]\`, \`config\` frozen (the environment merged with the
-per-plugin block in \`DATA_DIR/plugin-state.json\`), \`log\` writing to both the
-server log and this plugin's log in the UI.
+\`needs: ["network"]\`, \`config\` frozen (see **Settings** above for the layers),
+\`log\` writing to both the server log and this plugin's log in the UI.
+
+⚠️ \`log\` output **is returned by the API** and shown on the Plugins screen.
+Nothing on the server can redact what a plugin chose to print, so do not log a
+token you asked for as a secret.
+
+## Editing from here
+
+Settings → Plugins has an editor. Saving writes the file and **reloads the
+runtime** — no restart — and answers with how that plugin came back: \`active\`,
+or \`error\` with the reason. A file that does not compile is recorded against
+itself and everything else stays loaded.
+
+🔴 That makes running code on this server one text box away, so the warning
+below matters more rather than less.
+
+## Capabilities are a UI contract, not a sandbox
+
+\`needs\` is shown to you before you enable a plugin, the way a phone shows
+permissions. **Today only \`network\` is actually withheld** — leave it out and
+the \`fetch\` handed to \`setup\` throws. \`library:read\`, \`library:write\`,
+\`cookies\` and \`subprocess\` are declaration only.
+
+And it stops a *well-behaved* plugin, not a determined one: an in-process
+TypeScript module can import Bun and Node APIs directly, read your cookies file
+and run anything this process can run. Bun has no permission flags underneath to
+hold the line. Treat \`needs\` as documentation you are allowed to be suspicious
+of, and read a plugin before you save it.
 
 ---
 
 ⚠️ This is the short version, bundled with the server. The full reference —
 pattern matching, hook ordering with \`before\`/\`after\`, capabilities, and the
-annotated \`jellyfin.ts\` — is \`plugins/README.md\` in the CasaTube repository.
+annotated built-ins in \`src/plugins/builtin/\` — is \`plugins/README.md\` in the
+CasaTube repository.
 `;
 
 /** The suggested filename. A name, not a title — it lands on a filesystem. */
@@ -229,4 +342,44 @@ export function pluginTemplate(dir: string): string {
 /** The condensed reference, addressed to this installation's plugins directory. */
 export function pluginDocs(dir: string): string {
   return DOCS.replaceAll(DIR_PLACEHOLDER, dir);
+}
+
+/**
+ * Capabilities that are genuinely withheld today.
+ *
+ * One set, so the warning below cannot drift from `plugin-runtime.ts`. Anything
+ * not in here is declaration only: shown to the user, and nothing held back.
+ */
+const ENFORCED: ReadonlySet<string> = new Set(["network"]);
+
+/**
+ * What the server says every time a plugin is saved.
+ *
+ * 🔴 It is generated by the server rather than written into the dialog, because
+ * an editor is exactly what makes this warning matter more. Before it, running
+ * code inside CasaTube meant getting a file onto the server's filesystem. Now it
+ * is a text box on a page anybody on the network can open, and the honest
+ * sentence — from PLAN §5 and `plugins/README.md` — is that **capabilities are
+ * a UI contract, not a sandbox**. Saying it once in a README that ships
+ * somewhere else would be the same silence this project keeps finding.
+ *
+ * ⚠️ It is returned on **every** save, not just the first. A warning that
+ * appears once is a warning shown to whoever set the machine up, and not to the
+ * person editing a plugin a year later.
+ */
+export function saveWarning(needs: readonly string[] = []): string {
+  const declaration =
+    needs.length === 0
+      ? "It declares no capabilities, which withholds nothing"
+      : `It declares ${needs.join(", ")} — of those, ${
+          needs.filter((need) => ENFORCED.has(need)).join(", ") || "none"
+        } is actually withheld from a plugin that does not ask, and the rest are declaration only`;
+
+  return (
+    "This code now runs inside CasaTube, in the same process and with the same privileges: " +
+    "it can read the library, the cookies file, and anything else this server can reach. " +
+    `${declaration}. \`needs\` is a UI contract, not a sandbox — an in-process module can import Bun and ` +
+    "Node APIs directly whatever it declares, and nothing here inspects what the code does. " +
+    "A syntax error is caught and shown against this plugin alone; a plugin that means harm is not."
+  );
 }

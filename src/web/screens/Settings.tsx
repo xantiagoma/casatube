@@ -9,8 +9,11 @@
  * silently does nothing — the failure mode this project exists to avoid.
  *
  * What *is* editable here is editable because a real endpoint backs it: the
- * plugin toggles (`POST /api/plugins/:name/enable`), the notification purge
- * (`DELETE /api/notifications`), and the theme, which belongs to this browser.
+ * plugin toggles (`POST /api/plugins/:name/enable`), **the plugins themselves**
+ * — source and settings, `PUT /api/plugins/source` and
+ * `PUT /api/plugins/:name/settings`, each of which reloads the runtime — the
+ * notification purge (`DELETE /api/notifications`), and the theme, which
+ * belongs to this browser.
  *
  * ⚠️ **Authentication is shown and disabled on purpose.** PLAN §18 defers it as
  * a decision, not an oversight: anyone on the LAN can enqueue downloads and
@@ -22,19 +25,22 @@ import {
   BookOpen,
   CircleAlert,
   Download,
+  FilePlus2,
   FolderOpen,
   Info,
   Lock,
   Monitor,
   Moon,
+  Pencil,
   Puzzle,
+  Settings2,
   Sun,
   TriangleAlert,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -42,6 +48,8 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState } from "../components/common/Bits";
 import { PageHeader } from "../components/layout/AppShell";
+import { PluginEditorDialog } from "../components/settings/PluginEditorDialog";
+import { PluginSettingsDialog } from "../components/settings/PluginSettingsDialog";
 import { formatBytes, formatDateTime } from "../data/format";
 import { useTrash } from "../data/library";
 import { usePurgeNotifications } from "../data/notifications";
@@ -219,7 +227,7 @@ function PathsCard() {
  * It shows below the list as well as instead of it: the second plugin is
  * written the same way as the first.
  */
-function PluginStart({ dir }: { dir: string }) {
+function PluginStart({ dir, onNew }: { dir: string; onNew: () => void }) {
   const [reading, setReading] = useState(false);
   const docs = usePluginDocs(reading);
   const where = dir === "" ? "DATA_DIR/plugins" : dir;
@@ -241,14 +249,10 @@ function PluginStart({ dir }: { dir: string }) {
           <span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-[10px] font-semibold">
             1
           </span>
-          <span className="text-muted-foreground">Start from the annotated template</span>
-          {/* An anchor with `download`, not a fetch: the browser saves it, and
-              the server's Content-Disposition gives it its name. */}
-          <Button asChild size="sm" variant="outline" className="h-7 gap-1.5">
-            <a href={PLUGIN_TEMPLATE_URL} download="casatube-plugin.ts">
-              <Download className="size-3.5" aria-hidden />
-              casatube-plugin.ts
-            </a>
+          <span className="text-muted-foreground">Write one here, starting from the annotated template</span>
+          <Button size="sm" variant="outline" className="h-7 gap-1.5" onClick={onNew}>
+            <FilePlus2 className="size-3.5" aria-hidden />
+            New plugin
           </Button>
         </li>
 
@@ -256,14 +260,11 @@ function PluginStart({ dir }: { dir: string }) {
           <span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-[10px] font-semibold">
             2
           </span>
-          <span className="min-w-0">
-            <span className="text-muted-foreground">Save it in this exact folder, on the server:</span>
-            <span className="mt-1 flex items-start gap-1.5">
-              <FolderOpen className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-              <code className="min-w-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] break-all">
-                {where}/my-plugin.ts
-              </code>
-            </span>
+          <span className="text-muted-foreground">
+            Save. The file is written and the runtime <strong>reloads</strong> — no restart. A plugin the server
+            has not seen before arrives <strong>enabled</strong>, so its <code>setup</code> runs immediately and
+            the switch here is what turns it off. A file that does not compile comes back as an{" "}
+            <code>error</code> row with the reason, and nothing else stops working.
           </span>
         </li>
 
@@ -271,10 +272,24 @@ function PluginStart({ dir }: { dir: string }) {
           <span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-[10px] font-semibold">
             3
           </span>
-          <span className="text-muted-foreground">
-            Restart CasaTube. It appears in this list — and a plugin the server has not seen before arrives{" "}
-            <strong>enabled</strong>, so its <code>setup</code> runs at that restart. The switch here is what
-            turns it off.
+          <span className="min-w-0">
+            <span className="text-muted-foreground">
+              Or put the file there yourself — the editor is a convenience, not the only way in:
+            </span>
+            <span className="mt-1 flex items-start gap-1.5">
+              <FolderOpen className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              <code className="min-w-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] break-all">
+                {where}/my-plugin.ts
+              </code>
+            </span>
+            {/* An anchor with `download`, not a fetch: the browser saves it, and
+                the server's Content-Disposition gives it its name. */}
+            <Button asChild size="sm" variant="ghost" className="mt-1 h-7 gap-1.5">
+              <a href={PLUGIN_TEMPLATE_URL} download="casatube-plugin.ts">
+                <Download className="size-3.5" aria-hidden />
+                Download casatube-plugin.ts
+              </a>
+            </Button>
           </span>
         </li>
       </ol>
@@ -308,18 +323,35 @@ function PluginStart({ dir }: { dir: string }) {
   );
 }
 
+/**
+ * The installed plugins, and everything that can be done to one from here.
+ *
+ * 🔴 The row shows `missingSettings` as a warning of its own. A plugin sitting
+ * there marked `active` while doing nothing because a token was never set looks
+ * exactly like one that is working — which is the silence this whole screen
+ * exists to break.
+ */
 function PluginsCard() {
   const plugins = usePlugins();
   const toggle = useTogglePlugin();
+  /** `undefined` = closed, `null` = a new file, a string = that file. */
+  const [editing, setEditing] = useState<string | null | undefined>(undefined);
+  const [configuring, setConfiguring] = useState<string | null>(null);
 
   return (
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base">Plugins</CardTitle>
         <p className="text-sm text-muted-foreground">
-          Each one declares what it matches and where it hooks in, and that declaration is readable before any of
-          its code runs.
+          Each one declares what it matches, where it hooks in and what it needs configured — and that declaration
+          is readable before any of its code runs.
         </p>
+        <CardAction>
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setEditing(null)}>
+            <FilePlus2 className="size-3.5" aria-hidden />
+            New
+          </Button>
+        </CardAction>
       </CardHeader>
       <CardContent>
         {plugins.isPending ? (
@@ -333,7 +365,7 @@ function PluginsCard() {
               title="No plugins installed"
               hint="Nothing is hooked into the pipeline. Here is how to change that."
             />
-            <PluginStart dir={plugins.data.dir} />
+            <PluginStart dir={plugins.data.dir} onNew={() => setEditing(null)} />
           </div>
         ) : (
           <ul className="divide-y">
@@ -378,12 +410,44 @@ function PluginsCard() {
                       {plugin.error}
                     </p>
                   ) : null}
+                  {plugin.missingSettings.length > 0 ? (
+                    <p className="mt-1 flex items-start gap-1.5 text-xs text-warning">
+                      <TriangleAlert className="mt-0.5 size-3 shrink-0" aria-hidden />
+                      Loaded, and doing nothing: {plugin.missingSettings.join(", ")} {plugin.missingSettings.length === 1 ? "is" : "are"} not set.
+                    </p>
+                  ) : null}
+
+                  <div className="mt-2 flex flex-wrap items-center gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 gap-1.5 px-2 text-xs"
+                      onClick={() => setEditing(plugin.file)}
+                    >
+                      <Pencil className="size-3.5" aria-hidden />
+                      Edit
+                    </Button>
+                    {plugin.settings && plugin.settings.length > 0 ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 gap-1.5 px-2 text-xs"
+                        onClick={() => setConfiguring(plugin.name)}
+                      >
+                        <Settings2 className="size-3.5" aria-hidden />
+                        Settings
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
 
                 <Switch
                   checked={plugin.enabled}
                   aria-label={`${plugin.name} enabled`}
-                  disabled={toggle.isPending}
+                  /* A file that failed to import cannot be switched on — the
+                     server answers 409 — so the switch says so rather than
+                     offering an action that is refused. */
+                  disabled={toggle.isPending || plugin.state === "error"}
                   onCheckedChange={(next) => toggle.mutate({ name: plugin.name, enabled: next })}
                 />
               </li>
@@ -392,11 +456,25 @@ function PluginsCard() {
         )}
         {!plugins.isPending && !plugins.isError && plugins.data.plugins.length > 0 ? (
           <div className="mt-4">
-            <PluginStart dir={plugins.data.dir} />
+            <PluginStart dir={plugins.data.dir} onNew={() => setEditing(null)} />
           </div>
         ) : null}
         {toggle.isError ? <p className="mt-2 text-xs text-destructive">{toggle.error.message}</p> : null}
       </CardContent>
+
+      <PluginEditorDialog
+        open={editing !== undefined}
+        onOpenChange={(open) => setEditing(open ? (editing ?? null) : undefined)}
+        file={editing ?? null}
+        /* After a new file is saved, keep editing *that* file: the next save
+           has to be an overwrite, not a create that collides with itself. */
+        onSaved={(file) => setEditing(file)}
+      />
+      <PluginSettingsDialog
+        open={configuring !== null}
+        onOpenChange={(open) => setConfiguring(open ? configuring : null)}
+        name={configuring}
+      />
     </Card>
   );
 }

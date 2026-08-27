@@ -110,6 +110,46 @@ export function canPlayHlsNatively(): boolean {
   return probe.canPlayType("application/vnd.apple.mpegurl") !== "";
 }
 
+/**
+ * What the **server** says this file needs, rather than what its extension
+ * suggests.
+ *
+ * 🔴 This exists because the extension was wrong, and wrong in a way nothing on
+ * this side could see. `Videos/My Secret Agent Husband EP.mp4` is an MP4 with
+ * H.264 and AAC in it — every test a browser can run says "play it directly" —
+ * and it is a **fragmented** MP4 with 1475 unindexed `moof` fragments, so
+ * playing it directly meant Chrome reading 3.74 GB to find the duration of a
+ * 437 MB file. Only the server can open the file and see that.
+ *
+ * ⚠️ `GET /api/library/hls/playback` **starts nothing** — it is a read of a
+ * cached verdict, which is why the detail panel may ask for it freely. The
+ * remux only begins if something then fetches the playlist it names.
+ */
+export interface PlaybackVerdictResult {
+  path: string;
+  mode: "direct" | "hls" | "unsupported";
+  reason: string;
+  container: string;
+  videoCodec?: string;
+  audioCodec?: string;
+  transcodesAudio: boolean;
+  fragmented?: boolean;
+  /** Ready to hand to a player, or `null` when nothing can play this. */
+  url: string | null;
+}
+
+export function usePlayback(path: string | null): UseQueryResult<PlaybackVerdictResult, Error> {
+  return useQuery({
+    queryKey: keys.libraryPlayback(path ?? ""),
+    queryFn: async () => unwrap(await api.api.library.hls.playback.get({ query: { path: path ?? "" } })),
+    enabled: path !== null && path !== "",
+    retry: 1,
+    // Keyed on (size, mtime) behind the route as well; this is only about not
+    // re-asking while the panel is open.
+    staleTime: 60_000,
+  });
+}
+
 export interface LibraryParams {
   folder?: string;
   q?: string;

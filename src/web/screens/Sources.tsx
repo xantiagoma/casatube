@@ -272,7 +272,7 @@ export function Sources() {
         actions={
           <Tabs
             value={search.kind}
-            onValueChange={(next) => void navigate({ search: (current) => ({ ...current, kind: next as SourceKind }) })}
+            onValueChange={(next) => void navigate({ search: (current) => ({ ...current, kind: next as SourceKind }), resetScroll: false })}
           >
             <TabsList>
               {SOURCE_KINDS.map((kind) => (

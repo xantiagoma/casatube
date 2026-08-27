@@ -9,6 +9,7 @@
  * ⚠️ Selecting a row writes the id into the URL, not into a `useState`. That is
  * what makes an inspector view shareable and survive a refresh (PLAN §8).
  */
+import type { ReactNode } from "react";
 import { ExternalLink, RotateCcw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -119,10 +120,20 @@ export function JobTable({
   jobs,
   selectedId,
   onSelect,
+  badge,
 }: {
   jobs: Job[];
   selectedId?: string | undefined;
   onSelect(id: string): void;
+  /**
+   * An extra mark beside the status pill.
+   *
+   * Additive and optional: Downloads uses it to say what became of the file,
+   * which is a fact about the *download*, not about the job's status — and the
+   * Queue, where nothing has finished moving yet, passes nothing and looks
+   * exactly as it did.
+   */
+  badge?: ((job: Job) => ReactNode) | undefined;
 }) {
   return (
     <div className="overflow-x-auto">
@@ -177,7 +188,10 @@ export function JobTable({
                   {job.attempts}/{job.maxAttempts}
                 </td>
                 <td className="px-3 py-2.5">
-                  <StatusPill status={job.status} />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <StatusPill status={job.status} />
+                    {badge?.(job)}
+                  </div>
                 </td>
                 <td className="w-48 min-w-40 px-3 py-2.5">
                   <ProgressBar

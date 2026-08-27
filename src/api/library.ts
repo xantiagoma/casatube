@@ -38,6 +38,13 @@ import { safeDestination } from "./destination";
 import { fail, statusForTag } from "./errors";
 
 /**
+ * The most an open-ended `Range: bytes=N-` is answered with, for inline
+ * playback. See the long note on the `/file` route for the 3.74 GB that earned
+ * this number.
+ */
+export const INLINE_RANGE_CAP_BYTES = 4 * 1024 * 1024;
+
+/**
  * Trash retention, in days.
  *
  * ⚠️ Read from the environment here rather than from `ServerConfig` because
@@ -280,7 +287,36 @@ export function libraryRoutes(ctx: AppContext) {
           }
 
           const start = match[1] ? Number(match[1]) : 0;
-          const end = match[2] ? Number(match[2]) : size - 1;
+          /**
+           * 🔴 **An open-ended range is answered with a bounded slice, for
+           * playback.** `Range: bytes=N-` literally asks for "everything from N
+           * to the end", and answering it literally is what turned one 437 MB
+           * file into **3.74 GB on the wire**: a player that walks a file makes
+           * hundreds of these, reads a few kilobytes of each and abandons it —
+           * and a request abandoned after 8 KB still cost **6 to 9 MB** in the
+           * deployed container, measured three times, because the bytes are
+           * already in the socket before the reset lands. 468 × 8 MB is the
+           * 3.74 GB, and the arithmetic closes.
+           *
+           * A shorter 206 is exactly what RFC 9110 §14.4 allows, and
+           * `content-range` says what was actually sent, so a player simply
+           * asks for the next piece. 4 MB is above one segment's worth of
+           * anything we serve and less than half of what an abandoned request
+           * used to cost.
+           *
+           * ⚠️ **Not for `?download=1`.** A download manager resuming with
+           * `bytes=N-` expects the rest of the file, and one that writes 4 MB
+           * and exits believing it finished is a silently truncated file — the
+           * exact failure mode this project keeps refusing. A save gets
+           * everything it asked for; only inline playback is capped.
+           */
+          const openEnded = !match[2];
+          const capped = openEnded && !flag(query.download, false);
+          const end = match[2]
+            ? Number(match[2])
+            : capped
+              ? Math.min(size - 1, start + INLINE_RANGE_CAP_BYTES - 1)
+              : size - 1;
           if (!(start >= 0 && end < size && start <= end)) {
             set.status = 416;
             set.headers["content-range"] = `bytes */${size}`;

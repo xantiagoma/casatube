@@ -5,6 +5,175 @@ session with none of this context. Newest first.
 
 ---
 
+## 2026-08-27 — The queue reads newest-first, filters for real, and stops jumping
+
+> «el orden por defecto empieza por lo más viejo… y la página vuelve arriba.»
+
+Five things found by using it. Only `screens/Queue.tsx`, `screens/Downloads.tsx`
+and new files under `components/jobs/` — plus two additive edits noted below.
+
+### 1. The order was backwards, and it was the API's order
+
+`GET /api/jobs` returns **priority first, then oldest first**. That is exactly
+right for a worker deciding what to claim next and exactly wrong for a person
+reading a queue, and both screens were rendering it raw. Both now default to
+`sort=date&order=desc`.
+
+### 2. Sorting and filtering, in the URL
+
+`components/jobs/job-order.ts` — pure functions, so they are testable, which is
+the only reason any of this is covered at all (there is no DOM harness here).
+**+25 tests.**
+
+- Sort by date, status, priority, size or duration, either direction.
+- 🔴 **Unknowns sink in both directions.** A job with no reported size is not a
+  0-byte job; flipping largest-first to smallest-first must not promote "we
+  don't know" to the top of the screen.
+- The order is **total** — ties break on `createdAt` then `id` — so an SSE frame
+  arriving mid-read cannot shuffle equal rows.
+- Status filter and free-text search (title, URL, output filename, destination).
+- All of it in typed search params (`sort`, `order`, `q`, `file`), so a view is
+  a link and survives a reload.
+
+⚠️ **Client-side over the 200-job page the API already sent.** See "What the
+server does not have" below.
+
+### 3. The scroll jump was the router, not React
+
+Not a remount, not a re-key, not focus — **TanStack Router calls
+`window.scrollTo(0, 0)` after every navigation unless told otherwise**, and a
+search-param change is a navigation. Every `navigate` on these two screens now
+goes through one `setSearch` helper that passes `resetScroll: false`.
+
+📌 Every *other* screen still has the bug: the Dashboard's range selector was
+measured jumping 448 → 0 in the same build. `docs/DISCOVERIES.md` has the
+mechanism and the measurements.
+
+### 4. What became of the file, on the row
+
+Downloads badges a finished job **In trash** / **No file** / **Filed**, with a
+matching filter. The trash is cross-referenced against
+`GET /api/library/trash` — one cheap request, and the journal is authoritative,
+so an entry in it is proof and its absence is proof of absence.
+
+🔴 **There is deliberately no "missing".** Nothing on the wire says whether a
+recorded output path still exists, so "Filed" claims only what is true —
+*CasaTube put it there* — and the tooltip says a file deleted outside CasaTube
+still reads that way. When the trash cannot be read, every state becomes
+`unknown`, the badges disappear and the filter is disabled rather than silently
+emptying the table.
+
+### 5. Metrics before the list
+
+They were under the Downloads table, which is where the numbers you check first
+go to never be seen.
+
+### And the Batch add note Santi flagged
+
+"Every URL is queued with the same settings" was true about the *request* and
+misleading about the *result*: batch add sends no per-link options at all, and
+what comes out is whatever each source happens to have. It now says which half
+is shared (destination, priority) and points at the single-URL form for the
+other half.
+
+### What the server does not have
+
+- 🔴 **No file-state on a job.** No `outputFileExists`, and no batch "do these
+  paths exist" route. `GET /api/library/item?path=` would answer for one path;
+  a completed tab of 128 rows would be 128 stats against a network mount, so
+  the UI does not guess. A `fileState` field filled in at list time — or
+  `POST /api/library/exists` taking paths — is what would make "missing" real.
+- **No sort, order or search on `GET /api/jobs`.** It takes `status`, `limit`
+  and `offset` only, so sorting and searching are over the returned page.
+  Past 200 jobs "the largest failed download" becomes "the largest of the
+  latest two hundred", which is a different sentence.
+- **No priority change endpoint** (already known), so the priority column and
+  the priority sort are read-only.
+
+### Two files touched outside the new ones
+
+- `JobTable` gained one **optional** `badge?: (job) => ReactNode` prop rendered
+  beside the status pill. Nothing else passes it, and `JobList` — what the
+  Dashboard uses — is untouched.
+- `search-params.ts` / `router.tsx` gained `JOB_SORTS`, `SortOrder` and
+  `FILE_FILTERS`, additively; every existing param validates as before.
+
+---
+
+## 2026-08-27 — Credentials, per site and per type
+
+**Tests: 68 new, all green. `bunx tsc --noEmit` clean.** Not committed.
+
+### The gap this closes
+
+There was exactly one way to authenticate anything: `COOKIES_FILE`, a single
+jar for the whole process. Enough for one YouTube account, and nothing else —
+so age-gated video, members-only uploads and the *"Sign in to confirm you're not
+a bot"* challenge were all unreachable for any site that is not the one that
+variable happens to point at, and a site wanting a username and password had no
+answer at all.
+
+### What was built
+
+`src/core/credentials.ts` — the store. A credential is a **scope**
+(`youtube.com`, `*.odysee.com`, `*`), a **type** (`cookies` | `password` |
+`apiKey` | `custom`) and a secret. Resolution is **most specific wins**:
+`www.youtube.com` beats `*.youtube.com` beats `youtube.com`… beats `*`.
+New `credentials` table, migration `0005_sudden_domino.sql`.
+
+`src/api/credentials.ts` — `GET /api/credentials`, `POST /api/credentials`,
+`DELETE /api/credentials/:id`, `POST /api/credentials/:id/test`.
+
+`src/providers/ytdlp.ts` — `probe`, `list` and `fetch` each resolve a credential
+for their URL, run with it, and release it in a `finally`. Cookies become
+`--cookies <file>` (0600 in a 0700 temp directory, deleted after the run);
+passwords become `--username` / `--password`.
+
+### Three decisions worth keeping
+
+**🔴 One-way by construction, not by discipline.** The store's read methods name
+their columns and never load `secret`, and every route answers with a type that
+has no field a secret could travel in. An endpoint that returns cookies is not
+something a future route can write by accident — it would have to be written on
+purpose, against the shape of the module. Verified negatively: the tests
+serialise each response and search for the exact bytes that were posted.
+
+**⚠️ No key means plain text, said out loud.** `CREDENTIALS_KEY` derives an
+AES-256-GCM key (PBKDF2-HMAC-SHA256, 210k iterations, random salt per
+credential, WebCrypto throughout). Unset, the server prints a three-line warning
+at startup, every write logs one, `encrypted: false` travels in the metadata and
+every listing carries the reason. The Settings mockup promises *"Cookies are
+encrypted at rest"*; faking the encryption would have made that sentence a lie
+nobody could see.
+
+**Validate the jar at the paste, not at minute twenty.** A `cookies.txt` is
+parsed before it is stored — field count, `TRUE`/`FALSE` flags, numeric expiry,
+`#HttpOnly_` handled as a domain prefix rather than a comment — and the summary
+it produces (count, domains, soonest expiry) is what lets the test endpoint say
+*"expired yesterday"* or *"this jar is for youtube.com, not odysee.com"*
+**without touching the network**. Two entries in `docs/DISCOVERIES.md` came out
+of this.
+
+### Verified against a running server, not only in tests
+
+`PORT=8691 bun src/server.ts`, both with and without `CREDENTIALS_KEY`: the
+startup warning appears and disappears, a mangled jar is a 422 naming the line,
+the secret is absent from every response, and the raw SQLite bytes carry
+`aes-256-gcm` and neither the cookie value nor the password. ⚠️ That last check
+had to grep the **WAL** as well as the `.db` — see DISCOVERIES.
+
+### Left open, deliberately
+
+- `apiKey` and `custom` are stored, described and tested, but **no built-in
+  provider consumes them** — yt-dlp has nowhere to put an API key. The test
+  endpoint says so rather than implying they work.
+- `--password` puts the password in **argv**, visible in `ps`. yt-dlp has no
+  file-based alternative short of `.netrc`. Reported, not hidden.
+- There is no re-encrypt-everything command for a rotated `CREDENTIALS_KEY`.
+  Today the store says which key sealed each row and tells you to re-save.
+
+---
+
 ## 2026-08-27 — Usable end to end, and published
 
 **566 tests, 0 failures.** Running in Docker and used for real.

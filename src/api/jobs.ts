@@ -10,7 +10,7 @@ import { Elysia, t } from "elysia";
 import { Result } from "better-result";
 
 import { DEFAULT_PREFERENCES, type JobStatus } from "../core/types";
-import { resolvePreferences } from "../core/queue";
+import { AppSettingsStore } from "../core/app-settings";
 import type { AppContext } from "./context";
 import { fail } from "./errors";
 import { safeDestination } from "./destination";
@@ -32,6 +32,15 @@ function parseStatuses(raw: string | undefined): JobStatus[] | undefined {
 
 export function jobRoutes(ctx: AppContext) {
   const { queue, registry, config } = ctx;
+  /**
+   * The download defaults, read live.
+   *
+   * 🔴 Read on every call rather than captured here: the `downloads.*` settings
+   * are the group that takes effect immediately (see `core/app-settings.ts`),
+   * and a value captured at construction would make "Save" appear to work and
+   * change nothing until the next restart.
+   */
+  const settings = ctx.settings ?? new AppSettingsStore({ db: ctx.db });
 
   return (
     new Elysia({ prefix: "/jobs" })
@@ -78,7 +87,11 @@ export function jobRoutes(ctx: AppContext) {
             url: body.url,
             provider: provider.value.name,
             destination: destination.value,
-            preferences: body.preferences,
+            // ⚠️ Layered over the stored defaults rather than passed through.
+            // `resolvePreferences` fills the gaps from `DEFAULT_PREFERENCES`,
+            // which is the *code's* answer — so a request that omits a field
+            // would silently ignore the setting someone saved for it.
+            preferences: { ...(await settings.preferences()), ...body.preferences },
             priority: body.priority,
             force: body.force,
             // Optional, and normally filled in from a preceding `/api/probe`.
@@ -112,10 +125,18 @@ export function jobRoutes(ctx: AppContext) {
         },
       )
 
-      /** The defaults a fresh form starts from, so the client hard-codes none. */
-      .get("/defaults", () => ({
+      /**
+       * The defaults a fresh form starts from, so the client hard-codes none.
+       *
+       * `preferences` is what the *code* ships and `resolved` is what a job
+       * really gets — which since settings became editable are two different
+       * things, because a stored override or an environment variable can sit
+       * between them. Both travel: the form starts from `resolved`, and the
+       * pair is what lets a screen say "this is not the code's default".
+       */
+      .get("/defaults", async () => ({
         preferences: DEFAULT_PREFERENCES,
-        resolved: resolvePreferences(undefined),
+        resolved: await settings.preferences(),
       }))
 
       .get("/:id", async ({ params }) => {

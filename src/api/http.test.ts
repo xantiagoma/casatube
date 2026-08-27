@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result } from "better-result";
 
+import { CredentialStore } from "../core/credentials";
 import { closeDb, openDb, type Db } from "../core/db";
 import { JobQueue, openJobQueue, shutdownEmbeddedQueue } from "../core/queue";
 import { SourceScheduler } from "../core/scheduler";
@@ -71,6 +72,9 @@ async function makeApp(provider: Provider = fakeProvider()) {
       watcher,
       sources,
       scheduler: new SourceScheduler({ manager: sources }),
+      // `key: null` rather than the ambient CREDENTIALS_KEY: a test must not
+      // change behaviour because of what happens to be in the environment.
+      credentials: new CredentialStore({ db, key: null, tempDir: dir, warn: () => {} }),
       config: { ...loadConfig({}), dataDir: dir, dev: false },
     },
     BUNDLE,

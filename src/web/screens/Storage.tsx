@@ -82,7 +82,7 @@ export function Storage() {
         title="Storage &amp; analytics"
         description="Where the space goes, and what the queue has been doing."
         actions={
-          <Select value={range} onValueChange={(next) => void navigate({ search: { range: next as StatsRange } })}>
+          <Select value={range} onValueChange={(next) => void navigate({ search: { range: next as StatsRange }, resetScroll: false })}>
             <SelectTrigger className="w-28" aria-label="Analytics window">
               <SelectValue />
             </SelectTrigger>

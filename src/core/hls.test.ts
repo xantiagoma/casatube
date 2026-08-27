@@ -29,6 +29,7 @@ import {
   decidePlayback,
   HLS_DIR,
   playlistSegments,
+  readMp4Layout,
   rewritePlaylist,
   sessionId,
   type HlsManager,
@@ -135,6 +136,159 @@ describe("decidePlayback", () => {
     );
     expect(verdict.mode).toBe("direct");
     expect(verdict.videoCodec).toBeUndefined();
+  });
+});
+
+// --- The shape of the container ---------------------------------------------
+
+/**
+ * A minimal ISO base media file, built box by box.
+ *
+ * Real fixtures were considered and rejected: a fragmented MP4 that is worth
+ * testing against is hundreds of megabytes, and a small one checked into the
+ * repository would be a binary nobody can read a diff of. What is being tested
+ * is a box walk, and boxes are eleven bytes of structure — so the fixture says
+ * out loud what it contains.
+ */
+function box(type: string, ...payload: Uint8Array[]): Uint8Array {
+  const body = payload.reduce((total, part) => total + part.byteLength, 0);
+  const out = new Uint8Array(8 + body);
+  new DataView(out.buffer).setUint32(0, out.byteLength);
+  for (let i = 0; i < 4; i += 1) out[4 + i] = type.charCodeAt(i);
+  let at = 8;
+  for (const part of payload) {
+    out.set(part, at);
+    at += part.byteLength;
+  }
+  return out;
+}
+
+function join8(...parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0));
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.byteLength;
+  }
+  return out;
+}
+
+const filler = (n: number) => new Uint8Array(n);
+
+describe("readMp4Layout", () => {
+  test("🔴 an MP4 whose moov declares mvex is fragmented", () => {
+    const head = join8(
+      box("ftyp", filler(16)),
+      box("moov", box("mvhd", filler(100)), box("trak", filler(64)), box("mvex", filler(24))),
+      box("styp", filler(16)),
+      box("moof", filler(64)),
+    );
+    expect(readMp4Layout(head)).toEqual({ fragmented: true });
+  });
+
+  test("an ordinary moov + mdat MP4 is not", () => {
+    const head = join8(
+      box("ftyp", filler(16)),
+      box("moov", box("mvhd", filler(100)), box("trak", filler(512))),
+      box("free", filler(8)),
+      box("mdat", filler(1024)),
+    );
+    expect(readMp4Layout(head)).toEqual({ fragmented: false });
+  });
+
+  /**
+   * ⚠️ The distinction the caller depends on: "not fragmented" and "I cannot
+   * tell" are different answers. A `undefined` leaves the verdict exactly where
+   * it was before this check existed; a `{ fragmented: false }` asserts
+   * something about the file.
+   */
+  test("anything that is not ISO base media answers undefined, not false", () => {
+    expect(readMp4Layout(new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 1, 2, 3, 4, 5, 6, 7, 8]))).toBeUndefined();
+    expect(readMp4Layout(new Uint8Array(4))).toBeUndefined();
+    expect(readMp4Layout(new Uint8Array(0))).toBeUndefined();
+  });
+
+  test("a head that stops before the moov answers undefined", () => {
+    const head = box("ftyp", filler(16));
+    expect(readMp4Layout(head)).toBeUndefined();
+  });
+
+  test("a 64-bit box size is read rather than mistaken for a one-byte box", () => {
+    // size=1 means the real size follows the type as a 64-bit integer.
+    const ftyp = new Uint8Array(24);
+    const view = new DataView(ftyp.buffer);
+    view.setUint32(0, 1);
+    for (let i = 0; i < 4; i += 1) ftyp[4 + i] = "ftyp".charCodeAt(i);
+    view.setBigUint64(8, 24n);
+    const head = join8(ftyp, box("moov", box("mvex", filler(24))));
+    expect(readMp4Layout(head)).toEqual({ fragmented: true });
+  });
+
+  /** A malformed size of 0 inside a box must not spin. */
+  test("a zero-length box terminates the walk instead of looping", () => {
+    const head = new Uint8Array(40);
+    const view = new DataView(head.buffer);
+    view.setUint32(0, 24);
+    for (let i = 0; i < 4; i += 1) head[4 + i] = "ftyp".charCodeAt(i);
+    // A second box claiming size 0 — "to the end of the file".
+    view.setUint32(24, 0);
+    for (let i = 0; i < 4; i += 1) head[28 + i] = "mdat".charCodeAt(i);
+    expect(readMp4Layout(head)).toBeUndefined();
+  });
+});
+
+/**
+ * The verdict, once it can see the shape.
+ *
+ * 🔴 This is the case that cost a day: every field `ffprobe` reports said the
+ * file was fine, and it was. See `docs/DISCOVERIES.md` for the 3.74 GB.
+ */
+describe("decidePlayback on a fragmented MP4", () => {
+  const fragmented = { fragmented: true };
+
+  test("🔴 H.264 + AAC in a fragmented MP4 goes to HLS, not direct", () => {
+    const verdict = decidePlayback("mp4", probeOf(stream("video", "h264"), stream("audio", "aac")), fragmented);
+    expect(verdict.mode).toBe("hls");
+    expect(verdict.fragmented).toBe(true);
+    // Still a remux: the point of choosing HLS here is the segmenting, not the
+    // encoding, and paying for an encode would defeat it.
+    expect(verdict.transcodesAudio).toBe(false);
+    expect(verdict.reason).toContain("fragmented");
+  });
+
+  test("the same file, not fragmented, is still served directly", () => {
+    const verdict = decidePlayback("mp4", probeOf(stream("video", "h264"), stream("audio", "aac")), {
+      fragmented: false,
+    });
+    expect(verdict.mode).toBe("direct");
+    expect(verdict.fragmented).toBeUndefined();
+  });
+
+  /** No layout means no new opinion — exactly the behaviour before this existed. */
+  test("with no layout at all the answer is unchanged", () => {
+    expect(decidePlayback("mp4", probeOf(stream("video", "h264"), stream("audio", "aac"))).mode).toBe("direct");
+  });
+
+  test("a fragmented MP4 of VP9 is honest that nothing here can play it", () => {
+    const verdict = decidePlayback("mp4", probeOf(stream("video", "vp9"), stream("audio", "opus")), fragmented);
+    expect(verdict.mode).toBe("unsupported");
+    expect(verdict.reason).toContain("fragmented");
+  });
+
+  test("a fragmented MP4 whose audio cannot ride in MPEG-TS says the audio is converted", () => {
+    const verdict = decidePlayback("mp4", probeOf(stream("video", "h264"), stream("audio", "opus")), fragmented);
+    expect(verdict.mode).toBe("hls");
+    expect(verdict.transcodesAudio).toBe(true);
+  });
+
+  /**
+   * ⚠️ `fragmented` is meaningless outside ISO base media. An MKV cannot have
+   * an `mvex`, so a layout claiming otherwise must not change the MKV path.
+   */
+  test("the fragmented flag does not leak into containers it cannot describe", () => {
+    const verdict = decidePlayback("mkv", probeOf(stream("video", "h264"), stream("audio", "aac")), fragmented);
+    expect(verdict.mode).toBe("hls");
+    expect(verdict.fragmented).toBeUndefined();
   });
 });
 

@@ -10,7 +10,8 @@
  * Drizzle speaks Postgres too, and distribution would need it.
  */
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import type { CredentialMeta } from "./credentials";
 import type { DownloadPlan, Preferences, Stage } from "./types";
 
 const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
@@ -162,8 +163,142 @@ export const notifications = sqliteTable(
   (t) => [index("notifications_unread_idx").on(t.readAt, t.createdAt)],
 );
 
+/**
+ * Credentials, per provider and per site — sealed at rest, one-way out.
+ *
+ * 🔴 `secret` is the only column in the database that holds something the API
+ * must never return. Every read path in `core/credentials.ts` names its columns
+ * one by one so that a `SELECT *` cannot put it in a variable a route could
+ * serialise by accident, and the only function that opens it hands it straight
+ * to a subprocess.
+ *
+ * ⚠️ `(scope, type)` is **unique**, and that is a design decision rather than a
+ * constraint that happened. A YouTube jar expires within hours, so re-pasting
+ * one is the most common thing anybody will ever do here; without the unique
+ * index the table fills with dead jars for the same host and "most specific
+ * scope wins" stops being a total order — two rows for `youtube.com` have no
+ * defensible winner. Replacing keeps resolution decidable.
+ */
+export const credentials = sqliteTable(
+  "credentials",
+  {
+    id: text("id").primaryKey(),
+    /** Host or pattern: `youtube.com`, `*.odysee.com`, or `*` for everything. */
+    scope: text("scope").notNull(),
+    /** `cookies` | `password` | `apiKey` | `custom`. */
+    type: text("type").notNull(),
+    /** Free text, for telling two accounts on one site apart. */
+    label: text("label"),
+    /** 🔴 The sealed secret. See the header. */
+    secret: text("secret").notNull(),
+    /**
+     * `aes-256-gcm` or `plaintext` — what actually happened, not what was
+     * intended. With no `CREDENTIALS_KEY` the secret is stored in the clear and
+     * this column says so, so that no screen can claim encryption that is not
+     * there.
+     */
+    protection: text("protection").notNull().default("plaintext"),
+    /**
+     * Non-reversible fingerprint of the key that sealed this row.
+     *
+     * It turns "the key was rotated" from an unexplained decryption failure
+     * into a sentence the UI can print.
+     */
+    keyId: text("key_id"),
+    /**
+     * Non-secret facts *about* the secret: cookie count, the domains covered,
+     * the soonest expiry, the username. Never a value that authenticates.
+     */
+    meta: text("meta", { mode: "json" }).$type<CredentialMeta>().notNull().default(sql`'{}'`),
+    createdAt: text("created_at").notNull().default(now),
+    updatedAt: text("updated_at").notNull().default(now),
+    /** When a download last used it. Null means it has never been exercised. */
+    lastUsedAt: text("last_used_at"),
+  },
+  (t) => [
+    uniqueIndex("credentials_scope_type_idx").on(t.scope, t.type),
+    // Resolution reads every row and ranks them in memory (the table is tens of
+    // rows at most), but the uniqueness check on write goes through the index
+    // above; this one serves listing by host.
+    index("credentials_scope_idx").on(t.scope),
+  ],
+);
+
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value", { mode: "json" }).notNull(),
   updatedAt: text("updated_at").notNull().default(now),
 });
+
+/**
+ * Transcode jobs — the one thing in CasaTube that **re-encodes**.
+ *
+ * 🔴 A separate table rather than a `kind` column on `jobs`, and the difference
+ * is not cosmetic. A download job is a URL, a provider, a plan, a fingerprint
+ * and six stages; a transcode is a file already on disk, a preset and one
+ * ffmpeg. Widening `jobs` would mean half its columns are null for half its
+ * rows and every reader has to ask which kind it is holding — including the
+ * duplicate check, which compares a fingerprint of a URL that a transcode does
+ * not have.
+ *
+ * ⚠️ **One at a time is a property of the runner, not of this table.** The box
+ * that runs this also runs Home Assistant and Zigbee; the concurrency limit
+ * lives in `core/transcode.ts` where the process is actually spawned.
+ */
+export const transcodes = sqliteTable(
+  "transcodes",
+  {
+    id: text("id").primaryKey(),
+    /** Library-relative path of the original. Never absolute — see `resolveInRoot`. */
+    sourcePath: text("source_path").notNull(),
+    /**
+     * Library-relative path this will be written to.
+     *
+     * 🔴 Decided at enqueue time and stored, not recomputed when the job runs.
+     * A name chosen twice is a name that can differ twice — and the second one
+     * would be a file nobody asked for, left beside the first.
+     */
+    outputPath: text("output_path").notNull(),
+    /** Which named preset. Raw ffmpeg flags are deliberately not storable here. */
+    preset: text("preset").notNull(),
+
+    /** `queued` | `running` | `done` | `failed` | `cancelled`. */
+    status: text("status").notNull().default("queued"),
+    /** 0–100, from ffmpeg's own `-progress` output against the probed duration. */
+    progress: integer("progress").notNull().default(0),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(2),
+    /** Not claimable before this instant — the same shape a job's backoff uses. */
+    notBefore: text("not_before"),
+
+    /**
+     * Whether the original goes to the trash once this succeeds.
+     *
+     * 🔴 Default **false**, and even when true the original is *moved to
+     * `.trash/`*, never unlinked: "replace" that cannot be undone and "replace"
+     * that can are different promises, and only one of them is safe to offer
+     * for a lossy re-encode.
+     */
+    replaceOriginal: integer("replace_original", { mode: "boolean" }).notNull().default(false),
+
+    /** Probed once, so progress has a denominator. */
+    durationSeconds: integer("duration_seconds"),
+    /** Sizes, for the one number anybody actually wants afterwards. */
+    sourceBytes: integer("source_bytes"),
+    outputBytes: integer("output_bytes"),
+
+    error: text("error"),
+    log: text("log", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
+
+    createdAt: text("created_at").notNull().default(now),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    updatedAt: text("updated_at").notNull().default(now),
+  },
+  (t) => [
+    index("transcodes_claim_idx").on(t.status, t.notBefore, t.createdAt),
+    // "Is this file already being converted?" is asked once per enqueue and
+    // once per card; without this it is a table scan of the whole history.
+    index("transcodes_source_idx").on(t.sourcePath),
+  ],
+);

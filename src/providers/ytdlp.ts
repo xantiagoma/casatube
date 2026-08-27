@@ -44,6 +44,29 @@
  *    a warning, and `--print after_move:%(filepath)s` reports a path that was
  *    never created. So `fetch` stats the file before returning Ok, and does not
  *    pass `--no-warnings` (warnings are routed to `ctx.log`).
+ *
+ * ---------------------------------------------------------------------------
+ * ## Credentials
+ *
+ * Every invocation that touches the network — `probe`, `list` and `fetch` —
+ * asks the {@link CredentialResolver} for the URL first and releases what it
+ * got in a `finally`. Two shapes reach the command line, and no more:
+ *
+ * - `cookies` → `--cookies <file>`, where the file is written 0600 into a 0700
+ *   temp directory for the life of the process and **deleted afterwards**. Not
+ *   `--cookies-from-browser`: there is no browser in the container.
+ * - `password` → `--username` / `--password`.
+ *
+ * ⚠️ `--password` puts the password in **argv**, where anything that can read
+ * `/proc` on the host can see it. yt-dlp offers no file-based alternative that
+ * does not involve `.netrc`, whose keying by "machine" does not survive the
+ * scope model. Stated rather than hidden, and surfaced by the credential test
+ * endpoint — a single-tenant home server is the context in which it is
+ * acceptable.
+ *
+ * ⚠️ Nothing here logs a secret, and `redactLine` scrubs the password out of
+ * every stderr line on the way to `ctx.log` anyway. That is defence against a
+ * future yt-dlp echoing an argument, not against today's.
  */
 import { Result } from "better-result";
 import {
@@ -55,6 +78,14 @@ import {
   UnsupportedUrl,
   type ProviderError,
 } from "../core/errors";
+/**
+ * ⚠️ Type-only, and it has to stay that way. `core/credentials.ts` imports the
+ * schema, which imports `core/types.ts`; a *value* import here would close a
+ * cycle that `tsc` is perfectly happy with and that blows up at module
+ * initialisation (see the import-cycle entry in docs/DISCOVERIES.md). The
+ * resolver arrives through `YtdlpOptions`, never through an import.
+ */
+import type { CredentialLease, CredentialResolver } from "../core/credentials";
 import type {
   AudioTrack,
   DiscoveredItem,
@@ -663,8 +694,27 @@ export interface YtdlpOptions {
   /** Binary to run. `YTDLP_BIN` lets the container point at a volume copy (PLAN §15). */
   binary?: string;
   spawn?: Spawner;
-  /** Netscape cookie jar. ⚠️ Credentials — never logged (PLAN §12). */
+  /**
+   * Netscape cookie jar, as a path.
+   *
+   * ⚠️ Credentials — never logged (PLAN §12). Two things set this: the
+   * `COOKIES_FILE` environment variable, which is the global fallback PLAN §12
+   * describes, and a {@link CredentialLease}, which overrides it per URL.
+   */
   cookiesFile?: string;
+  /** yt-dlp `--username`. Comes from a `password` credential, never from the environment. */
+  username?: string;
+  /** yt-dlp `--password`. ⚠️ Ends up in argv — see the header. */
+  password?: string;
+  /**
+   * Where per-URL credentials come from.
+   *
+   * Absent means the provider authenticates with `cookiesFile` alone, which is
+   * exactly how it behaved before credentials existed — so a registry built
+   * without a store keeps working, and every test that does not care about
+   * authentication needs no changes.
+   */
+  credentials?: CredentialResolver;
   /** Removed outright when a plan asks for sponsorblock. */
   sponsorblockRemove?: string;
   /** Kept as chapters, so nothing is silently lost. */
@@ -682,20 +732,75 @@ const DEFAULT_SPONSORBLOCK_MARK = "all";
  * `--ignore-config` matters: without it yt-dlp reads the host's config files
  * and the argv we built stops being the whole truth.
  */
-function baseArgs(binary: string, cookiesFile?: string): string[] {
+function baseArgs(binary: string, opts: Pick<YtdlpOptions, "cookiesFile" | "username" | "password"> = {}): string[] {
   return [
     binary,
     "--ignore-config",
     // NOT `--color no`. That exits 2 with a message that never mentions flags.
     "--color",
     "never",
-    ...(cookiesFile ? ["--cookies", cookiesFile] : []),
+    ...(opts.cookiesFile ? ["--cookies", opts.cookiesFile] : []),
+    // ⚠️ Both or neither. yt-dlp prompts interactively for a password when
+    // `--username` is given without one, and a prompt inside a container is a
+    // process that hangs for ever with no output explaining why.
+    ...(opts.username && opts.password ? ["--username", opts.username, "--password", opts.password] : []),
   ];
+}
+
+/**
+ * Every credential flag, for one invocation of yt-dlp, released afterwards.
+ *
+ * The lease is what owns the temp cookie file, so the `finally` is not a
+ * courtesy: without it, one jar per download accumulates under the temp
+ * directory with the live session inside it, readable for as long as the
+ * container runs.
+ */
+async function withCredentials<T>(
+  url: string,
+  opts: YtdlpOptions,
+  run: (opts: YtdlpOptions, lease: CredentialLease | null) => Promise<T>,
+): Promise<T> {
+  const lease = (await opts.credentials?.acquire(url)) ?? null;
+  if (lease === null) return run(opts, null);
+  try {
+    return await run(
+      {
+        ...opts,
+        // A per-URL credential beats the global `COOKIES_FILE`: the whole point
+        // of a scope is that the specific answer wins over the catch-all.
+        ...(lease.cookiesFile === undefined ? {} : { cookiesFile: lease.cookiesFile }),
+        ...(lease.username === undefined ? {} : { username: lease.username }),
+        ...(lease.password === undefined ? {} : { password: lease.password }),
+      },
+      lease,
+    );
+  } finally {
+    await lease.release();
+  }
+}
+
+/**
+ * Scrub a lease's secrets out of a line before it is logged.
+ *
+ * yt-dlp does not echo `--password` today. This exists because the job log is
+ * shown in a browser and kept in the database, so the cost of being wrong about
+ * that later is permanent, and the cost of the guard is one `replaceAll` per
+ * stderr line.
+ */
+export function redactLine(line: string, secrets: readonly string[]): string {
+  let out = line;
+  for (const secret of secrets) {
+    // A one-character "secret" would turn every line into asterisks; anything
+    // that short is not a credential worth protecting in a log.
+    if (secret.length < 4) continue;
+    out = out.replaceAll(secret, "***");
+  }
+  return out;
 }
 
 export function buildProbeArgs(url: string, opts: YtdlpOptions = {}): string[] {
   return [
-    ...baseArgs(opts.binary ?? defaultBinary(), opts.cookiesFile),
+    ...baseArgs(opts.binary ?? defaultBinary(), opts),
     "-J",
     "--no-warnings",
     // A watch URL that also carries `&list=` would otherwise drag the whole
@@ -707,7 +812,7 @@ export function buildProbeArgs(url: string, opts: YtdlpOptions = {}): string[] {
 
 export function buildListArgs(url: string, opts: YtdlpOptions = {}): string[] {
   return [
-    ...baseArgs(opts.binary ?? defaultBinary(), opts.cookiesFile),
+    ...baseArgs(opts.binary ?? defaultBinary(), opts),
     "-J",
     "--no-warnings",
     "--flat-playlist",
@@ -762,7 +867,7 @@ export function buildFetchArgs(
   const subLanguages = [...new Set(plan.subtitles.map((s) => s.language))];
 
   return [
-    ...baseArgs(opts.binary ?? defaultBinary(), opts.cookiesFile),
+    ...baseArgs(opts.binary ?? defaultBinary(), opts),
     // Quiet, but keep progress. This is what pushes `postprocess:` onto stderr
     // (YoutubeDL.py:664) and leaves stdout carrying only our own lines.
     "-q",
@@ -969,100 +1074,123 @@ export function createYtdlpProvider(options: YtdlpOptions = {}): Provider {
     },
 
     async probe(url, signal) {
-      const info = await runJson(buildProbeArgs(url, opts), url, signal);
+      const info = await withCredentials(url, opts, (authenticated) =>
+        runJson(buildProbeArgs(url, authenticated), url, signal),
+      );
       if (Result.isError(info)) return info;
       return translateInfo(info.value, url);
     },
 
     async list(url, signal) {
-      const info = await runJson(buildListArgs(url, opts), url, signal);
+      const info = await withCredentials(url, opts, (authenticated) =>
+        runJson(buildListArgs(url, authenticated), url, signal),
+      );
       if (Result.isError(info)) return info;
       return Result.ok(translateListing(info.value));
     },
 
-    async fetch(plan, ctx) {
-      const args = buildFetchArgs(plan, ctx.workDir, opts);
-      const selector = buildFormatSelector(plan);
-      const progress = new ProgressAccumulator();
-      const stderr: string[] = [];
-      let filePath: string | null = null;
-
-      const handleLine = (line: string, stream: "out" | "err") => {
-        const download = parseDownloadLine(line);
-        if (download) {
-          const update = progress.update(download);
-          if (update) ctx.onProgress(update);
-          else if (download.status === "finished") ctx.log(`sidecar: ${download.filename}`);
-          return;
-        }
-        const post = parsePostProcessLine(line);
-        if (post) {
-          // The whole reason stderr is read at all: without this, the minutes
-          // ffmpeg spends merging look like a dead process.
-          ctx.log(`postprocess ${post.postprocessor ?? "?"}: ${post.status}`);
-          ctx.onProgress({ ...progress.snapshot(), percent: 100 });
-          return;
-        }
-        const printed = parseFilePathLine(line);
-        if (printed) {
-          filePath = printed;
-          return;
-        }
-        if (stream === "err") {
-          stderr.push(line);
-          ctx.log(line);
-        }
-      };
-
-      let outcome: SpawnOutcome;
-      try {
-        outcome = await spawn({
-          args,
-          cwd: ctx.workDir,
-          signal: ctx.signal,
-          onStdout: (line) => handleLine(line, "out"),
-          onStderr: (line) => handleLine(line, "err"),
-        });
-      } catch (cause) {
-        return Result.err(
-          new ProbeFailed({ url: plan.url, detail: `could not run yt-dlp: ${String(cause)}` }),
-        );
-      }
-
-      if (ctx.signal.aborted) {
-        return Result.err(new ProbeFailed({ url: plan.url, detail: "cancelled" }));
-      }
-      if (outcome.exitCode !== 0) {
-        return Result.err(
-          classifyError({ stderr: stderr.join("\n"), url: plan.url, wanted: selector }),
-        );
-      }
-      if (!filePath) {
-        return Result.err(
-          new ProbeFailed({ url: plan.url, detail: "yt-dlp reported no output file" }),
-        );
-      }
-
-      // Trap 6: yt-dlp exits 0 and names a file it never wrote when a merge was
-      // requested and ffmpeg is missing. Believing the exit code here produces a
-      // "done" job with nothing behind it.
-      if (!(await Bun.file(filePath).exists())) {
-        return Result.err(
-          new ProbeFailed({
-            url: plan.url,
-            detail:
-              `yt-dlp exited 0 but ${filePath} does not exist ` +
-              `(a merge was requested and ffmpeg is probably missing)`,
-          }),
-        );
-      }
-
-      const thumbnailFile = await listSidecarThumbnail(ctx.workDir, plan.outputName);
-      return Result.ok({
-        file: filePath,
-        subtitleFiles: await listSidecarSubtitles(ctx.workDir, plan.outputName),
-        ...(thumbnailFile === undefined ? {} : { thumbnailFile }),
-      } satisfies FetchResult);
+    fetch(plan, ctx) {
+      // The lease is held for the whole download — a cookie file deleted while
+      // yt-dlp is still resuming a fragment is a job that fails at 80%.
+      return withCredentials(plan.url, opts, (authenticated, lease) =>
+        runFetch(plan, ctx, authenticated, lease),
+      );
     },
   };
+
+  async function runFetch(
+    plan: DownloadPlan,
+    ctx: ProviderContext,
+    opts: YtdlpOptions,
+    lease: CredentialLease | null,
+  ): Promise<Result<FetchResult, ProviderError>> {
+    const args = buildFetchArgs(plan, ctx.workDir, opts);
+    const selector = buildFormatSelector(plan);
+    const secrets = lease?.redact ?? [];
+    const progress = new ProgressAccumulator();
+    const stderr: string[] = [];
+    let filePath: string | null = null;
+
+    const handleLine = (line: string, stream: "out" | "err") => {
+      const download = parseDownloadLine(line);
+      if (download) {
+        const update = progress.update(download);
+        if (update) ctx.onProgress(update);
+        else if (download.status === "finished") ctx.log(`sidecar: ${download.filename}`);
+        return;
+      }
+      const post = parsePostProcessLine(line);
+      if (post) {
+        // The whole reason stderr is read at all: without this, the minutes
+        // ffmpeg spends merging look like a dead process.
+        ctx.log(`postprocess ${post.postprocessor ?? "?"}: ${post.status}`);
+        ctx.onProgress({ ...progress.snapshot(), percent: 100 });
+        return;
+      }
+      const printed = parseFilePathLine(line);
+      if (printed) {
+        filePath = printed;
+        return;
+      }
+      if (stream === "err") {
+        // 🔴 Redacted on the way in, not on the way out. `stderr` becomes the
+        // `detail` of a tagged error that is rendered in the browser and
+        // written to the job row, so scrubbing at the log call alone would
+        // leave the password in the durable copy.
+        const safe = redactLine(line, secrets);
+        stderr.push(safe);
+        ctx.log(safe);
+      }
+    };
+
+    let outcome: SpawnOutcome;
+    try {
+      outcome = await spawn({
+        args,
+        cwd: ctx.workDir,
+        signal: ctx.signal,
+        onStdout: (line) => handleLine(line, "out"),
+        onStderr: (line) => handleLine(line, "err"),
+      });
+    } catch (cause) {
+      return Result.err(
+        new ProbeFailed({ url: plan.url, detail: `could not run yt-dlp: ${String(cause)}` }),
+      );
+    }
+
+    if (ctx.signal.aborted) {
+      return Result.err(new ProbeFailed({ url: plan.url, detail: "cancelled" }));
+    }
+    if (outcome.exitCode !== 0) {
+      return Result.err(
+        classifyError({ stderr: stderr.join("\n"), url: plan.url, wanted: selector }),
+      );
+    }
+    if (!filePath) {
+      return Result.err(
+        new ProbeFailed({ url: plan.url, detail: "yt-dlp reported no output file" }),
+      );
+    }
+
+    // Trap 6: yt-dlp exits 0 and names a file it never wrote when a merge was
+    // requested and ffmpeg is missing. Believing the exit code here produces a
+    // "done" job with nothing behind it.
+    if (!(await Bun.file(filePath).exists())) {
+      return Result.err(
+        new ProbeFailed({
+          url: plan.url,
+          detail:
+            `yt-dlp exited 0 but ${filePath} does not exist ` +
+            `(a merge was requested and ffmpeg is probably missing)`,
+        }),
+      );
+    }
+
+    const thumbnailFile = await listSidecarThumbnail(ctx.workDir, plan.outputName);
+    return Result.ok({
+      file: filePath,
+      subtitleFiles: await listSidecarSubtitles(ctx.workDir, plan.outputName),
+      ...(thumbnailFile === undefined ? {} : { thumbnailFile }),
+    } satisfies FetchResult);
+  }
 }

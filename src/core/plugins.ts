@@ -52,6 +52,53 @@ export interface PluginApi {
   config: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * One thing a plugin needs to be told before it can work.
+ *
+ * 🔴 **Declared, not read blind.** The first version of `jellyfin.ts` reached
+ * into `config` for `JELLYFIN_URL` and `JELLYFIN_TOKEN` and, when they were
+ * missing, logged one line and did nothing. Correct behaviour, useless
+ * interface: the only way to find out what to set was to read the source. A
+ * declaration is what lets Settings draw a form instead.
+ *
+ * ⚠️ **Every value is a string**, including numbers and booleans, because the
+ * layer underneath is the process environment and an environment variable is a
+ * string. A setting that arrived as a `number` from the UI and a `string` from
+ * the environment would be the worst kind of surprise — the plugin would work
+ * until someone moved the value. `type` is a hint for the *form*, not a promise
+ * about the runtime type.
+ */
+export interface PluginSetting {
+  /** The key in `config`. By convention SCREAMING_SNAKE, like the variable it shadows. */
+  key: string;
+  /** The form label. Write it for someone who has not read the plugin. */
+  label: string;
+  /** One or two sentences: what it is for, and where to get it. */
+  description?: string;
+  /**
+   * ⚠️ **Never returned by the API**, the same rule as the cookies file
+   * (PLAN §12). The form shows "set" or "not set" and a box to replace it, and
+   * nothing anywhere sends the value back to the browser.
+   */
+  secret?: boolean;
+  /** What the plugin gets when neither the environment nor the UI has a value. */
+  default?: string;
+  /** Shown as a warning in the form. Nothing is enforced: an unconfigured plugin must still behave. */
+  required?: boolean;
+  /** How the form renders it. `select` needs `options`. */
+  type?: PluginSettingType;
+  /** For `type: "select"`. */
+  options?: PluginSettingOption[];
+  placeholder?: string;
+}
+
+export type PluginSettingType = "text" | "number" | "boolean" | "url" | "select";
+
+export interface PluginSettingOption {
+  value: string;
+  label?: string;
+}
+
 export interface PluginManifest {
   name: string;
   description: string;
@@ -73,6 +120,14 @@ export interface PluginManifest {
    * process, and is only worth it once third-party plugins are distributed.
    */
   needs?: Capability[];
+  /**
+   * What this plugin needs configured, so the UI can draw a form for it.
+   *
+   * Static, like `matches`, and read at the same moment: the form exists before
+   * `setup()` has ever run, which is the only way a plugin can be configured
+   * *before* it is switched on.
+   */
+  settings?: PluginSetting[];
 }
 
 export interface Plugin extends PluginManifest {

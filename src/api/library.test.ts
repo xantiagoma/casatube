@@ -19,7 +19,7 @@ import { join } from "node:path";
 
 import { loadConfig } from "./config";
 import type { AppContext } from "./context";
-import { libraryRoutes } from "./library";
+import { INLINE_RANGE_CAP_BYTES, libraryRoutes } from "./library";
 import { TRASH_DIR } from "../core/library";
 
 let root: string;
@@ -285,6 +285,73 @@ describe("GET /api/library/file", () => {
 
     expect(response.status).toBe(206);
     expect(response.headers.get("content-disposition")).toContain("attachment");
+  });
+
+  /**
+   * 🔴 The bound that stopped a 437 MB file costing 3.74 GB.
+   *
+   * A media element walking a file makes hundreds of `bytes=N-` requests and
+   * abandons each after a few kilobytes — and in the deployed container an
+   * abandoned one had already pushed 6 to 9 MB into the socket. Answering the
+   * literal request ("everything to the end") is what made each probe cost
+   * megabytes.
+   */
+  describe("an open-ended range", () => {
+    /** A file comfortably larger than the cap, so the cap is what shows. */
+    const size = INLINE_RANGE_CAP_BYTES + 5_000;
+    const ranged = async (query: string, range: string) =>
+      appFor().handle(new Request(`http://local/api/library/file?${query}`, { headers: { range } }));
+
+    test("🔴 is answered with at most the cap, and says so in content-range", async () => {
+      put("Videos/big.mp4", "x".repeat(size));
+
+      const response = await ranged("path=Videos%2Fbig.mp4", "bytes=1000-");
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get("content-length")).toBe(String(INLINE_RANGE_CAP_BYTES));
+      expect(response.headers.get("content-range")).toBe(
+        `bytes 1000-${1000 + INLINE_RANGE_CAP_BYTES - 1}/${size}`,
+      );
+    });
+
+    /**
+     * ⚠️ The half that must not be capped. A download manager resuming with
+     * `bytes=N-` writes what it is given and calls the file finished — a cap
+     * there is a silently truncated download, which is the failure this project
+     * refuses on principle.
+     */
+    test("is NOT capped for `?download=1` — a resumed save gets the rest of the file", async () => {
+      put("Videos/big.mp4", "x".repeat(size));
+
+      const response = await ranged("path=Videos%2Fbig.mp4&download=1", "bytes=1000-");
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get("content-length")).toBe(String(size - 1000));
+      expect(response.headers.get("content-range")).toBe(`bytes 1000-${size - 1}/${size}`);
+    });
+
+    test("a range that names its end is honoured exactly, cap or no cap", async () => {
+      put("Videos/big.mp4", "x".repeat(size));
+
+      const response = await ranged("path=Videos%2Fbig.mp4", `bytes=0-${size - 1}`);
+
+      expect(response.headers.get("content-length")).toBe(String(size));
+    });
+
+    test("a file smaller than the cap is still served to its end", async () => {
+      put("Videos/clip.mp4", "0123456789");
+
+      const response = await ranged("path=Videos%2Fclip.mp4", "bytes=2-");
+
+      expect(response.headers.get("content-range")).toBe("bytes 2-9/10");
+      expect(await response.text()).toBe("23456789");
+    });
+
+    test("a start past the end is still a 416, not an empty 206", async () => {
+      put("Videos/clip.mp4", "0123456789");
+
+      expect((await ranged("path=Videos%2Fclip.mp4", "bytes=99-")).status).toBe(416);
+    });
   });
 
   test("a file outside the root is refused before it is opened", async () => {

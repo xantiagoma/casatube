@@ -2,6 +2,132 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## The scroll jumps to the top because the *router* scrolls it, not React (2026-08-27)
+
+Scroll to the bottom of the queue, click a row, and the page snaps back to the
+top. The natural suspects are all wrong: the list is not remounted, the rows are
+not re-keyed, and focus does not move anywhere that would scroll. Measured on
+the running app — `tbody` and the first `<tr>` are **the same DOM nodes** before
+and after the click.
+
+**TanStack Router scrolls the window to `(0, 0)` after every navigation unless
+told not to**, and a search-param change *is* a navigation. `router-core`'s
+`setupScrollRestoration` runs unconditionally at router construction; even with
+`scrollRestoration` unset it still registers an `onRendered` subscriber whose
+first act is:
+
+```js
+const shouldResetScroll = scroll.next;   // set from `resetScroll ?? true`
+…
+if (!hash) { if (!windowRestored) scrollTo({ top: 0, left: 0, behavior }); }
+```
+
+So selecting a job, moving a filter and *typing a character into the search box*
+were each one full "scroll to top".
+
+The fix is `resetScroll: false` on every `navigate` that only rewrites search
+params. Both job screens funnel their navigations through a single `setSearch`
+helper so it cannot be forgotten on the one call that would bring the jump back.
+
+Measured, same page, same build:
+
+| | before click | after click |
+|---|---|---|
+| Queue at 1440 px, `resetScroll: false` | 2587 | **2587** |
+| Queue at 820 px (sheet opens over it) | 2517 | **2517** |
+| Downloads at 1600 px (inspector docks) | 1203 | **1203** |
+| Dashboard's range `Select` — a screen not yet fixed | 448 | **0** |
+
+📌 The last row is the point: the bug is **per-`navigate`, not per-screen**, and
+every other screen that writes a search param still has it. Library, Sources,
+Storage, Settings and the Dashboard are each one `resetScroll: false` away.
+Setting it once on the router would be tempting and is a different decision —
+a real route change *should* start at the top.
+
+## `#HttpOnly_` is a cookie, not a comment — and a jar of spaces is not a jar (2026-08-27)
+
+Two traps in the Netscape `cookies.txt` format, both of which produce a file
+that looks fine and authenticates nothing.
+
+**`#HttpOnly_.youtube.com` starts with `#`.** Chrome and Firefox both write that
+prefix, and a parser that skips every line beginning with `#` silently drops
+**exactly the cookies that authenticate** — `HSID`, `SSID` and the rest are
+httpOnly by design. The file parses, the count comes out plausible, and the
+session is not in it.
+
+**Tabs, and only tabs.** The seven fields are tab-separated, and copying a jar
+through a terminal, a chat window or a text editor turns those tabs into runs of
+spaces. yt-dlp then reads one field per line and behaves as if signed out. The
+whole file arrives as a single field, so the useful error is not "7 fields
+expected, got 1" — it is *"this was separated by spaces, export it again"*, which
+is what `parseNetscapeCookies` says.
+
+📌 The general shape, and it is why validation happens at the moment of pasting:
+a credential that is wrong fails **twenty minutes into an 800 MB download**,
+three layers away from the paste that caused it. An immediate rejection costs a
+second and names the line.
+
+## A cookie's domain covers its subdomains, so "does the scope cover the domain" is backwards (2026-08-27)
+
+The check that a stored jar actually belongs to the site it is filed under looks
+like one line: for scope `www.youtube.com`, does any cookie domain match it?
+
+Written as `scopeMatchesHost(scope, domain)` it **rejects the correct answer**.
+A browser exports the YouTube session as domain `.youtube.com` — a *domain
+cookie*, which by the cookie spec applies to `www.youtube.com` and
+`music.youtube.com` too. Asking "does the scope cover the domain" says no, and
+the test button fails on precisely the jar that would have worked.
+
+The relation has to be checked **both ways**: a domain covers a scope when it is
+the same host, when the scope sits under it (the domain-cookie case), or when it
+sits under the scope. What is left failing is the case worth failing — a jar
+exported from an entirely different site.
+
+⚠️ Caught by curl against the running server, not by a unit test: the unit test
+used `youtube.com` for both and passed either way.
+
+## WAL means a fresh write is not in the `.db` file yet (2026-08-27)
+
+Checking "is the secret encrypted at rest" by grepping `casatube.db` for the
+plaintext returned **0 hits — and would have returned 0 hits either way**. The
+connection runs `PRAGMA journal_mode = WAL` (`core/db.ts`), so a row written a
+second ago lives in `casatube.db-wal` until a checkpoint moves it.
+
+The give-away was that `aes-256-gcm`, which the row definitely contains, was not
+in the `.db` file either. Grepping the WAL as well found both marks and neither
+secret.
+
+📌 Third entry in this file about an instrument that lies, and the fix is the
+same one every time: **before concluding something is absent, prove the check
+could have seen it.** Here that was one positive control — the same grep against
+the file the cookie was pasted from.
+
+## Two documented environment variables are read by nothing (2026-08-27)
+
+`MAX_CONCURRENT_DOWNLOADS` and `LOG_LEVEL` are set in **three** places —
+`PLAN.md` §12, `docker-compose.yml` and the Dockerfile's `ENV` block — and
+`grep -r` over `src/` finds neither. Everything else in that table is genuinely
+read by `api/config.ts`; these two are not.
+
+They are not stale leftovers, they are **unimplemented**:
+
+- The worker claims one job at a time (`worker.ts`'s loop is `claimNext` then
+  `await this.run(...)`), so there is no concurrency to limit. PLAN §17 says the
+  cap belongs to the download stage, and that stage does not exist as a
+  schedulable unit yet.
+- There is no log-level switch anywhere; everything goes through `console.log`.
+
+📌 Written down because the natural thing to do when building an editable
+settings screen is to offer every variable the documentation names — which would
+have produced two controls that change a number and no behaviour. Anything
+`core/app-settings.ts` lists, the code reads; these two are deliberately absent
+and this is the note saying the absence is on purpose.
+
+⚠️ The general shape, and it is the same one the worklog keeps recording:
+**configuration is an instrument, and an instrument can be disconnected.**
+Before putting a variable on a screen, check that something reads it — the
+Dockerfile setting it proves nothing about whether the app looks.
+
 ## Going fullscreen resizes the viewport, so a `matchMedia` layout switch destroys the player (2026-08-27)
 
 Fullscreen made the video enter and immediately leave again, on desktop and at
@@ -408,3 +534,24 @@ browser with the network panel open, which is where this stopped.
 and codec alone, with **no regard for size**. Handing a browser a 438 MB
 progressive download may simply be the wrong shape even when it is technically
 playable — segments would let it start on the first few seconds instead.
+
+
+## A documented limit that was never implemented (2026-08-27)
+
+`MAX_CONCURRENT_DOWNLOADS` appeared in `PLAN.md`, in `docker-compose.yml` and in
+the `Dockerfile`. It was argued over at length — 1 or 3, my connection
+arithmetic against metube's seven-year track record — and the answer was written
+down as 3.
+
+**Nothing in `src/` ever read it.** The worker awaited each job in turn, so the
+real limit was always **1**.
+
+Found by the settings work, which needed the list of settings that actually
+exist and noticed two that were configuration in name only (`LOG_LEVEL` is the
+other; there is no log-level switch).
+
+📌 The lesson is not "check your config wiring". It is that **a number in a
+document, a compose file and a Dockerfile still looked like a feature from every
+angle** — three places agreeing with each other and none of them agreeing with
+the code. Documentation is not evidence of behaviour, however much of it there
+is.

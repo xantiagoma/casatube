@@ -37,10 +37,15 @@ const STATUS_BY_TAG: Record<string, number> = {
   RateLimited: 429,
   AuthRequired: 401,
   ProviderCancelled: 499,
+  // Settings. A refused value is the request's fault, not the server's.
+  InvalidSettingValue: 422,
   // Queue
   NotFound: 404,
   InvalidTransition: 409,
   LeaseLost: 409,
+  // Credentials. 422: the request was understood and the credential is not
+  // usable — a malformed cookie file is not a server fault and never retryable.
+  InvalidCredential: 422,
   // Library
   MountUnavailable: 503,
   PathOutsideRoot: 400,
@@ -51,6 +56,9 @@ const STATUS_BY_TAG: Record<string, number> = {
   // grey rectangle and the page is otherwise correct. See `core/errors.ts`.
   ThumbnailUnavailable: 404,
   TranscodeBusy: 503,
+  // 409: the library is in a state that refuses this request — a name already
+  // taken, a file already queued. Nothing is wrong; something is in the way.
+  TranscodeRejected: 409,
   // Worker
   StageFailed: 500,
   Cancelled: 409,
@@ -92,7 +100,19 @@ function describe(error: Taggedish): string {
     case "RateLimited":
       return "The source is rate-limiting us. Waiting before trying again.";
     case "AuthRequired":
-      return "This needs a signed-in session. Set COOKIES_FILE and try again.";
+      return (
+        "This needs a signed-in session. Add a credential for this site under " +
+        "Settings — a Netscape cookies.txt for YouTube, or a username and password " +
+        "where the site supports one."
+      );
+    /**
+     * ⚠️ The detail is the message. A credential is rejected for a reason the
+     * person pasting it can act on — "line 4 is separated by spaces, not tabs" —
+     * and flattening that into "invalid credential" throws away the only part
+     * that helps.
+     */
+    case "InvalidCredential":
+      return `That credential was rejected (${String(error.field ?? "secret")}): ${String(error.detail ?? "unknown reason")}`;
     case "FormatUnavailable":
       return `No format matched what was asked for: ${String(error.wanted ?? "")}`.trim();
     case "ProviderCancelled":
@@ -100,6 +120,8 @@ function describe(error: Taggedish): string {
       return "Cancelled.";
     case "NotFound":
       return `No such ${String(error.what ?? "item")}.`;
+    case "InvalidSettingValue":
+      return `That value was refused: ${String(error.detail ?? "it did not validate")}`;
     case "InvalidTransition":
       return `A job that is ${String(error.from ?? "in this state")} cannot become ${String(error.to ?? "that")}.`;
     case "LeaseLost":
@@ -116,6 +138,8 @@ function describe(error: Taggedish): string {
       return `This file cannot be played in a browser: ${String(error.detail ?? "unknown reason")}`;
     case "TranscodeBusy":
       return `All ${String(error.limit ?? "the")} playback slots are in use. Try again in a moment.`;
+    case "TranscodeRejected":
+      return String(error.detail ?? "That conversion cannot be queued.");
     case "Timeout":
       return `${String(error.what ?? "The operation")} timed out.`;
     case "DiskFull":

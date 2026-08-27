@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { useHealth } from "../../data/stats";
 import { useTheme } from "../../data/theme";
 import { useJobStream, type ConnectionState } from "../../data/stream";
+import { ActiveDownloads } from "./ActiveDownloads";
 import { NotificationBell } from "./NotificationBell";
 import { SidebarContent } from "./Sidebar";
 
@@ -136,6 +137,13 @@ export function AppShell() {
             </TooltipContent>
           </Tooltip>
 
+          {/* Before the bell: the bell is about what has already happened,
+              this is about what is happening. It draws nothing at all when
+              nothing is running — see `ActiveDownloads`. `live` is passed down
+              rather than re-derived because this component owns the one SSE
+              subscription, and a second `useJobStream()` here would open a
+              second connection on every screen. */}
+          <ActiveDownloads live={stream.connection === "live"} />
           <NotificationBell />
           <ThemeToggle />
         </header>

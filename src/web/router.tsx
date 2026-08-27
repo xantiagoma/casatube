@@ -26,7 +26,9 @@ import { Sources } from "./screens/Sources";
 import { Storage } from "./screens/Storage";
 import {
   DOWNLOAD_TABS,
+  FILE_FILTERS,
   INSPECTOR_TABS,
+  JOB_SORTS,
   LIBRARY_SORTS,
   LIBRARY_VIEWS,
   QUEUE_FILTERS,
@@ -63,6 +65,11 @@ const downloadsRoute = createRoute({
   validateSearch: (search: Record<string, unknown> & SearchSchemaInput): DownloadsSearch => ({
     tab: oneOf(search.tab, DOWNLOAD_TABS, "active"),
     panel: oneOf(search.panel, INSPECTOR_TABS, "details"),
+    // 🔴 Newest first. The API answers priority-then-oldest, which is the right
+    // order for a *worker* to claim jobs and the wrong one to read.
+    sort: oneOf(search.sort, JOB_SORTS, "date"),
+    order: oneOf(search.order, SORT_ORDERS, "desc"),
+    file: oneOf(search.file, FILE_FILTERS, "any"),
     ...(text(search.q) !== undefined ? { q: text(search.q)! } : {}),
     ...(text(search.job) !== undefined ? { job: text(search.job)! } : {}),
   }),
@@ -75,6 +82,9 @@ const queueRoute = createRoute({
   validateSearch: (search: Record<string, unknown> & SearchSchemaInput): QueueSearch => ({
     status: oneOf(search.status, QUEUE_FILTERS, "all"),
     panel: oneOf(search.panel, INSPECTOR_TABS, "details"),
+    sort: oneOf(search.sort, JOB_SORTS, "date"),
+    order: oneOf(search.order, SORT_ORDERS, "desc"),
+    ...(text(search.q) !== undefined ? { q: text(search.q)! } : {}),
     ...(text(search.job) !== undefined ? { job: text(search.job)! } : {}),
   }),
   component: Queue,

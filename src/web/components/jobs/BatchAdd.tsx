@@ -134,8 +134,18 @@ export function BatchAdd() {
             }}
             className="font-mono text-xs"
           />
+          {/* 🔴 "Every URL is queued with the same settings" used to stand here,
+              and it is the sentence Santi flagged: on a queue screen it reads as
+              a promise about the *result*, and the result is per link. The
+              request really is identical for every line — but what comes out is
+              whatever each source happens to have, so the honest version names
+              which half is shared and points at the form that chooses the other
+              half. */}
           <p className="text-xs text-muted-foreground">
-            Lines starting with <code>#</code> are ignored. Every URL is queued with the same settings.
+            Lines starting with <code>#</code> are ignored. Destination and priority apply to every line —
+            download options do not: each job takes the server's defaults and gets whatever that particular link
+            actually offers. To choose resolution, codec, audio and subtitles, use the single-URL form on the
+            Dashboard.
           </p>
         </div>
 

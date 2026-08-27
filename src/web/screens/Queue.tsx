@@ -1,46 +1,39 @@
 /**
  * The queue, with the inspector beside it.
  *
- * 🔴 The filter and the selected job live in the **URL**, not in this
- * component. That is what PLAN §8 bought with TanStack Router: "show me the
- * failed ones, this job open on its log" is a link you can send, and it
- * survives a reload — which matters most for the case the whole project exists
- * for, when a job fails and you want to show someone the reason.
+ * 🔴 The filter, the search, the sort and the selected job all live in the
+ * **URL**, not in this component. That is what PLAN §8 bought with TanStack
+ * Router: "the failed ones, biggest first, this job open on its log" is a link
+ * you can send, and it survives a reload — which matters most for the case the
+ * whole project exists for, when a job fails and you want to show someone the
+ * reason.
+ *
+ * ⚠️ **Every `navigate` here passes `resetScroll: false`, and that is not
+ * cosmetic.** TanStack Router calls `window.scrollTo(0, 0)` after *any*
+ * navigation unless told otherwise — including one that changes nothing but a
+ * search param. Since selecting a row, typing in the search box and moving a
+ * filter are all navigations, the default turned every click at the bottom of a
+ * long queue into a jump back to the top. See `docs/DISCOVERIES.md`.
  */
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Loader2, MousePointerClick } from "lucide-react";
 
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDockedPanels } from "@/hooks/use-media-query";
-import type { Job } from "../../core/types";
 import { EmptyState, ErrorState, StatTile } from "../components/common/Bits";
 import { BatchAdd } from "../components/jobs/BatchAdd";
 import { JobInspector } from "../components/jobs/JobInspector";
+import { SearchBox, SortControl, StatusFilter } from "../components/jobs/JobFilters";
 import { JobTable } from "../components/jobs/JobTable";
-import { RUNNING, WAITING, bucketOf } from "../components/jobs/job-view";
+import { matchesStatus, matchesText, sortJobs } from "../components/jobs/job-order";
+import { RUNNING, WAITING } from "../components/jobs/job-view";
 import { PageHeader } from "../components/layout/AppShell";
 import { formatCount } from "../data/format";
 import { useJobs } from "../data/queries";
 import { useJobStream } from "../data/stream";
-import type { QueueFilter } from "../search-params";
-
-function matches(job: Job, filter: QueueFilter): boolean {
-  switch (filter) {
-    case "all":
-      return true;
-    case "waiting":
-      return WAITING.includes(job.status) || bucketOf(job) === "scheduled";
-    case "running":
-      return RUNNING.includes(job.status);
-    case "done":
-      return job.status === "done";
-    case "failed":
-      return job.status === "failed" || job.status === "cancelled";
-  }
-}
+import type { QueueSearch } from "../search-params";
 
 export function Queue() {
   const search = useSearch({ from: "/queue" });
@@ -49,8 +42,19 @@ export function Queue() {
   const jobs = useJobs(stream.connection === "live");
   const docked = useDockedPanels();
 
+  /**
+   * One writer for the URL, so `resetScroll: false` cannot be forgotten on the
+   * one call that would then throw the page back to the top.
+   */
+  const setSearch = (patch: Partial<QueueSearch>): void =>
+    void navigate({ search: (current) => ({ ...current, ...patch }), resetScroll: false });
+
   const all = jobs.data?.jobs ?? [];
-  const shown = all.filter((job) => matches(job, search.status));
+  const shown = sortJobs(
+    all.filter((job) => matchesStatus(job, search.status) && matchesText(job, search.q ?? "")),
+    search.sort,
+    search.order,
+  );
   const selected = search.job ? (all.find((job) => job.id === search.job) ?? null) : null;
 
   const counts = {
@@ -60,51 +64,45 @@ export function Queue() {
     failed: all.filter((job) => job.status === "failed").length,
   };
 
-  const select = (id: string) =>
-    void navigate({ search: (current) => ({ ...current, job: current.job === id ? undefined : id }) });
+  const select = (id: string): void => setSearch({ job: search.job === id ? undefined : id });
 
   const inspector = selected ? (
     <JobInspector
       job={selected}
       tab={search.panel}
-      onTab={(panel) => void navigate({ search: (current) => ({ ...current, panel }) })}
-      onClose={() => void navigate({ search: (current) => ({ ...current, job: undefined }) })}
+      onTab={(panel) => setSearch({ panel })}
+      onClose={() => setSearch({ job: undefined })}
     />
   ) : null;
 
+  const filtered = search.status !== "all" || (search.q ?? "") !== "";
+
   return (
     <>
-      <PageHeader
-        title="Queue"
-        description="Everything the server is holding. Closing this tab changes nothing."
-        actions={
-          <Select
-            value={search.status}
-            onValueChange={(next) => void navigate({ search: (current) => ({ ...current, status: next as QueueFilter }) })}
-          >
-            <SelectTrigger className="w-40" aria-label="Filter by status">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All statuses</SelectItem>
-              <SelectItem value="waiting">Waiting</SelectItem>
-              <SelectItem value="running">Running</SelectItem>
-              <SelectItem value="done">Completed</SelectItem>
-              <SelectItem value="failed">Failed</SelectItem>
-            </SelectContent>
-          </Select>
-        }
-      />
+      <PageHeader title="Queue" description="Everything the server is holding. Closing this tab changes nothing." />
 
       <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_28rem]">
         <div className="min-w-0 space-y-4">
           <BatchAdd />
 
+          {/* 🔴 The numbers come before the list. They are the first thing
+              anyone looks at, and under the table they are the thing nobody
+              scrolls to. */}
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatTile label="Waiting" value={formatCount(counts.waiting)} hint="Jobs the worker has not claimed" />
             <StatTile label="Running" value={formatCount(counts.running)} hint="Claimed and moving" />
             <StatTile label="Completed" value={formatCount(counts.done)} hint="In the window the API returns" />
             <StatTile label="Failed" value={formatCount(counts.failed)} hint="Needs attention" />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusFilter value={search.status} onChange={(status) => setSearch({ status })} />
+            <SortControl sort={search.sort} order={search.order} onChange={setSearch} />
+            <SearchBox
+              label="Search the queue"
+              value={search.q ?? ""}
+              onChange={(next) => setSearch({ q: next === "" ? undefined : next })}
+            />
           </div>
 
           <Card>
@@ -129,11 +127,13 @@ export function Queue() {
               ) : shown.length === 0 ? (
                 <div className="px-4">
                   <EmptyState
-                    title={all.length === 0 ? "The queue is empty" : "Nothing matches this filter"}
+                    title={all.length === 0 ? "The queue is empty" : "Nothing matches these filters"}
                     hint={
                       all.length === 0
                         ? "Add URLs above. A queued job survives both the browser closing and the service restarting."
-                        : "Try another status."
+                        : filtered
+                          ? "Try another status, or clear the search."
+                          : "Try another status."
                     }
                   />
                 </div>
@@ -168,7 +168,7 @@ export function Queue() {
       <Sheet
         open={!docked && selected !== null}
         onOpenChange={(open) => {
-          if (!open) void navigate({ search: (current) => ({ ...current, job: undefined }) });
+          if (!open) setSearch({ job: undefined });
         }}
       >
         {/* The inspector brings its own close button; the sheet's default one

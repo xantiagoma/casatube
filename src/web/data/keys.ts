@@ -15,6 +15,8 @@ export const keys = {
 
   library: (query: Record<string, unknown>) => ["library", query] as const,
   libraryItem: (path: string, probe: boolean) => ["library", "item", path, probe] as const,
+  /** The server's playback verdict for one file. Asking has no side effects. */
+  libraryPlayback: (path: string) => ["library", "playback", path] as const,
   trash: ["library", "trash"] as const,
 
   sources: ["sources"] as const,
@@ -27,4 +29,8 @@ export const keys = {
   notifications: (unreadOnly: boolean) => ["notifications", unreadOnly] as const,
   plugins: ["plugins"] as const,
   pluginDocs: ["plugins", "docs"] as const,
+  pluginTemplate: ["plugins", "template"] as const,
+  /** Keyed on the **filename**, because that is what the editor opens — see `data/plugins.ts`. */
+  pluginSource: (file: string) => ["plugins", "source", file] as const,
+  pluginSettings: (name: string) => ["plugins", "settings", name] as const,
 } as const;

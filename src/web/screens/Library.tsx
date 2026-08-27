@@ -67,6 +67,7 @@ import {
   useEmptyTrash,
   useLibrary,
   useLibraryItem,
+  usePlayback,
   useRestore,
   useTrash,
   useTrashItem,
@@ -311,6 +312,21 @@ function DownloadSplitButton({ item }: { item: LibraryItem }) {
 
 function DetailPanel({ path, onClose }: { path: string; onClose(): void }) {
   const detail = useLibraryItem(path, true);
+  /**
+   * 🔴 **The server decides how this file is played, not its extension.**
+   *
+   * `playableUrl` below is a guess made from the three letters after the dot,
+   * and the guess was wrong on the file that started all this: a perfectly
+   * ordinary-looking MP4 that is *fragmented*, so a `<video src>` pointed at it
+   * pulled 3.74 GB before showing a frame. Only something that can open the
+   * file knows that, and `GET /api/library/hls/playback` is where it is known —
+   * cached per (size, mtime), and it starts nothing by being asked.
+   *
+   * ⚠️ The extension guess stays as the fallback for exactly as long as the
+   * verdict has not arrived, or could not be fetched. Blocking the panel on it
+   * would trade a rare wrong player for a spinner on every file.
+   */
+  const playback = usePlayback(path);
   const trash = useTrashItem();
   const [confirming, setConfirming] = useState(false);
 
@@ -324,7 +340,13 @@ function DetailPanel({ path, onClose }: { path: string; onClose(): void }) {
   }
 
   const { item, probe } = detail.data;
-  const src = playableUrl(item);
+  const verdict = playback.data;
+  const src = verdict === undefined ? playableUrl(item) : verdict.url;
+  const isHls = src !== null && src.includes("/hls/");
+  // The server's sentence when it has one: it names the real obstacle
+  // ("fragmented", "VP9 cannot be carried by HLS"), which the extension-only
+  // fallback below can only guess at.
+  const hint = src === null ? (verdict?.reason ?? unplayableReason(item)) : undefined;
 
   return (
     <div className="flex h-full flex-col">
@@ -349,8 +371,8 @@ function DetailPanel({ path, onClose }: { path: string; onClose(): void }) {
           title={item.name}
           duration={probe?.durationSeconds ?? null}
           kind={kindOf(item)}
-          unplayableHint={src ? undefined : unplayableReason(item)}
-          hls={src?.includes("/hls/") ?? false}
+          unplayableHint={hint}
+          hls={isHls}
         />
 
         <dl className="divide-y text-xs">

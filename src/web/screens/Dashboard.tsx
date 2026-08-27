@@ -6,7 +6,7 @@
  * Every one of them links to the screen that owns the detail, so the dashboard
  * never becomes a second, subtly different implementation of the queue.
  */
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import { ArrowRight, HardDrive, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ import { PageHeader } from "../components/layout/AppShell";
 import { formatBytes, formatCount, formatElapsed } from "../data/format";
 import { useJobs } from "../data/queries";
 import { useAnalytics, useStorage } from "../data/stats";
+import { useSetSearch } from "../hooks/use-set-search";
 import { useJobStream } from "../data/stream";
 
 function StorageCard() {
@@ -80,7 +81,13 @@ function StorageCard() {
 
 export function Dashboard() {
   const { range } = useSearch({ from: "/" });
-  const navigate = useNavigate({ from: "/" });
+  /**
+   * ⚠️ Not `useNavigate` directly. The analytics window lives in the URL, so
+   * changing it is a navigation — and TanStack Router's `resetScroll` defaults
+   * to true, which threw the dashboard back to the top every time. Measured:
+   * scrollTop 448 → 0. See `use-set-search.ts`.
+   */
+  const setSearch = useSetSearch<{ range: StatsRange }>();
   const stream = useJobStream();
   const jobs = useJobs(stream.connection === "live");
   const analytics = useAnalytics(range);
@@ -100,8 +107,25 @@ export function Dashboard() {
         title="Dashboard"
         description="Paste a URL, watch the queue, and see what it is costing."
         actions={
-          <Select value={range} onValueChange={(next) => void navigate({ search: { range: next as StatsRange } })}>
-            <SelectTrigger className="w-28" aria-label="Analytics window">
+          <Select value={range} onValueChange={(next) => setSearch((previous) => ({ ...previous, range: next as StatsRange }))}>
+            {/* 🔴 The other half of the scroll bug, and it is not the router.
+                Radix focuses the trigger on pointer-down with a bare `focus()`,
+                and focusing an element the browser considers off-screen scrolls
+                it into view — so the first use of this control threw the page
+                back to the top. Measured: `scrollTop` 350 → 0 with
+                `scrollHeight` unchanged, and neither `window.scrollTo` nor the
+                `scrollTop` setter called; the instrumented call was
+                `focus()` on this button with no options, immediately followed
+                by Radix's own `focus({ preventScroll: true })`.
+
+                Focusing it here first, with `preventScroll`, makes that second
+                call a no-op on an already-focused element. It only ever bit the
+                *first* interaction, which is exactly why it survived. */}
+            <SelectTrigger
+              className="w-28"
+              aria-label="Analytics window"
+              onPointerDown={(event) => event.currentTarget.focus({ preventScroll: true })}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
