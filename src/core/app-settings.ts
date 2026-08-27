@@ -76,7 +76,13 @@ export type SettingSource = "user" | "env" | "default";
 /** When a write takes effect. See the header — this is the load-bearing field. */
 export type SettingEffect = "live" | "restart";
 
-export type SettingGroupId = "downloads" | "server" | "library" | "playback" | "thumbnails";
+export type SettingGroupId =
+  | "downloads"
+  | "server"
+  | "library"
+  | "playback"
+  | "thumbnails"
+  | "notifications";
 
 export interface SettingGroup {
   id: SettingGroupId;
@@ -111,6 +117,12 @@ export const SETTING_GROUPS: readonly SettingGroup[] = [
     id: "thumbnails",
     label: "Thumbnails",
     description: "Limits on the ffmpeg processes and cache that scrolling a cold library can spend.",
+  },
+  {
+    id: "notifications",
+    label: "Notifications",
+    description:
+      "How much history the bell keeps. A sweep runs every six hours; both values take effect at the next one, without a restart.",
   },
 ] as const;
 
@@ -497,6 +509,34 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     restartReason: "The thumbnail cache is constructed at boot.",
     min: 100,
     max: 100_000,
+  },
+
+  // --- Notifications: live, because the sweep re-reads them -----------------
+  {
+    key: "notifications.retentionDays",
+    group: "notifications",
+    label: "Keep read notifications for (days)",
+    description:
+      "Read notifications older than this are removed by the six-hourly sweep. 0 keeps them for ever. ⚠️ Unread ones are never removed by age.",
+    kind: "integer",
+    envVar: "NOTIFICATION_RETENTION_DAYS",
+    defaultValue: 30,
+    effect: "live",
+    min: 0,
+    max: 3650,
+  },
+  {
+    key: "notifications.maxEntries",
+    group: "notifications",
+    label: "Maximum notifications kept",
+    description:
+      "A ceiling on the table, because the age rule spares unread ones and a bell nobody opens would grow for ever. Over it, read notifications are removed oldest first and only then unread ones — and the log says when an unread one went. 0 removes the ceiling.",
+    kind: "integer",
+    envVar: "NOTIFICATION_MAX_ENTRIES",
+    defaultValue: 5_000,
+    effect: "live",
+    min: 0,
+    max: 1_000_000,
   },
 ] as const;
 

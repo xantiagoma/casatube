@@ -22,7 +22,7 @@
  * on purpose, so that deleting job history (PLAN §15, retention) cannot fail on
  * a notification still pointing at it.
  */
-import { and, asc, count, desc, eq, isNull, lt, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, lt, sql, type SQL } from "drizzle-orm";
 import { Result } from "better-result";
 
 import type { Db } from "./db";
@@ -69,6 +69,63 @@ export interface PurgeOptions {
    */
   onlyRead?: boolean;
 }
+
+/**
+ * Retention: what the sweeper is allowed to remove, and what it must not.
+ *
+ * Two rules, because one is not enough. Age alone does **not** bound this
+ * table: `purge` spares unread notifications by design, so a bell nobody ever
+ * opens keeps every row it was ever given, for ever. A ceiling is what makes
+ * the growth stop; the age rule is what keeps the ceiling from ever being the
+ * thing that acts.
+ */
+export interface RetentionPolicy {
+  /**
+   * Read notifications older than this are removed. `0` disables the rule.
+   *
+   * Only read ones — this is the same promise `purge` makes, and it is the
+   * reason the age rule is safe to run unattended.
+   */
+  retentionDays: number;
+  /**
+   * Hard ceiling on the number of rows. `0` disables the ceiling.
+   *
+   * ⚠️ **This one can delete an unread notification**, and it is the only thing
+   * in the codebase that can do so without being asked. That is deliberate and
+   * it is the lesser evil: without it "grows for ever" is the actual behaviour.
+   * The eviction order is what makes it defensible — see
+   * {@link NotificationStore.enforceRetention}.
+   */
+  maxEntries: number;
+}
+
+/** What one sweep did. Every number here is a thing that was lost. */
+export interface RetentionOutcome {
+  /** Read notifications removed for being older than `retentionDays`. */
+  byAge: number;
+  /** Notifications removed for being over `maxEntries`. */
+  byCap: number;
+  /**
+   * How many of `byCap` had never been read.
+   *
+   * 🔴 Separated out so it can be *said*. A cap that quietly drops warnings
+   * nobody has seen is exactly the silent substitution this project keeps
+   * paying for; the number exists so the log line can name it.
+   */
+  unreadDropped: number;
+}
+
+export const DEFAULT_RETENTION_DAYS = 30;
+export const DEFAULT_MAX_ENTRIES = 5_000;
+
+/**
+ * How many ids one `DELETE ... IN (...)` may carry.
+ *
+ * SQLite has a ceiling on bound parameters, and the first sweep after this
+ * feature ships may have thousands of rows to remove. Chunking is not an
+ * optimisation here — it is the difference between a sweep and an exception.
+ */
+const DELETE_CHUNK = 500;
 
 /** Ceiling on one page, so a bell menu cannot ask for the whole table. */
 export const MAX_PAGE = 200;
@@ -226,6 +283,79 @@ export class NotificationStore {
       .returning({ id: notifications.id });
     return deleted.length;
   }
+
+  /**
+   * One retention sweep: the age rule, then the ceiling.
+   *
+   * ## Why the ceiling evicts read notifications first
+   *
+   * The obvious rule — "keep the newest N" — is the wrong one for a bell. It
+   * would drop a warning from last month that nobody has read while keeping a
+   * "download finished" from this morning that has already been seen and acted
+   * on. So the eviction order is **read before unread, oldest first within
+   * each**: everything already seen is spent before anything unseen is
+   * touched, and a table that is entirely unread loses its oldest entries only
+   * because there is nothing else left to lose.
+   *
+   * The rows are selected and then deleted by id rather than deleted by
+   * predicate in one statement, for two reasons: the ids are how the unread
+   * count is known (a `DELETE` cannot tell us what it removed under an
+   * expression `ORDER BY` on either dialect), and a `LIMIT` on `DELETE` is a
+   * SQLite compile option rather than a guarantee (PLAN §17 rule 6).
+   */
+  async enforceRetention(policy: RetentionPolicy): Promise<RetentionOutcome> {
+    const byAge =
+      policy.retentionDays > 0
+        ? await this.purge({
+            before: new Date(this.now().getTime() - policy.retentionDays * 86_400_000),
+            onlyRead: true,
+          })
+        : 0;
+
+    if (policy.maxEntries <= 0) return { byAge, byCap: 0, unreadDropped: 0 };
+
+    const [total] = await this.db.select({ n: count() }).from(notifications);
+    const excess = (total?.n ?? 0) - policy.maxEntries;
+    if (excess <= 0) return { byAge, byCap: 0, unreadDropped: 0 };
+
+    const doomed = await this.db
+      .select({ id: notifications.id, readAt: notifications.readAt })
+      .from(notifications)
+      // `UNREAD_FIRST` is 0 for unread and 1 for read, so *descending* puts the
+      // read ones first — the exact reverse of what the bell's list wants, and
+      // exactly what an eviction order wants.
+      .orderBy(desc(UNREAD_FIRST), asc(notifications.createdAt), asc(notifications.id))
+      .limit(excess);
+
+    const unreadDropped = doomed.filter((row) => row.readAt === null).length;
+    for (let i = 0; i < doomed.length; i += DELETE_CHUNK) {
+      const ids = doomed.slice(i, i + DELETE_CHUNK).map((row) => row.id);
+      await this.db.delete(notifications).where(inArray(notifications.id, ids));
+    }
+
+    return { byAge, byCap: doomed.length, unreadDropped };
+  }
+}
+
+/**
+ * The line a sweep deserves in the log — or nothing, when it removed nothing.
+ *
+ * Silence when nothing happened is the point: a retention sweep every six hours
+ * that always prints becomes noise nobody reads, and the one line that mattered
+ * (an unread notification dropped) would be lost inside it.
+ */
+export function describeRetention(outcome: RetentionOutcome): string | undefined {
+  if (outcome.byAge === 0 && outcome.byCap === 0) return undefined;
+  const parts: string[] = [];
+  if (outcome.byAge > 0) parts.push(`${outcome.byAge} read past retention`);
+  if (outcome.byCap > 0) {
+    parts.push(
+      outcome.unreadDropped > 0
+        ? `${outcome.byCap} over the cap, ⚠️ ${outcome.unreadDropped} of them never read`
+        : `${outcome.byCap} over the cap`,
+    );
+  }
+  return `removed ${parts.join(", ")}`;
 }
 
 // --- The emitter the worker will use ----------------------------------------

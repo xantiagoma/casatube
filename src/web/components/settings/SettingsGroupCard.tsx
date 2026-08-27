@@ -1,7 +1,7 @@
 /**
  * A group of settings as one card, and the banner that counts what is waiting.
  *
- * The five groups come from the server with the settings (`SETTING_GROUPS`), so
+ * The groups come from the server with the settings (`SETTING_GROUPS`), so
  * a group added to the catalogue appears here without this file being touched —
  * and, more to the point, the sentence explaining *when a change takes effect*
  * travels with the group instead of being re-typed on the screen where it can

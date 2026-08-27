@@ -28,6 +28,7 @@ import { NotificationStore, createJobNotifier } from "./core/notifications";
 import { AppSettingsStore } from "./core/app-settings";
 import { openJobQueue } from "./core/queue";
 import { SourceScheduler } from "./core/scheduler";
+import { NotificationRetention, policyFromSettings } from "./core/notification-retention";
 import { SourceManager, registryDiscoverer } from "./core/sources";
 import { createDefaultRegistry } from "./providers/registry";
 import { describeFfmpegLocation, resolveFfmpegLocation } from "./providers/ytdlp";
@@ -272,10 +273,23 @@ async function main(): Promise<StartedServer> {
   // talks to the queue through the database like any other client would, and
   // the watcher polls the table rather than listening to it. That is what keeps
   // PLAN §17 rule 3 true — no in-memory state welds the two together.
+  const notificationStore = new NotificationStore({ db });
   const notifier = createJobNotifier(
-    new NotificationStore({ db }),
+    notificationStore,
     (cause) => console.error("[casatube] notification write failed", cause),
   );
+
+  /**
+   * Retention for `notifications`, which until now grew until somebody pressed
+   * the button. The policy is read on every sweep because both settings are
+   * `live` — see `core/notification-retention.ts`.
+   */
+  const notificationRetention = new NotificationRetention({
+    store: notificationStore,
+    policy: () => policyFromSettings((key) => settingsStore.get(key)),
+    log: (line) => console.log(`[casatube] ${line}`),
+    onError: (error) => console.error("[casatube] notification retention failed", error),
+  });
 
   const worker = new Worker({
     queue,
@@ -287,6 +301,7 @@ async function main(): Promise<StartedServer> {
   });
   void worker.start();
   scheduler.start();
+  notificationRetention.start();
 
   // Anything a killed process was mid-way through goes back to `queued` before
   // the loop starts, so a restart costs time and nothing else.
@@ -308,6 +323,7 @@ async function main(): Promise<StartedServer> {
   const stop = async (): Promise<void> => {
     worker.stop();
     scheduler.stop();
+    notificationRetention.stop();
     // Before the port closes: an ffmpeg left behind by a restart is a core
     // burning on a file nobody is watching, and nothing would ever reap it.
     await hls.stop();
@@ -315,6 +331,7 @@ async function main(): Promise<StartedServer> {
     // every core. Its row stays `running` and comes back as `queued`.
     await transcodes.stop();
     await scheduler.drain();
+    await notificationRetention.drain();
     watcher.stop();
     await app.stop();
     queue.close();

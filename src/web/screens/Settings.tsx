@@ -479,10 +479,10 @@ function NotificationsCard() {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Notifications</CardTitle>
+        <CardTitle className="text-base">Clear notifications now</CardTitle>
         <p className="text-sm text-muted-foreground">
           Notifications are rows in the database, so one that fires while the tab is closed is still there when it
-          opens. There is nothing to switch on.
+          opens. A sweep already removes old ones every six hours — this is the same broom, held by hand.
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -593,8 +593,8 @@ function AuthCard() {
  *
  * 🔴 **One query for twenty-five settings, and one banner over all of them.**
  * `restartPending` and the merged download preferences are facts about the
- * *set*, so the snapshot is read here and the groups are handed rows — five
- * cards asking five times would each know only about themselves, and the
+ * *set*, so the snapshot is read here and the groups are handed rows — six
+ * cards asking six times would each know only about themselves, and the
  * "two changes are waiting" line could not be written at all.
  */
 export function Settings() {
@@ -639,6 +639,7 @@ export function Settings() {
           {groupCard("playback")}
           {groupCard("thumbnails")}
           <PathsCard />
+          {groupCard("notifications")}
           <NotificationsCard />
         </div>
         <div className="space-y-4">

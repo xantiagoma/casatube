@@ -309,6 +309,33 @@ it refills itself. Nothing generated is ever written into the library.
 | `THUMBNAIL_TIMEOUT_MS` | `20000` | Per generation, after which the process is **killed** and the request answers |
 | `THUMBNAIL_MAX_ENTRIES` | `5000` | Cached frames kept before the oldest are pruned |
 
+### Notifications
+
+Notifications are rows, because one that fires while the tab is closed is still
+a notification. A sweep runs **every six hours** and re-reads both values each
+time, so a change on the Settings screen needs no restart.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `NOTIFICATION_RETENTION_DAYS` | `30` | **Read** notifications older than this are removed. `0` keeps them for ever |
+| `NOTIFICATION_MAX_ENTRIES` | `5000` | Ceiling on the table. `0` removes the ceiling |
+
+⚠️ The two rules are not redundant, and it is worth knowing which one does the
+work. The age rule **never touches an unread notification** — that is what makes
+it safe to run unattended — so on a bell nobody opens it removes nothing and the
+table grows without limit. The ceiling is what actually bounds it.
+
+📌 So the ceiling is the one thing here that can remove something nobody has
+read. It spends read notifications first, oldest first, and reaches unread ones
+only when there is nothing else left; when it does, the log says so:
+
+```
+[casatube] notifications removed 12 over the cap, ⚠️ 3 of them never read
+```
+
+If that line appears and you did not want it to, raise `NOTIFICATION_MAX_ENTRIES`
+— the fix is a bigger ceiling, not a longer retention.
+
 ### yt-dlp
 
 | Variable | Default | What it does |

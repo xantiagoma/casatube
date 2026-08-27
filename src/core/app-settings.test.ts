@@ -282,10 +282,23 @@ describe("live versus restart", () => {
     }
   });
 
-  test("the download defaults are the only live group", () => {
+  test("🔴 every live setting has something that re-reads it, and this is the list", () => {
+    // `live` is a promise to the person on the Settings screen: saving this
+    // changes behaviour now. It can only be kept by a reader that goes back to
+    // the store, so the list is spelled out here rather than derived — a new
+    // `live` setting has to be added to it deliberately, next to the note
+    // saying where the re-read happens.
+    //
+    //   downloads.*                 — api/jobs.ts reads settings.preferences()
+    //                                 on every POST /api/jobs.
+    //   notifications.retentionDays — core/notification-retention.ts calls
+    //   notifications.maxEntries      policyFromSettings() on every sweep.
     const live = SETTING_DEFINITIONS.filter((d) => d.effect === "live").map((d) => d.key);
-    expect(live.every((key) => key.startsWith("downloads."))).toBe(true);
-    expect(live).toHaveLength(7);
+    expect(live.filter((key) => !key.startsWith("downloads."))).toEqual([
+      "notifications.retentionDays",
+      "notifications.maxEntries",
+    ]);
+    expect(live).toHaveLength(9);
   });
 });
 

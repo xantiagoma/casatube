@@ -2,6 +2,34 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## `bun test` runs a test that does not compile — and it opened the real database (2026-08-27)
+
+`openDb` takes an options object. A new test wrote:
+
+```ts
+db = openDb(join(dir, "casatube.db"));   // a type error
+```
+
+`tsc` says so plainly — `Type 'string' has no properties in common with type
+'OpenDbOptions'` — but **`bun test` transpiles rather than type-checks**, so the
+suite ran happily. The string arrived as `options`, `options.path` was
+`undefined`, and the fallback opened `appDbPath()`: the development database in
+`./data`. The retention sweep under test then deleted rows out of it, and the
+test's own assertions were what noticed, because the counts did not match what
+the test had seeded.
+
+📌 Two lessons, and the second is the useful one. A green `bun test` is not
+evidence that the file compiles — run `bun run typecheck` before believing a new
+test file. And a default that reaches for production is a loaded gun: `openDb`
+now throws on a non-object argument, so the same typo is a stack trace rather
+than a write to the real table.
+
+⚠️ It is worth noticing *why* the mistake survived to run at all. Everything in
+this repo already opens the database as `openDb({ path })`; the wrong call was
+written from memory of a different signature and never read back against a
+neighbouring test.
+
+
 ## `min-w-0` + `flex-1` + `truncate` still lets one long path widen the whole grid (2026-08-27)
 
 The Settings screen overflowed sideways on an iPad: `innerWidth` 820,

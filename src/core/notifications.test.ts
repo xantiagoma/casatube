@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { Result } from "better-result";
 
 import { closeDb, openDb, type Db } from "./db";
-import { createJobNotifier, NotificationStore } from "./notifications";
+import { createJobNotifier, describeRetention, NotificationStore } from "./notifications";
 import { DEFAULT_PREFERENCES, type Job } from "./types";
 
 let dir: string;
@@ -257,6 +257,137 @@ describe("purge", () => {
 
     expect(await store.purge({ before: new Date("2026-08-10T00:00:00.000Z") })).toBe(0);
     expect((await store.list()).map((n) => n.id).sort()).toEqual([exactly.id, after.id].sort());
+  });
+});
+
+describe("enforceRetention", () => {
+  /** `n` notifications, one per day, oldest first. */
+  async function seed(store: NotificationStore, n: number): Promise<string[]> {
+    const ids: string[] = [];
+    for (let day = 1; day <= n; day++) {
+      at(`2026-08-${String(day).padStart(2, "0")}T00:00:00.000Z`);
+      ids.push((await store.create({ title: `day ${day}` })).id);
+    }
+    return ids;
+  }
+
+  test("the age rule removes read notifications and only those", async () => {
+    const store = storeFor();
+    at("2026-07-01T00:00:00.000Z");
+    const oldRead = await store.create({ title: "old and read" });
+    const oldUnread = await store.create({ title: "old and unread" });
+    at("2026-08-27T00:00:00.000Z");
+    await store.markRead(oldRead.id);
+    const recent = await store.create({ title: "recent" });
+    await store.markRead(recent.id);
+
+    const outcome = await store.enforceRetention({ retentionDays: 30, maxEntries: 0 });
+
+    expect(outcome).toEqual({ byAge: 1, byCap: 0, unreadDropped: 0 });
+    expect((await store.list()).map((n) => n.id).sort()).toEqual([oldUnread.id, recent.id].sort());
+  });
+
+  test("🔴 the ceiling is what actually bounds the table, because age spares unread", async () => {
+    // The failure this exists for: a bell nobody opens. Every row is unread, so
+    // the age rule can never remove one and the table grows for ever.
+    const store = storeFor();
+    await seed(store, 10);
+    at("2027-01-01T00:00:00.000Z");
+
+    expect(await store.enforceRetention({ retentionDays: 30, maxEntries: 0 })).toEqual({
+      byAge: 0,
+      byCap: 0,
+      unreadDropped: 0,
+    });
+    expect(await store.list()).toHaveLength(10);
+
+    const outcome = await store.enforceRetention({ retentionDays: 30, maxEntries: 4 });
+    expect(outcome).toEqual({ byAge: 0, byCap: 6, unreadDropped: 6 });
+    expect(await store.list()).toHaveLength(4);
+  });
+
+  test("🔴 read notifications are spent before any unread one is touched", async () => {
+    const store = storeFor();
+    const ids = await seed(store, 6);
+    // The two *newest* are read; the four oldest were never seen.
+    await store.markRead(ids[4]!);
+    await store.markRead(ids[5]!);
+    at("2026-09-01T00:00:00.000Z");
+
+    // Keeping "the newest four" would drop two unread warnings and keep two
+    // notifications already seen and acted on. It keeps the unread ones.
+    const outcome = await store.enforceRetention({ retentionDays: 0, maxEntries: 4 });
+
+    expect(outcome).toEqual({ byAge: 0, byCap: 2, unreadDropped: 0 });
+    expect((await store.list()).map((n) => n.id).sort()).toEqual(
+      [ids[0]!, ids[1]!, ids[2]!, ids[3]!].sort(),
+    );
+  });
+
+  test("under the ceiling nothing is removed, and 0 means no ceiling at all", async () => {
+    const store = storeFor();
+    await seed(store, 3);
+    at("2026-09-01T00:00:00.000Z");
+
+    expect(await store.enforceRetention({ retentionDays: 0, maxEntries: 3 })).toEqual({
+      byAge: 0,
+      byCap: 0,
+      unreadDropped: 0,
+    });
+    expect(await store.enforceRetention({ retentionDays: 0, maxEntries: 0 })).toEqual({
+      byAge: 0,
+      byCap: 0,
+      unreadDropped: 0,
+    });
+    expect(await store.list()).toHaveLength(3);
+  });
+
+  test("retentionDays 0 disables the age rule rather than meaning 'now'", async () => {
+    // 0 is "keep them for ever" on the Settings screen. Read as a cutoff it
+    // would mean "everything older than this instant" — the whole table.
+    const store = storeFor();
+    await seed(store, 3);
+    await store.markAllRead();
+    at("2027-01-01T00:00:00.000Z");
+
+    expect(await store.enforceRetention({ retentionDays: 0, maxEntries: 0 })).toEqual({
+      byAge: 0,
+      byCap: 0,
+      unreadDropped: 0,
+    });
+    expect(await store.list()).toHaveLength(3);
+  });
+
+  test("a sweep bigger than one DELETE's worth of parameters still completes", async () => {
+    // The chunking is not an optimisation: the first sweep after this shipped
+    // can have thousands of rows to remove, and SQLite has a bound-parameter
+    // ceiling.
+    const store = storeFor();
+    at("2026-08-01T00:00:00.000Z");
+    for (let i = 0; i < 1_200; i++) await store.create({ title: `n${i}` });
+    at("2026-09-01T00:00:00.000Z");
+
+    const outcome = await store.enforceRetention({ retentionDays: 0, maxEntries: 10 });
+
+    expect(outcome.byCap).toBe(1_190);
+    expect(await store.unreadCount()).toBe(10);
+  });
+});
+
+describe("describeRetention", () => {
+  test("says nothing when nothing went", () => {
+    expect(describeRetention({ byAge: 0, byCap: 0, unreadDropped: 0 })).toBeUndefined();
+  });
+
+  test("🔴 an unread notification dropped by the cap is named, not counted silently", () => {
+    const line = describeRetention({ byAge: 4, byCap: 9, unreadDropped: 2 });
+    expect(line).toContain("4 read past retention");
+    expect(line).toContain("9 over the cap");
+    expect(line).toContain("2 of them never read");
+  });
+
+  test("no unread loss means no alarming clause", () => {
+    expect(describeRetention({ byAge: 0, byCap: 3, unreadDropped: 0 })).toBe("removed 3 over the cap");
   });
 });
 

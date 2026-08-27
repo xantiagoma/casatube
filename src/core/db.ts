@@ -61,6 +61,15 @@ export interface OpenDbOptions {
  * it proves nothing (PLAN §19, and the trap list in WORKLOG).
  */
 export function openDb(options: OpenDbOptions = {}): Db {
+  // 🔴 A guard against one specific accident, and it has already happened once.
+  // `openDb("/tmp/x/casatube.db")` is a type error that `bun test` never sees —
+  // it transpiles rather than type-checks — and the string lands in a parameter
+  // whose `.path` is `undefined`, so the fallback quietly opens the *real*
+  // database and the test writes to it. Failing here costs nothing and turns a
+  // silent substitution into a stack trace.
+  if (typeof options !== "object" || options === null) {
+    throw new TypeError("openDb takes an options object: openDb({ path }), not openDb(path)");
+  }
   const path = options.path ?? appDbPath();
 
   if (path !== IN_MEMORY) {
