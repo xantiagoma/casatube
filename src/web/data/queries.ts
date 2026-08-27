@@ -19,7 +19,8 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tan
 
 import type { DestinationFolder } from "../../api/destinations";
 import type { MediaOptions, Suggestion } from "../../api/options";
-import type { Job, MediaInfo, Preferences, Priority } from "../../core/types";
+import type { Job, JobSortKey, JobStatus, MediaInfo, Preferences, Priority, SortOrder } from "../../core/types";
+import type { JobBucket } from "../../core/job-buckets";
 import { api, unwrap } from "./client";
 import { keys } from "./keys";
 
@@ -49,6 +50,91 @@ export function useJobs(live: boolean): UseQueryResult<QueueSnapshot, Error> {
     // The server is the truth and it is one hop away; there is no such thing as
     // a queue snapshot worth reusing without checking.
     staleTime: 0,
+  });
+}
+
+/**
+ * One job, by id — the inspector's fallback.
+ *
+ * 🔴 It exists because the list is a *page* now. A link to a job (`?job=…`) is
+ * the thing worth sending someone when a download failed, and that job is very
+ * often not on the page the recipient's filters produce. Before this, the
+ * inspector simply drew nothing and the link looked broken.
+ *
+ * `enabled` keeps it from firing for a screen with nothing selected, and the
+ * caller passes `false` when the row is already on the page — there is no
+ * reason to ask the server for a row we are holding.
+ */
+export function useJob(id: string | undefined, enabled: boolean): UseQueryResult<Job, Error> {
+  return useQuery({
+    queryKey: keys.job(id ?? ""),
+    queryFn: async () => unwrap(await api.api.jobs({ id: id! }).get()),
+    enabled: enabled && id !== undefined,
+    staleTime: 0,
+  });
+}
+
+/** What a screen asks the server for. Everything here is a query parameter. */
+export interface JobListParams {
+  bucket?: JobBucket;
+  /** Comma-separated statuses, as the route parses them. */
+  status?: string;
+  q?: string;
+  sort?: JobSortKey;
+  order?: SortOrder;
+  limit?: number;
+  offset?: number;
+}
+
+/** One page of jobs, with the numbers that say what it is a page *of*. */
+export interface JobPage {
+  at: string;
+  jobs: Job[];
+  /** How many jobs match the filter — not how many are on this page. */
+  total: number;
+  counts: {
+    byStatus: Record<JobStatus, number>;
+    byBucket: Record<JobBucket, number>;
+  };
+  limit: number;
+  offset: number;
+}
+
+/**
+ * A page of jobs, ordered and searched **by the database**.
+ *
+ * 🔴 This is the whole point of the change it belongs to. The screens used to
+ * fetch two hundred rows and sort them here, so "the largest failed download"
+ * meant "the largest of the latest two hundred" and nothing on screen marked
+ * the difference. Sorting where the rows are is the only version of that
+ * sentence that is true.
+ *
+ * ⚠️ `refetchInterval` is **not** tied to the stream the way `useJobs` is, and
+ * that is deliberate: the stream pushes into this entry too (see `stream.ts`),
+ * patching rows by id and refetching when the membership actually changes. A
+ * poll on top of that would refetch a sorted page twice a second for nothing.
+ */
+export function useJobList(params: JobListParams, live: boolean): UseQueryResult<JobPage, Error> {
+  const query = {
+    ...(params.bucket ? { bucket: params.bucket } : {}),
+    ...(params.status ? { status: params.status } : {}),
+    ...(params.q ? { q: params.q } : {}),
+    ...(params.sort ? { sort: params.sort } : {}),
+    ...(params.order ? { order: params.order } : {}),
+    ...(params.limit !== undefined ? { limit: params.limit } : {}),
+    ...(params.offset !== undefined ? { offset: params.offset } : {}),
+  };
+  return useQuery({
+    queryKey: keys.jobList(query),
+    queryFn: async () => unwrap(await api.api.jobs.get({ query })),
+    // The safety net only, for when the stream is down. The stream keeps this
+    // entry fresh when it is up.
+    refetchInterval: live ? false : 5_000,
+    staleTime: 0,
+    // A sorted page must not blink back to a spinner when the sort changes:
+    // holding the previous page while the next one arrives is what keeps the
+    // table readable while somebody is clicking through orderings.
+    placeholderData: (previous) => previous,
   });
 }
 

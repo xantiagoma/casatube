@@ -23,31 +23,54 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDockedPanels } from "@/hooks/use-media-query";
 import { useSetSearch } from "@/hooks/use-set-search";
-import { EmptyState, ErrorState, StatTile } from "../components/common/Bits";
+import { EmptyState, ErrorState, PageNote, StatTile } from "../components/common/Bits";
 import { BatchAdd } from "../components/jobs/BatchAdd";
 import { JobInspector } from "../components/jobs/JobInspector";
 import { FileFilterControl, FileStateBadge, SearchBox, SortControl, StatusFilter } from "../components/jobs/JobFilters";
 import { JobTable } from "../components/jobs/JobTable";
-import {
-  fileStateOf,
-  finishedIds,
-  indexFileStates,
-  matchesFile,
-  matchesStatus,
-  matchesText,
-  sortJobs,
-} from "../components/jobs/job-order";
+import { fileStateOf, finishedIds, indexFileStates, matchesFile } from "../components/jobs/job-order";
 import { RUNNING, WAITING } from "../components/jobs/job-view";
 import { PageHeader } from "../components/layout/AppShell";
 import { formatCount } from "../data/format";
-import { useJobFileStates, useJobs } from "../data/queries";
+import { useJob, useJobFileStates, useJobList } from "../data/queries";
 import { useJobStream } from "../data/stream";
-import type { QueueSearch } from "../search-params";
+import type { QueueFilter, QueueSearch } from "../search-params";
+import type { JobStatus } from "../../core/types";
+
+/**
+ * The Queue's status filter, as statuses the route understands.
+ *
+ * 🔴 One mapping, sent to the server, instead of a predicate run over rows that
+ * were already fetched. `all` is `undefined` rather than every status: "no
+ * filter" and "a filter that happens to list everything" differ the moment a
+ * status is added.
+ */
+const STATUSES_FOR: Record<QueueFilter, readonly JobStatus[] | undefined> = {
+  all: undefined,
+  waiting: WAITING,
+  running: RUNNING,
+  done: ["done"],
+  failed: ["failed", "cancelled"],
+};
+
+/** Sum a few statuses out of the server's counts, treating absent as zero. */
+function sumOf(counts: Record<JobStatus, number> | undefined, statuses: readonly JobStatus[]): number {
+  if (counts === undefined) return 0;
+  return statuses.reduce((total, status) => total + (counts[status] ?? 0), 0);
+}
 
 export function Queue() {
   const search = useSearch({ from: "/queue" });
   const stream = useJobStream();
-  const jobs = useJobs(stream.connection === "live");
+  const jobs = useJobList(
+    {
+      status: STATUSES_FOR[search.status]?.join(","),
+      q: search.q,
+      sort: search.sort,
+      order: search.order,
+    },
+    stream.connection === "live",
+  );
   const docked = useDockedPanels();
 
   /**
@@ -61,7 +84,9 @@ export function Queue() {
   const setSearch = useSetSearch<QueueSearch & Record<string, unknown>>();
   const patch = (fields: Partial<QueueSearch>): void => setSearch((current) => ({ ...current, ...fields }));
 
-  const all = jobs.data?.jobs ?? [];
+  const page = jobs.data;
+  const all = page?.jobs ?? [];
+  const total = page?.total ?? 0;
 
   /**
    * 🔴 The same disk check the Downloads screen makes, over the same cache
@@ -72,23 +97,37 @@ export function Queue() {
   const files = useJobFileStates(wanted);
   const fileIndex = indexFileStates(files.data?.states);
 
-  const shown = sortJobs(
-    all.filter(
-      (job) =>
-        matchesStatus(job, search.status) &&
-        matchesText(job, search.q ?? "") &&
-        matchesFile(fileStateOf(job, fileIndex), search.file),
-    ),
-    search.sort,
-    search.order,
-  );
-  const selected = search.job ? (all.find((job) => job.id === search.job) ?? null) : null;
+  /**
+   * ⚠️ The **only** filtering left in the browser, and it belongs here.
+   *
+   * The status, the search and the order are the database's now. What became of
+   * the file is not a column — it is the answer to a `stat` the server made
+   * separately (`POST /api/jobs/file-state`), so it can only be applied to rows
+   * that are already in hand. That is why the count below says how many rows
+   * this page kept, and not what the server would have returned.
+   */
+  const shown = all.filter((job) => matchesFile(fileStateOf(job, fileIndex), search.file));
 
+  /**
+   * The selected job, even when the filters do not include it.
+   *
+   * `?job=…` is a link worth sending someone; before the server owned the page,
+   * "not on this page" and "does not exist" looked identical and the inspector
+   * simply drew nothing.
+   */
+  const onPage = search.job ? (all.find((job) => job.id === search.job) ?? null) : null;
+  const fetched = useJob(search.job, search.job !== undefined && onPage === null);
+  const selected = onPage ?? fetched.data ?? null;
+
+  // 🔴 From the server, over the whole table — not from the rows on screen. The
+  // tiles used to count the page, so "Completed 200" meant "200 of the ones we
+  // happened to be sent" and the hint underneath had to admit it.
+  const byStatus = page?.counts.byStatus;
   const counts = {
-    waiting: all.filter((job) => WAITING.includes(job.status)).length,
-    running: all.filter((job) => RUNNING.includes(job.status)).length,
-    done: all.filter((job) => job.status === "done").length,
-    failed: all.filter((job) => job.status === "failed").length,
+    waiting: sumOf(byStatus, WAITING),
+    running: sumOf(byStatus, RUNNING),
+    done: byStatus?.done ?? 0,
+    failed: byStatus?.failed ?? 0,
   };
 
   const select = (id: string): void => patch({ job: search.job === id ? undefined : id });
@@ -119,7 +158,7 @@ export function Queue() {
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatTile label="Waiting" value={formatCount(counts.waiting)} hint="Jobs the worker has not claimed" />
             <StatTile label="Running" value={formatCount(counts.running)} hint="Claimed and moving" />
-            <StatTile label="Completed" value={formatCount(counts.done)} hint="In the window the API returns" />
+            <StatTile label="Completed" value={formatCount(counts.done)} hint="Every finished job on the server" />
             <StatTile label="Failed" value={formatCount(counts.failed)} hint="Needs attention" />
           </div>
 
@@ -150,8 +189,13 @@ export function Queue() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">
                 Jobs{" "}
+                {/* 🔴 `total` is the server's count over the whole table, not
+                    the length of what was fetched. The difference between
+                    "12 of 40" and "12 of 3,412" is the difference between a
+                    filter and a filter over an arbitrary window — and the
+                    window used to be the only number here. */}
                 <span className="ml-1 text-sm font-normal text-muted-foreground tabular-nums">
-                  ({shown.length} of {all.length})
+                  ({shown.length} of {formatCount(total)})
                 </span>
               </CardTitle>
               <CardAction>
@@ -168,9 +212,9 @@ export function Queue() {
               ) : shown.length === 0 ? (
                 <div className="px-4">
                   <EmptyState
-                    title={all.length === 0 ? "The queue is empty" : "Nothing matches these filters"}
+                    title={total === 0 ? "The queue is empty" : "Nothing matches these filters"}
                     hint={
-                      all.length === 0
+                      total === 0
                         ? "Add URLs above. A queued job survives both the browser closing and the service restarting."
                         : filtered
                           ? "Try another status, set the file state back to any, or clear the search."
@@ -179,12 +223,15 @@ export function Queue() {
                   />
                 </div>
               ) : (
-                <JobTable
-                  jobs={shown}
-                  selectedId={search.job}
-                  onSelect={select}
-                  badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
-                />
+                <>
+                  <JobTable
+                    jobs={shown}
+                    selectedId={search.job}
+                    onSelect={select}
+                    badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
+                  />
+                  <PageNote shown={shown.length} total={total} limit={page?.limit ?? 200} noun="jobs" />
+                </>
               )}
             </CardContent>
           </Card>

@@ -1,111 +1,25 @@
 /**
- * Ordering, filtering, and reading the server's file check — as pure functions.
+ * The sort control's labels, and reading the server's file check.
  *
- * 🔴 They live apart from the screens for the reason `job-view.ts` does: the
- * Queue and Downloads sort and filter the *same* jobs, and two copies of "newest
- * first" is how the two screens end up disagreeing about which one that is.
- * Being pure also makes them the only part of this work a test can reach —
- * there is no DOM test setup in this repo, so a sort written inside a component
- * is a sort nothing checks.
+ * 🔴 **The sorting and the text search used to be here, and their absence is
+ * the point.** They ran over the page the server had already sent, so "the
+ * largest failed download" meant "the largest of the latest two hundred" and
+ * nothing on screen marked the difference. `GET /api/jobs` takes `sort`,
+ * `order`, `q`, `status` and `bucket` now and answers with `total`;
+ * `core/queue.ts` owns the ordering, including the two rules that used to live
+ * in this file — unknown values sink in both directions, and equal keys break
+ * on newest-first so the table cannot shuffle between two polls.
  *
- * ⚠️ **The sorting and the text search are client-side over the snapshot the
- * server already sent.** The file state is not, and no longer is: it comes from
- * `POST /api/jobs/file-state`, because the disk is not something the browser
- * can be given a copy of.
- *
- * `GET /api/jobs` returns up to 200 jobs ordered by priority then oldest-first,
- * with no sort or search parameters of its own; re-ordering here is therefore
- * re-ordering *that page*, not the whole history. See the report: a server-side
- * `sort`/`order`/`q` on the jobs route is what would make this exact past the
- * two-hundredth job.
+ * What is left is what the browser genuinely owns. The **labels** on the sort
+ * control, because "ascending priority" is a sentence about ranks and the
+ * person reading it wants to know whether High is at the top. And the **file
+ * state**, which is not a column at all: it is the answer to a `stat` the
+ * server made separately (`POST /api/jobs/file-state`), so it can only ever be
+ * applied to rows already in hand.
  */
-import type { Job, JobStatus, Priority } from "../../../core/types";
+import type { Job } from "../../../core/types";
 import type { JobFileState } from "../../data/queries";
-import type { FileFilter, JobSort, QueueFilter, SortOrder } from "../../search-params";
-import { RUNNING, WAITING, bucketOf, jobTitle } from "./job-view";
-
-// --- Sorting ----------------------------------------------------------------
-
-/**
- * Status, as a line from "moving right now" to "will never move again".
- *
- * The lifecycle order rather than the alphabet: sorting by status is asked for
- * to bring the *busy* rows together, and `analyzing` next to `cancelled` next to
- * `done` answers a question nobody has.
- */
-const STATUS_RANK: Record<JobStatus, number> = {
-  downloading: 0,
-  processing: 1,
-  moving: 2,
-  analyzing: 3,
-  "waiting-for-destination": 4,
-  queued: 5,
-  done: 6,
-  failed: 7,
-  cancelled: 8,
-};
-
-const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 };
-
-/**
- * The number a sort compares, or `null` when the job simply does not have it.
- *
- * ⚠️ `null` is not zero. A job that has never reported a size is not a 0-byte
- * job, and sorting it as one puts the unknowns in the middle of the answer
- * — see `sortJobs`, which keeps them at the end in both directions.
- */
-function sortKey(job: Job, sort: JobSort): number | null {
-  switch (sort) {
-    case "date": {
-      const at = Date.parse(job.createdAt);
-      return Number.isFinite(at) ? at : null;
-    }
-    case "status":
-      return STATUS_RANK[job.status] ?? 99;
-    case "priority":
-      return PRIORITY_RANK[job.priority] ?? PRIORITY_RANK.normal;
-    case "size":
-      // What the download is expected to weigh. `doneBytes` would rank a job by
-      // how far along it is, which is the progress bar's job, not the size's.
-      return job.totalBytes ?? null;
-    case "duration":
-      return job.duration ?? null;
-  }
-}
-
-/**
- * Sorted, newest-first by default.
- *
- * Three properties worth stating, because each one is a bug when it is missing:
- *
- * 1. **Unknowns sink.** A job with no size sorts last whether the direction is
- *    largest-first or smallest-first. Flipping the direction must not promote
- *    "we don't know" to the top of the screen.
- * 2. **The order is total.** Ties break on `createdAt` and then `id`, so the
- *    rows do not shuffle when an SSE frame arrives and re-renders the table with
- *    equal keys — `Array.prototype.sort` is stable, but the *input* array is a
- *    fresh snapshot each frame, so stability alone guarantees nothing.
- * 3. **It does not mutate.** The array belongs to the React Query cache, so
- *    this is `toSorted`, not `sort` — sorting the cache in place would reorder
- *    the Dashboard's copy of the same snapshot as a side effect.
- */
-export function sortJobs(jobs: readonly Job[], sort: JobSort, order: SortOrder): Job[] {
-  const direction = order === "asc" ? 1 : -1;
-  return jobs.toSorted((a, b) => {
-    const left = sortKey(a, sort);
-    const right = sortKey(b, sort);
-
-    if (left === null || right === null) {
-      if (left !== right) return left === null ? 1 : -1;
-    } else if (left !== right) {
-      return (left < right ? -1 : 1) * direction;
-    }
-
-    const added = Date.parse(b.createdAt) - Date.parse(a.createdAt);
-    if (Number.isFinite(added) && added !== 0) return added;
-    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-  });
-}
+import type { FileFilter, JobSort, SortOrder } from "../../search-params";
 
 /**
  * What each direction *means*, per sort.
@@ -125,41 +39,6 @@ export const SORT_LOOK: Record<JobSort, { label: string; asc: string; desc: stri
 
 export function directionLabel(sort: JobSort, order: SortOrder): string {
   return order === "asc" ? SORT_LOOK[sort].asc : SORT_LOOK[sort].desc;
-}
-
-// --- Filtering --------------------------------------------------------------
-
-/** The Queue's status filter. `scheduled` counts as waiting: it has not run. */
-export function matchesStatus(job: Job, filter: QueueFilter): boolean {
-  switch (filter) {
-    case "all":
-      return true;
-    case "waiting":
-      return WAITING.includes(job.status) || bucketOf(job) === "scheduled";
-    case "running":
-      return RUNNING.includes(job.status);
-    case "done":
-      return job.status === "done";
-    case "failed":
-      return job.status === "failed" || job.status === "cancelled";
-  }
-}
-
-/**
- * Free-text search over the four things a person would type.
- *
- * The output filename is in there deliberately: after a download the name on
- * disk is often the only part of it anyone remembers.
- */
-export function matchesText(job: Job, needle: string): boolean {
-  const wanted = needle.trim().toLowerCase();
-  if (wanted === "") return true;
-  return (
-    jobTitle(job).toLowerCase().includes(wanted) ||
-    job.url.toLowerCase().includes(wanted) ||
-    (job.outputFile ?? "").toLowerCase().includes(wanted) ||
-    job.destination.toLowerCase().includes(wanted)
-  );
 }
 
 // --- What became of the file ------------------------------------------------

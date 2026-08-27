@@ -25,6 +25,7 @@ import {
   type EnqueueInput,
   type JobQueue,
 } from "./queue";
+import { ALL_STATUSES } from "./types";
 
 // --- harness ----------------------------------------------------------------
 
@@ -706,3 +707,211 @@ describe("get and list", () => {
     expect((await queue.list({ fingerprint: low.fingerprint })).map((j) => j.id)).toEqual([low.id]);
   });
 });
+
+// --- Sorting, searching and counting in the database (2026-08-27) ------------
+
+describe("list: sort, order and q", () => {
+  /**
+   * Four jobs whose every sortable field differs, and one of them with nothing
+   * recorded — because "unknown" is the case every one of these sorts gets
+   * wrong when nobody thinks about it.
+   */
+  async function corpus(queue: JobQueue) {
+    const first = await enqueued(queue, { url: "https://example.test/zoo-talk", priority: "low" });
+    advance(1_000);
+    const second = await enqueued(queue, { url: "https://example.test/second", priority: "high" });
+    advance(1_000);
+    const third = await enqueued(queue, { url: "https://example.test/third" });
+    advance(1_000);
+    const fourth = await enqueued(queue, { url: "https://example.test/fourth" });
+
+    unwrap(await queue.update(first.id, { title: "A talk about the zoo", totalBytes: 400, duration: 60 }));
+    unwrap(await queue.update(second.id, { title: "Second", totalBytes: 100, duration: 30 }));
+    unwrap(await queue.update(third.id, { title: "Third", totalBytes: 900, duration: 90 }));
+    // Fourth records nothing: no size, no duration.
+    return { first, second, third, fourth };
+  }
+
+  test("date orders by when it was added, both ways", async () => {
+    const { queue } = await boot();
+    const { first, second, third, fourth } = await corpus(queue);
+
+    expect((await queue.list({ sort: "date", order: "desc" })).map((j) => j.id)).toEqual([
+      fourth.id, third.id, second.id, first.id,
+    ]);
+    expect((await queue.list({ sort: "date", order: "asc" })).map((j) => j.id)).toEqual([
+      first.id, second.id, third.id, fourth.id,
+    ]);
+  });
+
+  test("🔴 a job with no size sinks, whichever way the sort is pointing", async () => {
+    // A job that never reported a size is not a 0-byte job. Sorting it as one
+    // puts "we don't know" in the middle of "the largest downloads", and
+    // flipping the direction promotes it to the top.
+    const { queue } = await boot();
+    const { first, second, third, fourth } = await corpus(queue);
+
+    expect((await queue.list({ sort: "size", order: "desc" })).map((j) => j.id)).toEqual([
+      third.id, first.id, second.id, fourth.id,
+    ]);
+    expect((await queue.list({ sort: "size", order: "asc" })).map((j) => j.id)).toEqual([
+      second.id, first.id, third.id, fourth.id,
+    ]);
+    expect((await queue.list({ sort: "duration", order: "asc" })).map((j) => j.id)).toEqual([
+      second.id, first.id, third.id, fourth.id,
+    ]);
+  });
+
+  test("priority ascending means highest first, as the control promises", async () => {
+    const { queue } = await boot();
+    const { first, second } = await corpus(queue);
+
+    const byPriority = (await queue.list({ sort: "priority", order: "asc" })).map((j) => j.priority);
+    expect(byPriority[0]).toBe("high");
+    expect(byPriority.at(-1)).toBe("low");
+    expect((await queue.list({ sort: "priority", order: "asc" }))[0]?.id).toBe(second.id);
+    expect((await queue.list({ sort: "priority", order: "desc" }))[0]?.id).toBe(first.id);
+  });
+
+  test("status ascending brings the busy rows together, in lifecycle order", async () => {
+    const { queue } = await boot();
+    const { second } = await corpus(queue);
+    unwrap(await queue.claimNext("slot-1"));
+    unwrap(await queue.update(second.id, { status: "downloading" }));
+
+    expect((await queue.list({ sort: "status", order: "asc" }))[0]?.id).toBe(second.id);
+    // Not the alphabet: `analyzing` next to `cancelled` next to `done` answers
+    // a question nobody has.
+    expect((await queue.list({ sort: "status", order: "desc" }))[0]?.status).not.toBe("downloading");
+  });
+
+  test("no sort keeps the queue's own order, which is what the worker agrees with", async () => {
+    const { queue } = await boot();
+    const { first, second } = await corpus(queue);
+    // priority first, then oldest: `second` is high, `first` is low and oldest.
+    const order = (await queue.list()).map((j) => j.id);
+    expect(order[0]).toBe(second.id);
+    expect(order.at(-1)).toBe(first.id);
+  });
+
+  test("q searches the title, the URL, the output file and the destination", async () => {
+    const { queue } = await boot();
+    const { first, third } = await corpus(queue);
+    unwrap(await queue.update(third.id, { outputFile: "/library/Talks/keynote.mkv" }));
+
+    expect((await queue.list({ q: "zoo" })).map((j) => j.id)).toEqual([first.id]);
+    expect((await queue.list({ q: "ZOO" })).map((j) => j.id)).toEqual([first.id]);
+    expect((await queue.list({ q: "zoo-talk" })).map((j) => j.id)).toEqual([first.id]);
+    expect((await queue.list({ q: "keynote" })).map((j) => j.id)).toEqual([third.id]);
+    expect((await queue.list({ q: "Videos" }))).toHaveLength(4);
+    expect((await queue.list({ q: "nothing here" }))).toEqual([]);
+    expect((await queue.list({ q: "   " }))).toHaveLength(4);
+  });
+
+  test("🔴 LIKE metacharacters are escaped, or the filter silently stops filtering", async () => {
+    const { queue } = await boot();
+    await corpus(queue);
+    const percent = await enqueued(queue, { url: "https://example.test/100%-real" });
+    unwrap(await queue.update(percent.id, { title: "100% real" }));
+
+    // Unescaped, `%` matches everything and `_` matches any single character —
+    // a search that returns the whole table looks like a search with a very
+    // popular term.
+    expect((await queue.list({ q: "100%" })).map((j) => j.id)).toEqual([percent.id]);
+    expect((await queue.list({ q: "%" })).map((j) => j.id)).toEqual([percent.id]);
+    expect(await queue.list({ q: "_" })).toEqual([]);
+  });
+
+  test("🔴 equal keys break on newest-first, so the table cannot shuffle under the cursor", async () => {
+    // Without a total order, SQLite is free to return equal-keyed rows in a
+    // different arrangement between two polls — and the queue re-renders twice
+    // a second, so the rows would move while somebody is trying to click one.
+    const { queue } = await boot();
+    const older = await enqueued(queue, { url: "https://example.test/same-a" });
+    advance(60_000);
+    const newer = await enqueued(queue, { url: "https://example.test/same-b" });
+    unwrap(await queue.update(older.id, { totalBytes: 500 }));
+    unwrap(await queue.update(newer.id, { totalBytes: 500 }));
+
+    for (const order of ["asc", "desc"] as const) {
+      expect((await queue.list({ sort: "size", order })).map((j) => j.id)).toEqual([
+        newer.id,
+        older.id,
+      ]);
+    }
+  });
+
+  test("the search and the sort compose, and the page is still bounded", async () => {
+    const { queue } = await boot();
+    const { first, third } = await corpus(queue);
+    unwrap(await queue.update(first.id, { title: "talk one" }));
+    unwrap(await queue.update(third.id, { title: "talk two" }));
+
+    const found = await queue.list({ q: "talk", sort: "size", order: "desc" });
+    expect(found.map((j) => j.id)).toEqual([third.id, first.id]);
+    expect(await queue.list({ q: "talk", limit: 1 })).toHaveLength(1);
+    expect((await queue.list({ q: "talk", limit: 1, offset: 1 }))).toHaveLength(1);
+  });
+});
+
+describe("count and countsByStatus", () => {
+  test("🔴 count is of the whole filter, not of the page", async () => {
+    // The number above the table is what stops "the largest failed download"
+    // meaning "the largest of the latest two hundred" without saying so.
+    const { queue } = await boot();
+    for (let i = 0; i < 25; i++) {
+      await enqueued(queue, { url: `https://example.test/v${i}` });
+      advance(1);
+    }
+
+    expect(await queue.list({ limit: 10 })).toHaveLength(10);
+    expect(await queue.count()).toBe(25);
+    expect(await queue.count({ limit: 10 })).toBe(25);
+  });
+
+  test("count honours the same filter the list does, search included", async () => {
+    const { queue } = await boot();
+    const { first } = await corpusFor(queue);
+    expect(await queue.count({ q: "zoo" })).toBe(1);
+    expect(await queue.count({ status: "done" })).toBe(0);
+    expect(await queue.count({ ids: [first.id] })).toBe(1);
+    expect(await queue.count({ ids: [] })).toBe(0);
+  });
+
+  test("🔴 the status counts ignore the status filter, so the tiles keep saying it", async () => {
+    const { queue } = await boot();
+    const { second } = await corpusFor(queue);
+    unwrap(await queue.claimNext("slot-1"));
+    unwrap(await queue.update(second.id, { status: "downloading" }));
+
+    // The table below is showing only the downloading row; the tiles above it
+    // still have to say how many are queued.
+    const counts = await queue.countsByStatus({ status: "downloading" });
+    expect(counts.downloading).toBe(1);
+    expect(counts.queued).toBe(3);
+    // Every status is present, zero included — a missing key renders as an
+    // empty tile rather than a 0, and "none" is an answer.
+    expect(Object.keys(counts).sort()).toEqual([...ALL_STATUSES].sort());
+  });
+
+  test("the status counts do honour the search, because the tiles sit above it", async () => {
+    const { queue } = await boot();
+    await corpusFor(queue);
+    expect((await queue.countsByStatus({ q: "zoo" })).queued).toBe(1);
+  });
+});
+
+/** The same four jobs as above, reachable from the counting block. */
+async function corpusFor(queue: JobQueue) {
+  const first = await enqueued(queue, { url: "https://example.test/zoo-talk", priority: "low" });
+  advance(1_000);
+  const second = await enqueued(queue, { url: "https://example.test/second", priority: "high" });
+  advance(1_000);
+  const third = await enqueued(queue, { url: "https://example.test/third" });
+  advance(1_000);
+  const fourth = await enqueued(queue, { url: "https://example.test/fourth" });
+  unwrap(await queue.update(first.id, { title: "A talk about the zoo", totalBytes: 400, duration: 60 }));
+  unwrap(await queue.update(second.id, { title: "Second", totalBytes: 100, duration: 30 }));
+  unwrap(await queue.update(third.id, { title: "Third", totalBytes: 900, duration: 90 }));
+  return { first, second, third, fourth };
+}

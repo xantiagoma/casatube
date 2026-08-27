@@ -40,13 +40,13 @@ export function progressOf(job: Job): { percent: number; indeterminate: boolean 
 export const WAITING: readonly JobStatus[] = ["queued", "waiting-for-destination"] as const;
 export const RUNNING: readonly JobStatus[] = ["analyzing", "downloading", "processing", "moving"] as const;
 
-/** The buckets the Downloads tabs are made of. */
-export function bucketOf(job: Job): "active" | "completed" | "failed" | "scheduled" {
-  if (job.status === "done") return "completed";
-  if (job.status === "failed" || job.status === "cancelled") return "failed";
-  // 🔴 `notBefore` in the future is a job waiting out its retry backoff — the
-  // column exists so the wait survives a restart. It is scheduled, not stuck.
-  if (job.notBefore && Date.parse(job.notBefore) > Date.now()) return "scheduled";
-  if (job.paused) return "scheduled";
-  return "active";
-}
+/**
+ * The buckets the Downloads tabs are made of.
+ *
+ * ⚠️ **Re-exported, not defined here.** The server filters and counts by bucket
+ * now, so the rule lives in `core/job-buckets.ts` beside the SQL that has to
+ * mean the same thing — with a test that runs both over one corpus. A second
+ * copy here would be a tab whose count and whose rows came from different
+ * definitions of the same word.
+ */
+export { bucketOf } from "../../../core/job-buckets";

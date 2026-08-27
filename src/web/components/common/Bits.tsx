@@ -13,6 +13,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { JobStatus, Priority } from "../../../core/types";
 import { statusLook, type Tone } from "../status";
+import { formatCount } from "../../data/format";
 
 const TONE_CLASS: Record<Tone, string> = {
   idle: "bg-muted text-muted-foreground ring-border",
@@ -169,6 +170,39 @@ export function ErrorState({ error, retry, what }: { error: Error | null; retry?
 }
 
 /** Storage, as the design draws it: a capacity line and a used bar. */
+/**
+ * "You are looking at part of the answer" — or nothing, when you are not.
+ *
+ * 🔴 The line this exists to prevent is the one that was never written: a table
+ * capped at two hundred rows said "200" and nothing else, so "the largest
+ * failed download" and "the largest of the latest two hundred" looked the same
+ * on screen. The server sorts and counts now, so the top of the list is
+ * genuinely the top — what remains is that the *rest* is not reachable by
+ * scrolling, and that has to be said rather than left to be discovered.
+ */
+export function PageNote({
+  shown,
+  total,
+  limit,
+  noun,
+}: {
+  /** Rows actually on screen, after any filter the browser applies. */
+  shown: number;
+  /** What the server says the filter matches, over the whole table. */
+  total: number;
+  /** The page size that was asked for. */
+  limit: number;
+  noun: string;
+}) {
+  if (total <= limit) return null;
+  return (
+    <p className="px-4 pt-1 text-xs text-muted-foreground">
+      Showing {formatCount(shown)} of {formatCount(total)} {noun}. The list is sorted and searched by the
+      server, so the top of it is the real top — narrow the search to reach the rest.
+    </p>
+  );
+}
+
 export function UsageBar({ usedPercent }: { usedPercent: number }) {
   const tone = usedPercent >= 90 ? "bg-destructive" : usedPercent >= 75 ? "bg-warning" : "bg-primary";
   return (

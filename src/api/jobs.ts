@@ -9,9 +9,10 @@
 import { Elysia, t } from "elysia";
 import { Result } from "better-result";
 
-import { DEFAULT_PREFERENCES, type JobStatus } from "../core/types";
+import { DEFAULT_PREFERENCES, JOB_SORT_KEYS, SORT_ORDERS, type JobStatus } from "../core/types";
 import { AppSettingsStore } from "../core/app-settings";
 import { jobFileStates } from "../core/file-state";
+import { JOB_BUCKETS } from "../core/job-buckets";
 import { openLibrary } from "../core/library";
 import type { AppContext } from "./context";
 import { InvalidTransition } from "../core/errors";
@@ -68,20 +69,61 @@ export function jobRoutes(ctx: AppContext) {
 
   return (
     new Elysia({ prefix: "/jobs" })
+      /**
+       * The list.
+       *
+       * 🔴 `sort`, `order` and `q` are the database's work, not the browser's.
+       * Until they existed the screens re-ordered the page they had been given,
+       * so past two hundred jobs "the largest failed download" quietly became
+       * "the largest of the latest two hundred" — with nothing on screen
+       * marking the difference. `total` is the other half of that fix: a page
+       * that is a page has to say what it is a page *of*.
+       *
+       * Omitting `sort` keeps the queue's own order — priority, then oldest
+       * first — because that is the order work will be done in, and every
+       * internal caller wants it.
+       */
       .get(
         "/",
         async ({ query }) => {
-          const jobs = await queue.list({
+          const filter = {
             status: parseStatuses(query.status),
-            limit: query.limit ?? 200,
-            offset: query.offset ?? 0,
-          });
-          return { jobs, at: new Date().toISOString() };
+            bucket: query.bucket,
+            q: query.q,
+            sort: query.sort,
+            order: query.order,
+          };
+          const limit = query.limit ?? 200;
+          const offset = query.offset ?? 0;
+          const [jobs, total, byStatus, byBucket] = await Promise.all([
+            queue.list({ ...filter, limit, offset }),
+            queue.count(filter),
+            // ⚠️ Both counted with the status and bucket filters dropped, on
+            // purpose: these numbers sit on the tiles and tabs *above* the
+            // table, and a tab that counted only its own contents would say "0"
+            // while another tab's rows were on screen.
+            queue.countsByStatus(filter),
+            queue.countsByBucket(filter),
+          ]);
+          return {
+            jobs,
+            total,
+            counts: { byStatus, byBucket },
+            limit,
+            offset,
+            at: new Date().toISOString(),
+          };
         },
         {
           query: t.Object({
             /** Comma-separated, e.g. `queued,downloading`. */
             status: t.Optional(t.String()),
+            /** Free text over title, URL, output file and destination. */
+            q: t.Optional(t.String()),
+            /** One of the Downloads tabs — see `core/job-buckets.ts`. */
+            bucket: t.Optional(t.Union(JOB_BUCKETS.map((bucket) => t.Literal(bucket)))),
+            sort: t.Optional(t.Union(JOB_SORT_KEYS.map((key) => t.Literal(key)))),
+            order: t.Optional(t.Union(SORT_ORDERS.map((value) => t.Literal(value)))),
             limit: t.Optional(t.Integer({ minimum: 1, maximum: 500 })),
             offset: t.Optional(t.Integer({ minimum: 0 })),
           }),

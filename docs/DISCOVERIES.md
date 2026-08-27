@@ -2,6 +2,32 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## The live queue stopped showing new work past 200 jobs, and said nothing (2026-08-27)
+
+Found while giving `GET /api/jobs` a server-side sort. The SSE watcher built
+every frame from:
+
+```ts
+const jobs = await queue.list({ limit });   // limit = 200
+```
+
+`queue.list` with no `sort` is the **queue's** order — priority rank, then
+*oldest first* — because that is the order `claimNext` works in. So on a server
+with more than two hundred jobs the live snapshot was the two hundred **oldest**
+rows, all of them long finished, and a download started today was not in it at
+all. The Queue screen simply stopped showing new work.
+
+📌 It had been true for as long as the watcher existed and nobody could see it,
+because it only appears past the two-hundredth job and the screen has no way to
+say "there are rows I am not showing you". The reported symptom would have been
+"the queue looks stuck", three layers from the cause.
+
+⚠️ The obvious one-query fix is wrong too. Ordering by status rank puts `done`
+(6) above `failed` (7), so a long history of successes pushes every failed job
+off the end — the rows somebody actually needs. The snapshot is now two queries:
+everything unfinished, then the newest terminal rows to fill the page.
+
+
 ## `bun test` runs a test that does not compile — and it opened the real database (2026-08-27)
 
 `openDb` takes an options object. A new test wrote:

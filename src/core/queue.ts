@@ -40,6 +40,8 @@
 import {
   and,
   asc,
+  count,
+  desc,
   eq,
   inArray,
   isNotNull,
@@ -50,6 +52,7 @@ import {
   or,
   sql,
   type SQL,
+  type SQLWrapper,
 } from "drizzle-orm";
 import { Result } from "better-result";
 import { hash } from "ohash";
@@ -57,9 +60,12 @@ import { Queue as BunQueue, shutdownManager } from "bunqueue/client";
 
 import type { Db } from "./db";
 import { jobs } from "./schema";
+import { JOB_BUCKETS, type JobBucket } from "./job-buckets";
+import { bucketCondition } from "./job-buckets-query";
 import { InvalidTransition, LeaseLost, NotFound, type QueueError } from "./errors";
 import {
   ACTIVE_STATUSES,
+  ALL_STATUSES,
   DEFAULT_PREFERENCES,
   STAGE_ORDER,
   TERMINAL_STATUSES,
@@ -68,15 +74,17 @@ import {
   type Job,
   type JobFilter,
   type JobPatch,
+  type JobSortKey,
   type JobStatus,
   type Preferences,
   type Priority,
+  type SortOrder,
   type Stage,
 } from "./types";
 
 // The queue's own contract lives in `types.ts` — the API layer speaks it too.
 // Re-exported so a caller that only wants the seam has one import.
-export type { EnqueueInput, EnqueueResult, JobFilter, JobPatch } from "./types";
+export type { EnqueueInput, EnqueueResult, JobFilter, JobPatch, JobSortKey, SortOrder } from "./types";
 
 // --- Options ----------------------------------------------------------------
 
@@ -116,6 +124,89 @@ type JobRow = typeof jobs.$inferSelect;
  * `normal`. `CASE … WHEN` is ANSI SQL, so this stays portable (PLAN §17 rule 6).
  */
 const PRIORITY_RANK = sql<number>`case ${jobs.priority} when 'high' then 0 when 'normal' then 1 else 2 end`;
+
+/**
+ * Status as a line from "moving right now" to "will never move again".
+ *
+ * The lifecycle order rather than the alphabet, for the reason the screen gave
+ * when it did this in the browser: sorting by status is asked for to bring the
+ * *busy* rows together, and `analyzing` next to `cancelled` next to `done`
+ * answers a question nobody has. The two lists must agree — see the test that
+ * compares them.
+ */
+const STATUS_RANK = sql<number>`case ${jobs.status} ${sql.join(
+  ALL_STATUSES.map((status, rank) => sql`when ${status} then ${rank}`),
+  sql` `,
+)} else 99 end`;
+
+/**
+ * What each sort compares, and whether a missing value is a real value.
+ *
+ * ⚠️ `nullable` is the half that is easy to get wrong. A job that never
+ * reported a size is **not a 0-byte job**, and ordering it as one puts the
+ * unknowns in the middle of "the largest downloads". They sink instead, in both
+ * directions — flipping to smallest-first must not promote "we don't know" to
+ * the top. `date`, `status` and `priority` are never null, so they say so and
+ * skip the extra ORDER BY term.
+ */
+const SORT_COLUMNS: Record<JobSortKey, { expression: SQLWrapper; nullable: boolean }> = {
+  date: { expression: jobs.createdAt, nullable: false },
+  status: { expression: STATUS_RANK, nullable: false },
+  priority: { expression: PRIORITY_RANK, nullable: false },
+  // Not `doneBytes`: that ranks a job by how far along it is, which is the
+  // progress bar's question, not the size's.
+  size: { expression: jobs.totalBytes, nullable: true },
+  duration: { expression: jobs.duration, nullable: true },
+};
+
+/**
+ * The ORDER BY for one sort — or the queue's own order when none was asked for.
+ *
+ * 🔴 **`asc` and `desc` are about the key, not about the rank.** `priority`
+ * and `status` are already ranks where 0 is the "first" one, so ascending puts
+ * High and Downloading at the top — which is exactly what the screens' labels
+ * promise ("Highest first", "Active first"). Reversing that here would make the
+ * control lie without changing a single word on it.
+ *
+ * The tie-break is `createdAt` newest-first and then `id`, so the order is
+ * **total**: without it, equal keys leave SQLite free to return rows in a
+ * different arrangement between two polls and the table shuffles under the
+ * cursor on every SSE frame.
+ */
+function orderFor(sort: JobSortKey | undefined, order: SortOrder = "desc"): SQL[] {
+  if (sort === undefined) return [PRIORITY_RANK as unknown as SQL, asc(jobs.createdAt), asc(jobs.id)];
+
+  const { expression, nullable } = SORT_COLUMNS[sort];
+  const direction = order === "asc" ? asc : desc;
+  const terms: SQL[] = [];
+  // `x IS NULL` is 0/1 on both dialects, so ascending on it puts the known
+  // values first whichever way the key itself is going (PLAN §17 rule 6).
+  if (nullable) terms.push(asc(sql`case when ${expression} is null then 1 else 0 end`));
+  terms.push(direction(expression) as SQL);
+  terms.push(desc(jobs.createdAt), asc(jobs.id));
+  return terms;
+}
+
+/**
+ * Free text, as the four columns a person would actually type into.
+ *
+ * ⚠️ `LIKE` with the pattern's own metacharacters escaped. Without the escape,
+ * a search for `100%` matches everything and a search for `_` matches
+ * everything of any length — a filter that silently stops filtering, which is
+ * worse than one that finds nothing.
+ */
+function textCondition(needle: string): SQL | undefined {
+  const wanted = needle.trim().toLowerCase();
+  if (wanted === "") return undefined;
+  const pattern = `%${wanted.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+  const like = (column: SQLWrapper): SQL => sql`lower(${column}) like ${pattern} escape '\\'`;
+  return or(
+    like(jobs.title),
+    like(jobs.url),
+    like(jobs.outputFile),
+    like(jobs.destination),
+  ) as SQL;
+}
 
 /** bunqueue orders `priority DESC`: a higher number is claimed sooner. */
 const BUNQUEUE_PRIORITY: Record<Priority, number> = { high: 3, normal: 2, low: 1 };
@@ -450,10 +541,18 @@ export class JobQueue {
     return Result.ok(toJob(row));
   }
 
-  /** Listing cannot fail, so it does not carry a `Result`. */
-  async list(filter: JobFilter = {}): Promise<Job[]> {
+  /**
+   * The WHERE for one filter — **one implementation**, three callers.
+   *
+   * `list`, `count` and `countsByStatus` have to agree exactly or the page and
+   * the number above it describe different sets of jobs, which is the failure
+   * this whole seam exists to remove. `skipStatus` is the one deliberate
+   * exception: the status tiles count the whole table while a status filter is
+   * applied to the list beneath them.
+   */
+  #conditions(filter: JobFilter, options: { skipStatus?: boolean } = {}): SQL[] {
     const conditions: SQL[] = [];
-    if (filter.status !== undefined) {
+    if (filter.status !== undefined && options.skipStatus !== true) {
       conditions.push(
         Array.isArray(filter.status)
           ? inArray(jobs.status, filter.status)
@@ -467,16 +566,97 @@ export class JobQueue {
     if (filter.claimedBy !== undefined) conditions.push(eq(jobs.claimedBy, filter.claimedBy));
     if (filter.fingerprint !== undefined) conditions.push(eq(jobs.fingerprint, filter.fingerprint));
     if (filter.url !== undefined) conditions.push(eq(jobs.url, filter.url));
+    if (filter.q !== undefined) {
+      const text = textCondition(filter.q);
+      if (text !== undefined) conditions.push(text);
+    }
+    // ⚠️ The clock is read once per query, not once per row: two rows either
+    // side of `now` must be classified against the same instant or a job can be
+    // in two buckets in one answer.
+    if (filter.bucket !== undefined) conditions.push(bucketCondition(filter.bucket, iso(this.now())));
+    return conditions;
+  }
+
+  /** Listing cannot fail, so it does not carry a `Result`. */
+  async list(filter: JobFilter = {}): Promise<Job[]> {
+    const conditions = this.#conditions(filter);
 
     const rows = await this.db
       .select()
       .from(jobs)
       .where(conditions.length > 0 ? and(...conditions) : undefined)
-      .orderBy(PRIORITY_RANK, asc(jobs.createdAt), asc(jobs.id))
+      .orderBy(...orderFor(filter.sort, filter.order))
       .limit(filter.limit ?? 200)
       .offset(filter.offset ?? 0);
 
     return rows.map(toJob);
+  }
+
+  /**
+   * How many jobs the filter matches, ignoring `limit` and `offset`.
+   *
+   * 🔴 This is what stops the screens lying. A page of 200 sorted by size is
+   * "the largest of the latest two hundred" unless the count is known and shown
+   * — and the difference between that and "the largest" is invisible on screen.
+   * Deliberately a second query rather than a window function: it is one
+   * indexed count, and `COUNT(*) OVER ()` on a page of zero rows returns *no*
+   * rows, which is the one case where the number matters most.
+   */
+  async count(filter: JobFilter = {}): Promise<number> {
+    const conditions = this.#conditions(filter);
+    const [row] = await this.db
+      .select({ n: count() })
+      .from(jobs)
+      .where(conditions.length > 0 ? and(...conditions) : undefined);
+    return row?.n ?? 0;
+  }
+
+  /**
+   * How many jobs are in each of the four Downloads tabs.
+   *
+   * Four counts rather than one grouped query, because a bucket is not a
+   * column: `scheduled` is "unfinished, and either paused or waiting out a
+   * backoff". Each is an indexed `COUNT` over a local database, and expressing
+   * them as one `SUM(CASE …)` would restate `bucketCondition` a second time —
+   * which is the exact duplication `core/job-buckets.ts` exists to prevent.
+   *
+   * ⚠️ The filter's own `bucket` **and** `status` are dropped: these numbers sit
+   * on the tabs, and a tab that only counted its own contents would say "0"
+   * while another tab's rows were on screen.
+   */
+  async countsByBucket(filter: JobFilter = {}): Promise<Record<JobBucket, number>> {
+    const base: JobFilter = { ...filter, bucket: undefined, status: undefined };
+    const entries = await Promise.all(
+      JOB_BUCKETS.map(async (bucket) => [bucket, await this.count({ ...base, bucket })] as const),
+    );
+    return Object.fromEntries(entries) as Record<JobBucket, number>;
+  }
+
+  /**
+   * How many jobs are in each status, **ignoring the filter's own status**.
+   *
+   * 🔴 The tiles above the Queue used to count the page that had been fetched,
+   * so "Completed 200" meant "200 of the ones we happened to be sent". They are
+   * a fact about the table; this is that fact. Every status is present, zero
+   * included — a missing key would render as an empty tile rather than a `0`,
+   * and "none" is an answer.
+   */
+  async countsByStatus(filter: JobFilter = {}): Promise<Record<JobStatus, number>> {
+    const conditions = this.#conditions({ ...filter, bucket: undefined }, { skipStatus: true });
+    const rows = await this.db
+      .select({ status: jobs.status, n: count() })
+      .from(jobs)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .groupBy(jobs.status);
+
+    const counts = Object.fromEntries(ALL_STATUSES.map((status) => [status, 0])) as Record<JobStatus, number>;
+    for (const row of rows) {
+      // A status this build does not know is a row written by a newer one.
+      // Counting it into a bucket that does not exist would be a silent lie;
+      // leaving it out of the totals is at least visible as a shortfall.
+      if (row.status in counts) counts[row.status as JobStatus] = row.n;
+    }
+    return counts;
   }
 
   // --- writes ---------------------------------------------------------------

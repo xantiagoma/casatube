@@ -13,6 +13,7 @@
  * `?sort=banana` becomes the default instead of a crash — and these are the
  * shapes it validates into.
  */
+import { JOB_SORT_KEYS, SORT_ORDERS, type JobSortKey, type SortOrder } from "../core/types";
 import type { StatsRange } from "../core/stats";
 
 /** Coerce anything to one of a known set, falling back rather than failing. */
@@ -92,9 +93,14 @@ export interface QueueSearch {
  * away. `date` + `desc` is the default on both screens — a queue is read
  * newest-first, and the API's own order (priority, then oldest) is the wrong
  * one to show.
+ *
+ * ⚠️ **The list itself comes from `core/types.ts`**, because the server sorts
+ * now and these keys travel to it as a query parameter. Two copies would let a
+ * key exist on the screen that the route rejects — which is a filter that
+ * silently does nothing.
  */
-export const JOB_SORTS = ["date", "status", "priority", "size", "duration"] as const;
-export type JobSort = (typeof JOB_SORTS)[number];
+export const JOB_SORTS = JOB_SORT_KEYS;
+export type JobSort = JobSortKey;
 
 /**
  * The file-state filter, on **both** job screens.
@@ -111,8 +117,7 @@ export const FILE_FILTERS = ["any", "present", "missing", "trashed", "none", "un
 export type FileFilter = (typeof FILE_FILTERS)[number];
 
 export const LIBRARY_SORTS = ["modified", "name", "size"] as const;
-export const SORT_ORDERS = ["asc", "desc"] as const;
-export type SortOrder = (typeof SORT_ORDERS)[number];
+export { SORT_ORDERS, type SortOrder };
 export const LIBRARY_VIEWS = ["grid", "list"] as const;
 
 /**

@@ -23,8 +23,21 @@
  * The timer starts with the first subscriber and stops with the last, so an
  * idle server with no tab open does no work.
  */
-import type { Job } from "../core/types";
+import { ACTIVE_STATUSES, TERMINAL_STATUSES, type Job, type JobStatus } from "../core/types";
 import type { JobQueue } from "../core/queue";
+
+/**
+ * Everything that has not finished — claimed or not.
+ *
+ * ⚠️ Derived from `ACTIVE_STATUSES` rather than typed out beside it: a status
+ * added there and forgotten here would be a job that exists, is running, and is
+ * invisible in the live table.
+ */
+const UNFINISHED_STATUSES: readonly JobStatus[] = [
+  ...ACTIVE_STATUSES,
+  "queued",
+  "waiting-for-destination",
+] as const;
 
 export interface QueueSnapshot {
   /** When the server read this, ISO-8601 UTC. */
@@ -88,9 +101,33 @@ export function createQueueWatcher(queue: JobQueue, options: QueueWatcherOptions
   let signature: string | null = null;
   let polling = false;
 
+  /**
+   * The rows a live view needs: everything still moving, then recent history.
+   *
+   * 🔴 **Not `queue.list({ limit })`**, which is what this was. That is the
+   * *queue's* order — priority, then oldest first — so on a server with more
+   * than `limit` jobs the snapshot was the two hundred **oldest**, and a
+   * download started today did not appear in it at all. The live table simply
+   * stopped showing new work, and nothing said so.
+   *
+   * Two queries rather than one ordered by status rank, and the reason is
+   * failures: `done` ranks above `failed`, so a single query over a long
+   * history would fill the whole page with completed jobs and drop the failed
+   * ones off the end — the rows somebody actually needs to see.
+   */
   async function read(): Promise<QueueSnapshot> {
-    const jobs = await queue.list({ limit });
-    return { at: new Date().toISOString(), jobs };
+    const unfinished = await queue.list({ status: [...UNFINISHED_STATUSES], limit });
+    const remaining = Math.max(0, limit - unfinished.length);
+    const recent =
+      remaining > 0
+        ? await queue.list({
+            status: [...TERMINAL_STATUSES],
+            sort: "date",
+            order: "desc",
+            limit: remaining,
+          })
+        : [];
+    return { at: new Date().toISOString(), jobs: [...unfinished, ...recent] };
   }
 
   async function poll(): Promise<void> {

@@ -122,6 +122,83 @@ describe("GET /api/jobs", () => {
     expect(body.jobs).toEqual([]);
     expect(typeof body.at).toBe("string");
   });
+
+  interface ListBody {
+    jobs: { id: string; url: string; title: string | null }[];
+    total: number;
+    counts: {
+      byStatus: Record<string, number>;
+      byBucket: Record<string, number>;
+    };
+    limit: number;
+    offset: number;
+  }
+
+  const list = async (app: Awaited<ReturnType<typeof makeApp>>, query = ""): Promise<ListBody> =>
+    (await (await get(app, `/api/jobs${query}`)).json()) as ListBody;
+
+  test("🔴 a page says what it is a page of", async () => {
+    // Without `total`, "the largest failed download" is "the largest of the
+    // page that happened to be fetched" and the screen cannot tell.
+    const app = await makeApp();
+    for (let i = 0; i < 5; i++) {
+      await post(app, "/api/jobs", { url: `https://example.test/v${i}`, destination: "" });
+    }
+
+    const body = await list(app, "?limit=2");
+    expect(body.jobs).toHaveLength(2);
+    expect(body.total).toBe(5);
+    expect(body.limit).toBe(2);
+    expect(body.offset).toBe(0);
+  });
+
+  test("sort, order and q reach the database", async () => {
+    const app = await makeApp();
+    await post(app, "/api/jobs", { url: "https://example.test/zoo", destination: "" });
+    await post(app, "/api/jobs", { url: "https://example.test/other", destination: "" });
+
+    const searched = await list(app, "?q=zoo");
+    expect(searched.total).toBe(1);
+    expect(searched.jobs[0]?.url).toBe("https://example.test/zoo");
+
+    const ascending = await list(app, "?sort=date&order=asc");
+    expect(ascending.jobs[0]?.url).toBe("https://example.test/zoo");
+    const descending = await list(app, "?sort=date&order=desc");
+    expect(descending.jobs[0]?.url).toBe("https://example.test/other");
+  });
+
+  test("the status counts survive a status filter, because the tiles do", async () => {
+    const app = await makeApp();
+    await post(app, "/api/jobs", { url: "https://example.test/a", destination: "" });
+    await post(app, "/api/jobs", { url: "https://example.test/b", destination: "" });
+
+    const body = await list(app, "?status=done");
+    expect(body.jobs).toEqual([]);
+    expect(body.total).toBe(0);
+    expect(body.counts.byStatus.queued).toBe(2);
+    expect(body.counts.byStatus.done).toBe(0);
+    // The tabs count the same way: two queued jobs are two active downloads,
+    // whichever tab happens to be open.
+    expect(body.counts.byBucket.active).toBe(2);
+    expect(body.counts.byBucket.completed).toBe(0);
+  });
+
+  test("bucket filters the way the tabs do", async () => {
+    const app = await makeApp();
+    await post(app, "/api/jobs", { url: "https://example.test/a", destination: "" });
+
+    expect((await list(app, "?bucket=active")).jobs).toHaveLength(1);
+    expect((await list(app, "?bucket=completed")).jobs).toEqual([]);
+    expect((await get(app, "/api/jobs?bucket=nowhere")).status).toBe(422);
+  });
+
+  test("a sort key the server does not know is refused, not quietly ignored", async () => {
+    // A rejected request is a bug somebody can see. A silently ignored `sort`
+    // is a control that moves and changes nothing.
+    const app = await makeApp();
+    expect((await get(app, "/api/jobs?sort=banana")).status).toBe(422);
+    expect((await get(app, "/api/jobs?order=sideways")).status).toBe(422);
+  });
 });
 
 describe("POST /api/jobs", () => {

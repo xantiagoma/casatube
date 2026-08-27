@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/button";
 import { useDockedPanels } from "@/hooks/use-media-query";
 import { useSetSearch } from "@/hooks/use-set-search";
 import { Sparkline } from "../components/charts/Sparkline";
-import { EmptyState, ErrorState, StatTile } from "../components/common/Bits";
+import { EmptyState, ErrorState, PageNote, StatTile } from "../components/common/Bits";
 import { JobInspector } from "../components/jobs/JobInspector";
 import { FileFilterControl, FileStateBadge, SearchBox, SortControl } from "../components/jobs/JobFilters";
 import { JobTable } from "../components/jobs/JobTable";
@@ -32,14 +32,11 @@ import {
   finishedIds,
   indexFileStates,
   matchesFile,
-  matchesText,
   missingCount,
-  sortJobs,
 } from "../components/jobs/job-order";
-import { bucketOf } from "../components/jobs/job-view";
 import { PageHeader } from "../components/layout/AppShell";
 import { formatBytes, formatCount, formatSpeed } from "../data/format";
-import { useJobFileStates, useJobs } from "../data/queries";
+import { useJob, useJobFileStates, useJobList, useJobs } from "../data/queries";
 import { useAnalytics } from "../data/stats";
 import { useJobStream } from "../data/stream";
 import { DOWNLOAD_TABS, type DownloadTab, type DownloadsSearch } from "../search-params";
@@ -54,11 +51,23 @@ const TAB_LABEL: Record<DownloadTab, string> = {
 export function Downloads() {
   const search = useSearch({ from: "/downloads" });
   const stream = useJobStream();
-  const jobs = useJobs(stream.connection === "live");
+  // 🔴 The tab, the search and the order are the server's now. The tab is a
+  // *bucket*, whose rule lives in `core/job-buckets.ts` so that the SQL behind
+  // this request and the badge on a row cannot disagree about what "scheduled"
+  // means.
+  const jobs = useJobList(
+    { bucket: search.tab, q: search.q, sort: search.sort, order: search.order },
+    stream.connection === "live",
+  );
+  // The live queue, for the "right now" numbers. One entry, pushed by the
+  // stream, shared with every other screen that asks.
+  const liveJobs = useJobs(stream.connection === "live");
   const analytics = useAnalytics("24h");
   const docked = useDockedPanels();
 
-  const all = jobs.data?.jobs ?? [];
+  const page = jobs.data;
+  const all = page?.jobs ?? [];
+  const total = page?.total ?? 0;
 
   /**
    * 🔴 **The disk, asked about once for the whole screen.**
@@ -88,22 +97,38 @@ export function Downloads() {
   const patch = (fields: Partial<DownloadsSearch>): void =>
     setSearch((current) => ({ ...current, ...fields }));
 
-  const inTab = all.filter((job) => bucketOf(job) === search.tab);
-  const shown = sortJobs(
-    inTab.filter(
-      (job) => matchesText(job, search.q ?? "") && matchesFile(fileStateOf(job, fileIndex), search.file),
-    ),
-    search.sort,
-    search.order,
-  );
-  const gone = missingCount(inTab, fileIndex);
+  /**
+   * ⚠️ The only filtering left here, and it has to be: what became of the file
+   * is not a column but the answer to a `stat` the server made separately, so
+   * it can only be applied to rows already in hand.
+   */
+  const shown = all.filter((job) => matchesFile(fileStateOf(job, fileIndex), search.file));
+  const gone = missingCount(all, fileIndex);
 
-  const counts = Object.fromEntries(
-    DOWNLOAD_TABS.map((tab) => [tab, all.filter((job) => bucketOf(job) === tab).length]),
-  ) as Record<DownloadTab, number>;
+  // From the server, over the whole table — the tab badges used to count the
+  // page, so a tab could read "0" while holding thousands of rows.
+  const counts = (page?.counts.byBucket ?? {
+    active: 0,
+    completed: 0,
+    failed: 0,
+    scheduled: 0,
+  }) as Record<DownloadTab, number>;
 
-  const selected = search.job ? (all.find((job) => job.id === search.job) ?? null) : null;
-  const running = all.filter((job) => job.status === "downloading");
+  /**
+   * The selected job, even when this tab does not contain it — `?job=…` is a
+   * link worth sending, and "not on this page" used to look like "gone".
+   */
+  const onPage = search.job ? (all.find((job) => job.id === search.job) ?? null) : null;
+  const fetched = useJob(search.job, search.job !== undefined && onPage === null);
+  const selected = onPage ?? fetched.data ?? null;
+
+  /**
+   * ⚠️ Speed comes from the **live stream's** snapshot, not from this page.
+   * "How fast is it going right now" is a question about what is running, and
+   * the Downloads screen may well be showing the Completed tab.
+   */
+  const live = liveJobs.data?.jobs ?? [];
+  const running = live.filter((job) => job.status === "downloading");
   const speed = running.reduce((sum, job) => sum + (job.speed ?? 0), 0);
 
   // 🔴 The tab is read from the URL and written back to it. It used to be the
@@ -243,12 +268,20 @@ export function Downloads() {
                   />
                 </div>
               ) : (
-                <JobTable
-                  jobs={shown}
-                  selectedId={search.job}
-                  onSelect={(id) => patch({ job: search.job === id ? undefined : id })}
-                  badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
-                />
+                <>
+                  <JobTable
+                    jobs={shown}
+                    selectedId={search.job}
+                    onSelect={(id) => patch({ job: search.job === id ? undefined : id })}
+                    badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
+                  />
+                  <PageNote
+                    shown={shown.length}
+                    total={total}
+                    limit={page?.limit ?? 200}
+                    noun="downloads"
+                  />
+                </>
               )}
             </CardContent>
           </Card>

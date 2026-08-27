@@ -36,6 +36,19 @@ export const TERMINAL_STATUSES: readonly JobStatus[] = [
   "done", "failed", "cancelled",
 ] as const;
 
+/**
+ * Every status, in lifecycle order.
+ *
+ * ⚠️ Order matters here and it is not decoration: the queue's `status` sort
+ * ranks by this line — busy first, "will never move again" last — and the API
+ * reports counts in it. A status added to `JobStatus` and forgotten here is a
+ * bucket that silently counts zero, so the test asserts the two agree.
+ */
+export const ALL_STATUSES: readonly JobStatus[] = [
+  "downloading", "processing", "moving", "analyzing",
+  "waiting-for-destination", "queued", "done", "failed", "cancelled",
+] as const;
+
 export type Priority = "high" | "normal" | "low";
 
 // --- Video codec ------------------------------------------------------------
@@ -211,9 +224,51 @@ export interface JobFilter {
   claimedBy?: string;
   fingerprint?: string;
   url?: string;
+  /**
+   * Free text over the four things a person would type: the title, the URL,
+   * the file that was written and the destination folder.
+   *
+   * 🔴 Matched **in the database**, not over the page that was already sent.
+   * Filtering a fetched page answers "the largest failed download matching zoo"
+   * with "…among the two hundred that happened to be fetched", and says nothing
+   * about the difference.
+   */
+  q?: string;
+  /**
+   * One of the Downloads tabs — `active`, `completed`, `failed`, `scheduled`.
+   *
+   * Typed as a string here rather than as `JobBucket` to keep `types.ts` free
+   * of an import from `job-buckets.ts`, which imports the schema; the queue
+   * narrows it. See `core/job-buckets.ts` for what each one means.
+   */
+  bucket?: "active" | "completed" | "failed" | "scheduled";
+  /**
+   * How to order. Absent means the queue's own order — priority, then oldest
+   * first — which is what every internal caller wants and what `claimNext`
+   * agrees with. It is deliberately **not** one of the values below: "the order
+   * work will be done in" is not a column.
+   */
+  sort?: JobSortKey;
+  /** Ignored unless `sort` is set. Defaults to `desc`, the screens' default. */
+  order?: SortOrder;
   limit?: number;
   offset?: number;
 }
+
+/**
+ * The orderings a screen can ask for.
+ *
+ * ⚠️ Kept in one place because it is a **contract with the browser**: the
+ * Queue and Downloads screens put it in the URL, so a key removed here breaks a
+ * link somebody saved. `src/web/search-params.ts` derives its list from this.
+ */
+export const JOB_SORT_KEYS = ["date", "status", "priority", "size", "duration"] as const;
+
+export type JobSortKey = (typeof JOB_SORT_KEYS)[number];
+
+export const SORT_ORDERS = ["asc", "desc"] as const;
+
+export type SortOrder = (typeof SORT_ORDERS)[number];
 
 // --- Provider-neutral media vocabulary --------------------------------------
 // ⚠️ PLAN §5: getting this vocabulary right is the main design risk. It must

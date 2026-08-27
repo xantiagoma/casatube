@@ -9,6 +9,18 @@
 export const keys = {
   health: ["health"] as const,
   jobs: ["jobs"] as const,
+  /**
+   * One page of jobs, as the *server* selected it.
+   *
+   * 🔴 Separate from `jobs`, which is the live snapshot the SSE stream owns.
+   * These two answer different questions: the stream carries "what is happening
+   * right now", this carries "the rows this screen asked for, sorted and
+   * counted by the database". Folding them together is how the sort silently
+   * became a re-ordering of whatever the stream happened to have sent.
+   */
+  jobList: (params: Record<string, unknown>) => ["jobs", "list", params] as const,
+  /** One job, for a `?job=` link whose row is not on the current page. */
+  job: (id: string) => ["jobs", "one", id] as const,
   jobDefaults: ["jobs", "defaults"] as const,
   /**
    * What became of each job's file, checked against the disk.
