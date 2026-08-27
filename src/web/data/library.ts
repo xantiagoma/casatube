@@ -209,3 +209,68 @@ export function useEmptyTrash() {
     },
   });
 }
+
+/**
+ * The picture for a library item — `GET /api/library/thumbnail`.
+ *
+ * 🔴 **Ask for it unconditionally.** `item.thumbnail` names the sidecar the
+ * *provider* wrote, and its absence is not the absence of a picture: the route
+ * falls back to a frame it generates with ffmpeg and caches. Gating the `<img>`
+ * on that field would hide every generated thumbnail — which is all of them for
+ * anything downloaded before sidecars existed, or copied in by hand.
+ *
+ * ⚠️ A **404 is the normal answer** for a file no picture can be made from (an
+ * MP3, a corrupt file), not a fault. The consumer renders the grey icon from
+ * `onError` and says nothing.
+ *
+ * ⚠️ Generation happens **when the picture is asked for**, so every `<img>`
+ * pointed here is a potential ffmpeg. `loading="lazy"` on the grid is what
+ * keeps opening the screen from starting one per card.
+ */
+export function libraryThumbnailUrl(path: string): string {
+  const query = new URLSearchParams({ path });
+  return `/api/library/thumbnail?${query.toString()}`;
+}
+
+/** What a bundle contains: the video with its sidecars, or only the sidecars. */
+export type BundleContents = "all" | "extras";
+
+/**
+ * One item and what belongs to it, as a zip — `GET /api/library/bundle`.
+ *
+ * 🔴 `extras` exists because of the ratio: subtitles and a thumbnail are a few
+ * hundred kilobytes and the video is the remaining 99.9%, so re-downloading a
+ * 4 GB file to collect a subtitle is the thing nobody wants to do. The UI says
+ * that in words rather than leaving the three options to be guessed at.
+ */
+export function libraryBundleUrl(path: string, what: BundleContents): string {
+  const query = new URLSearchParams({ path, what });
+  return `/api/library/bundle?${query.toString()}`;
+}
+
+/**
+ * The sidecars a bundle would contain, as far as the listing reports them.
+ *
+ * ⚠️ **A count, deliberately, and not a size.** The listing gives a size for
+ * each subtitle and none for the thumbnail — it reports that one only as a
+ * path — so any total would be short by the largest of the two and read as
+ * "64 B" for a zip that is really 8 KB. The video's size is the number worth
+ * printing anyway: it is the one an "extras only" download avoids paying.
+ *
+ * ⚠️ The count is a floor, not a total. The server bundles **every** file
+ * sharing the video's base name, and a listing understands two kinds; a
+ * hand-placed `Name.nfo` is in the zip and not in this count. So this answers
+ * "are there extras we know of" — enough to word and enable a menu item, and
+ * never claiming the zip is empty when the server would happily build one.
+ */
+export function knownExtras(item: import("../../core/library").LibraryItem): {
+  count: number;
+  labels: string[];
+} {
+  const labels: string[] = [];
+  if (item.subtitles.length > 0) {
+    labels.push(`${item.subtitles.length} subtitle${item.subtitles.length === 1 ? "" : "s"}`);
+  }
+  if (item.thumbnail !== undefined) labels.push("1 thumbnail");
+  return { count: item.subtitles.length + (item.thumbnail === undefined ? 0 : 1), labels };
+}

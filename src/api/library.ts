@@ -23,7 +23,7 @@ import { Elysia, t } from "elysia";
 import { Result } from "better-result";
 import { join } from "node:path";
 import { readdir } from "node:fs/promises";
-import { NotFound } from "../core/errors";
+import { NotFound, TranscodeUnavailable } from "../core/errors";
 
 import {
   DEFAULT_TRASH_RETENTION_DAYS,
@@ -201,7 +201,13 @@ export function libraryRoutes(ctx: AppContext) {
            * and a listing that only knew about subtitles would silently leave
            * it out of a bundle called "all".
            */
-          const base = item.name.slice(0, item.name.length - item.ext.length);
+          // ⚠️ `item.ext` carries no dot — `splitExtension` returns "mp4", not
+          // ".mp4". Subtracting its length alone leaves the dot on the base and
+          // the filter then looks for "Name..", which quietly matched nothing:
+          // `all` shipped only the video and `extras` 404'd on a file that had
+          // both. There was no test for this route, which is why it shipped.
+          const base =
+            item.ext === "" ? item.name : item.name.slice(0, item.name.length - item.ext.length - 1);
           const entries = await readdir(folder).catch(() => [] as string[]);
           const names = entries
             .filter((n) => n === item.name || n.startsWith(`${base}.`))
@@ -211,14 +217,27 @@ export function libraryRoutes(ctx: AppContext) {
           if (names.length === 0) {
             return fail(new NotFound({ what: wantsVideo ? "files" : "extras", id: path.value }));
           }
-          const proc = Bun.spawn(["zip", "-0", "-q", "-", ...names], {
-            cwd: folder,
-            stdout: "pipe",
-            stderr: "ignore",
-          });
+          // A missing `zip` is a deployment fault, not a bad request: say so
+          // instead of letting the spawn throw into a bare 500 that tells
+          // nobody anything.
+          let proc: ReturnType<typeof Bun.spawn>;
+          try {
+            proc = Bun.spawn(["zip", "-0", "-q", "-", ...names], {
+              cwd: folder,
+              stdout: "pipe",
+              stderr: "ignore",
+            });
+          } catch (cause) {
+            return fail(
+              new TranscodeUnavailable({
+                path: path.value,
+                detail: `zip is not available: ${cause instanceof Error ? cause.message : String(cause)}`,
+              }),
+            );
+          }
 
           const filename = `${base}${wantsVideo ? "" : " (extras)"}.zip`;
-          return new Response(proc.stdout, {
+          return new Response(proc.stdout as ReadableStream<Uint8Array>, {
             headers: {
               "content-type": "application/zip",
               // Both spellings: library names carry accents and quotes, and a

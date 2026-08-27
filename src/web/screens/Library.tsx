@@ -14,13 +14,16 @@ import { useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   ArrowDownUp,
+  ChevronDown,
   Download,
+  FileArchive,
   Film,
   Folder,
   FolderOpen,
   Grid2x2,
   List,
   Music,
+  Package,
   RotateCcw,
   Search,
   Trash2,
@@ -31,6 +34,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -47,8 +58,11 @@ import { formatBytes, formatDateTime, formatDuration, splitPath } from "../data/
 import {
   canPlayHlsNatively,
   isBrowserPlayable,
+  knownExtras,
+  libraryBundleUrl,
   libraryFileUrl,
   libraryHlsUrl,
+  libraryThumbnailUrl,
   normaliseExt,
   useEmptyTrash,
   useLibrary,
@@ -97,6 +111,49 @@ function unplayableReason(item: LibraryItem): string {
   return `${ext || "This container"} plays here over HLS, which this browser cannot do on its own — open CasaTube in Safari, or download the file.`;
 }
 
+/**
+ * The item's picture, with the grey icon as the answer when there is none.
+ *
+ * 🔴 **The `<img>` is always rendered.** `item.thumbnail` reports the sidecar
+ * the *provider* wrote, and its absence does not mean there is no picture:
+ * `GET /api/library/thumbnail` falls back to a frame it generates and caches,
+ * so a card gated on that field would show grey for every file downloaded
+ * before sidecars existed. Asking is the only way to find out.
+ *
+ * ⚠️ **A 404 is the normal answer**, not a failure — an MP3 has no frame to
+ * take — so `onError` swaps in the icon and nothing is logged or reported.
+ * The failed *URL* is what is remembered rather than a boolean, so a card
+ * recycled onto another item resets by itself.
+ *
+ * ⚠️ `loading="lazy"` is load-bearing, not a nicety: the picture is generated
+ * **when it is asked for**, so a screen of two hundred eager `<img>`s is two
+ * hundred ffmpegs queued on a box that also runs other things. Below the fold,
+ * nothing is requested until it is scrolled to.
+ */
+function Thumbnail({ item, iconClassName }: { item: LibraryItem; iconClassName?: string }) {
+  const src = libraryThumbnailUrl(item.path);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const Icon = kindOf(item) === "audio" ? Music : Film;
+
+  /*
+   * ⚠️ The icon is sized by its own prop rather than by one `className` shared
+   * with the image. `cn` is `twMerge`, so a caller passing `size-5` for a small
+   * row icon would resolve against the image's `size-full` and win — leaving a
+   * 20 px picture in a 96 px box. Two slots, no conflict to resolve.
+   */
+  if (failedSrc === src) return <Icon className={cn("size-7", iconClassName)} aria-hidden />;
+  return (
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailedSrc(src)}
+      className="size-full object-cover"
+    />
+  );
+}
+
 function ItemCard({
   item,
   selected,
@@ -115,8 +172,8 @@ function ItemCard({
         selected && "border-primary ring-1 ring-primary/30",
       )}
     >
-      <span className="relative grid aspect-video w-full place-items-center bg-muted text-muted-foreground">
-        {kindOf(item) === "audio" ? <Music className="size-7" aria-hidden /> : <Film className="size-7" aria-hidden />}
+      <span className="relative grid aspect-video w-full place-items-center overflow-hidden bg-muted text-muted-foreground">
+        <Thumbnail item={item} />
         <span className="absolute right-1.5 bottom-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white uppercase">
           {item.ext.replace(/^\./, "")}
         </span>
@@ -129,6 +186,126 @@ function ItemCard({
         </span>
       </span>
     </button>
+  );
+}
+
+/** `Zoo Clip.mp4` → `Zoo Clip`. `item.ext` is lower-cased and has no dot. */
+function baseName(item: LibraryItem): string {
+  const ext = normaliseExt(item.ext);
+  if (ext === "") return item.name;
+  const suffix = `.${ext}`;
+  return item.name.toLowerCase().endsWith(suffix) ? item.name.slice(0, -suffix.length) : item.name;
+}
+
+/**
+ * Download, as three choices behind one button.
+ *
+ * 🔴 **The three exist because of the ratio, and the menu says so.** Subtitles
+ * and a thumbnail are a few hundred kilobytes; the video is the other 99.9%.
+ * With one button, collecting a subtitle for a 4 GB film means fetching the 4 GB
+ * again — so *Extras only* is not a convenience, it is the difference between a
+ * download that is worth starting and one that is not. Wording it in the menu is
+ * the only place a person finds out that choice exists.
+ *
+ * 🔴 **Every option is an `<a download>`, never a button with a handler.** A
+ * same-origin link is the browser's own save: it shows in the download manager,
+ * survives navigation, resumes, and needs no JavaScript. Fetching a
+ * multi-gigabyte zip into memory to hand it back as a blob is the alternative,
+ * and it is a way to run the tab out of RAM.
+ *
+ * ⚠️ **"Extras only" is disabled with its reason, not hidden.** A file that
+ * never had subtitles and a file whose subtitles failed to download look
+ * identical when the option is simply absent; disabled-and-explained is the only
+ * version that answers the question.
+ */
+function DownloadSplitButton({ item }: { item: LibraryItem }) {
+  const extras = knownExtras(item);
+  const base = baseName(item);
+  const videoUrl = libraryFileUrl(item.path, { download: true });
+
+  return (
+    /* `-space-x-px` so the two halves share one border rather than showing a
+       double-thick seam where they meet. */
+    <div className="flex min-w-0 flex-1 -space-x-px">
+      <Button asChild variant="outline" size="sm" className="min-w-0 flex-1 gap-1.5 rounded-r-none">
+        <a href={videoUrl} download={item.name}>
+          <Download className="size-3.5" aria-hidden />
+          <span className="truncate">Download</span>
+        </a>
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0 rounded-l-none px-2"
+            aria-label="Choose what to download"
+          >
+            <ChevronDown className="size-3.5" aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+        {/* Wide enough for the second line to be a sentence rather than a stack
+            of two-word fragments — this is read on an iPad. */}
+        <DropdownMenuContent align="end" className="w-[19rem] max-w-[calc(100vw-2rem)]">
+          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+            {extras.count === 0
+              ? `The video is ${formatBytes(item.size)}, and nothing else was downloaded beside it.`
+              : `The video is ${formatBytes(item.size)}; its subtitles and thumbnail are a rounding error beside it. Take the part you need.`}
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+
+          <DropdownMenuItem asChild className="items-start gap-2.5 py-2">
+            <a href={videoUrl} download={item.name}>
+              <Download className="mt-0.5 size-4" aria-hidden />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">Video only</span>
+                <span className="block text-xs text-muted-foreground">
+                  The {normaliseExt(item.ext).toUpperCase() || "media"} file on its own · {formatBytes(item.size)}
+                </span>
+              </span>
+            </a>
+          </DropdownMenuItem>
+
+          <DropdownMenuItem asChild className="items-start gap-2.5 py-2">
+            <a href={libraryBundleUrl(item.path, "all")} download={`${base}.zip`}>
+              <Package className="mt-0.5 size-4" aria-hidden />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">Everything</span>
+                <span className="block text-xs text-muted-foreground">
+                  Video, subtitles and thumbnail in one ZIP · about {formatBytes(item.size)}
+                </span>
+              </span>
+            </a>
+          </DropdownMenuItem>
+
+          {extras.count === 0 ? (
+            /* Disabled items take no pointer events, so the reason has to be
+               written in the item itself — a tooltip on it would never open. */
+            <DropdownMenuItem disabled className="items-start gap-2.5 py-2">
+              <FileArchive className="mt-0.5 size-4" aria-hidden />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">Extras only</span>
+                <span className="block text-xs">
+                  Nothing to take: no subtitles or thumbnail were downloaded beside this file.
+                </span>
+              </span>
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem asChild className="items-start gap-2.5 py-2">
+              <a href={libraryBundleUrl(item.path, "extras")} download={`${base} (extras).zip`}>
+                <FileArchive className="mt-0.5 size-4" aria-hidden />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium">Extras only</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {extras.labels.join(" and ")}, without re-downloading the {formatBytes(item.size)} video
+                  </span>
+                </span>
+              </a>
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }
 
@@ -162,8 +339,13 @@ function DetailPanel({ path, onClose }: { path: string; onClose(): void }) {
       </div>
 
       <div className="scrollbar-thin min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+        {/* The same picture the grid draws, as the player's poster: something
+            to look at before the first frame decodes, and the whole panel when
+            the container is one this browser cannot open. `MediaPreview` falls
+            back to its icon when the URL 404s. */}
         <MediaPreview
           src={src}
+          poster={libraryThumbnailUrl(item.path)}
           title={item.name}
           duration={probe?.durationSeconds ?? null}
           kind={kindOf(item)}
@@ -234,17 +416,7 @@ function DetailPanel({ path, onClose }: { path: string; onClose(): void }) {
       </div>
 
       <div className="flex flex-wrap gap-2 border-t p-3">
-        {/* An anchor, not a button with an onClick: `download` on a same-origin
-            link is the browser's own save, so it survives a navigation, shows
-            in the download manager and needs no JavaScript at all. The server
-            sends `Content-Disposition: attachment`, which is what names the
-            file when the anchor's own hint is ignored. */}
-        <Button asChild variant="outline" size="sm" className="flex-1 gap-1.5">
-          <a href={libraryFileUrl(item.path, { download: true })} download={item.name}>
-            <Download className="size-3.5" aria-hidden />
-            Download
-          </a>
-        </Button>
+        <DownloadSplitButton item={item} />
         <Button
           variant="outline"
           size="sm"
@@ -595,6 +767,9 @@ export function LibraryScreen() {
                             search.item === item.path && "bg-primary/5",
                           )}
                         >
+                          <span className="relative grid aspect-video w-20 shrink-0 place-items-center overflow-hidden rounded bg-muted text-muted-foreground sm:w-24">
+                            <Thumbnail item={item} iconClassName="size-5" />
+                          </span>
                           <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[10px] uppercase">
                             {item.ext.replace(/^\./, "")}
                           </Badge>

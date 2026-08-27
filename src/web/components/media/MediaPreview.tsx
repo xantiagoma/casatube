@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 /**
  * The player, in both of the moments PLAN §8 asks for it:
  *
@@ -70,10 +70,28 @@ function Poster({
   hint?: string;
 }) {
   const Icon = kind === "audio" ? Music : Film;
+  /*
+   * ⚠️ The poster URL is allowed to 404, and that is not an error state worth
+   * showing. A library poster is `GET /api/library/thumbnail`, which answers
+   * 404 for anything no picture can be made from — an MP3, a file ffmpeg
+   * cannot open — and a probe's remote thumbnail can expire. Without this the
+   * browser paints its own broken-image glyph, which looks like a bug.
+   *
+   * 📌 The failure is remembered as **the URL that failed**, not a boolean, so
+   * moving to another item resets it with no effect and no cleanup.
+   */
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const showPoster = poster != null && poster !== "" && failedSrc !== poster;
   return (
     <div className="group relative aspect-video w-full overflow-hidden rounded-lg bg-muted">
-      {poster ? (
-        <img src={poster} alt="" className="size-full object-cover" loading="lazy" />
+      {showPoster ? (
+        <img
+          src={poster}
+          alt=""
+          className="size-full object-cover"
+          loading="lazy"
+          onError={() => setFailedSrc(poster)}
+        />
       ) : (
         <div className="grid size-full place-items-center text-muted-foreground">
           <Icon className="size-8" aria-hidden />

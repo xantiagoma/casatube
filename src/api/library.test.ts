@@ -516,3 +516,84 @@ describe("GET /api/library/thumbnail", () => {
     expect(response.status).toBe(404);
   });
 });
+
+/**
+ * `/bundle` — the route that shipped broken because nothing tested it.
+ *
+ * The bug was arithmetic on a filename: `item.ext` carries no dot, so
+ * subtracting its length left one behind and the sidecar filter matched
+ * nothing. `all` produced a zip with only the video, and `extras` returned 404
+ * for a file that plainly had both. Neither failed loudly — which is exactly
+ * why these assert on the **contents** of the archive rather than the status.
+ */
+describe("bundle", () => {
+  function seedWithSidecars(): void {
+    mkdirSync(join(root, "Videos"), { recursive: true });
+    writeFileSync(join(root, "Videos", "Zoo Clip.mp4"), "video-bytes");
+    writeFileSync(join(root, "Videos", "Zoo Clip.en.srt"), "1\nsubtitle\n");
+    writeFileSync(join(root, "Videos", "Zoo Clip.jpg"), "jpeg-bytes");
+    writeFileSync(join(root, "Videos", "Lonely.mp4"), "alone");
+  }
+
+  /** `zip` lives in the image, not necessarily on a developer machine. */
+  const hasZip = Bun.spawnSync(["sh", "-c", "command -v zip"]).exitCode === 0;
+
+  /**
+   * Entry names, read from the archive itself.
+   *
+   * Parsing the local file headers rather than shelling out to `unzip`: the
+   * image ships `zip` but not `unzip`, and a helper that quietly returns
+   * "unavailable" turns a content assertion into a test that always passes —
+   * which is how the bug these tests exist for got through in the first place.
+   */
+  async function namesIn(res: Response): Promise<string[]> {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const view = new DataView(bytes.buffer);
+    const names: string[] = [];
+    for (let i = 0; i + 30 <= bytes.length; i++) {
+      if (view.getUint32(i, true) !== 0x04034b50) continue; // "PK\x03\x04"
+      const nameLength = view.getUint16(i + 26, true);
+      names.push(new TextDecoder().decode(bytes.subarray(i + 30, i + 30 + nameLength)));
+    }
+    return names.sort();
+  }
+
+
+  test("all: the video AND everything sharing its base name", async () => {
+    seedWithSidecars();
+    if (!hasZip) return;
+    const res = await get("/library/bundle?path=Videos%2FZoo%20Clip.mp4&what=all");
+    expect(res.status).toBe(200);
+    const names = await namesIn(res);
+    expect(names).toEqual(["Zoo Clip.en.srt", "Zoo Clip.jpg", "Zoo Clip.mp4"]);
+  });
+
+  test("extras: the sidecars WITHOUT the video — the whole point of the option", async () => {
+    seedWithSidecars();
+    if (!hasZip) return;
+    const res = await get("/library/bundle?path=Videos%2FZoo%20Clip.mp4&what=extras");
+    expect(res.status).toBe(200);
+    const names = await namesIn(res);
+    expect(names).toEqual(["Zoo Clip.en.srt", "Zoo Clip.jpg"]);
+    expect(names).not.toContain("Zoo Clip.mp4");
+  });
+
+  test("extras on a file with none is 404, not an empty archive", async () => {
+    seedWithSidecars();
+    const res = await get("/library/bundle?path=Videos%2FLonely.mp4&what=extras");
+    expect(res.status).toBe(404);
+  });
+
+  test("the filename carries no double dot", async () => {
+    seedWithSidecars();
+    if (!hasZip) return;
+    const res = await get("/library/bundle?path=Videos%2FZoo%20Clip.mp4&what=all");
+    expect(res.headers.get("content-disposition")).toContain('"Zoo Clip.zip"');
+  });
+
+  test("a path leaving the library is refused before any of this", async () => {
+    seedWithSidecars();
+    const res = await get("/library/bundle?path=..%2F..%2Fetc%2Fpasswd");
+    expect(res.status).toBe(400);
+  });
+});
