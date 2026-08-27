@@ -55,6 +55,30 @@ export const TRASH_JOURNAL = "trash.jsonl";
  */
 export const SUBTITLE_EXTENSIONS: ReadonlySet<string> = new Set(["srt", "vtt", "ass", "ssa"]);
 
+/**
+ * Images that belong to a media file rather than being one, in the order they
+ * are preferred.
+ *
+ * ⚠️ This is what keeps a downloaded poster out of the grid. `Name.jpg` written
+ * next to `Name.mkv` is the sidecar convention every media server reads, and
+ * without this rule it would list as an item of its own — a second card, for a
+ * file nobody downloaded, next to the video it is a picture of.
+ *
+ * 📌 It lives **here**, with `SUBTITLE_EXTENSIONS`, rather than in
+ * `core/thumbnails.ts` which is the module about them: that module already
+ * imports this one for the deadline helper and the path guard, and a list
+ * imported in both directions is an import cycle. One list, in the module that
+ * has no dependencies of its own.
+ *
+ * JPEG first because it is what `--convert-thumbnails jpg` produces and what
+ * every media server reads. WebP last because it is what YouTube actually
+ * serves when ffmpeg was not there to convert it.
+ */
+export const THUMBNAIL_EXTENSIONS: readonly string[] = ["jpg", "jpeg", "png", "webp"];
+
+/** The same list, for membership tests. Lowercase, without the dot. */
+export const THUMBNAIL_SIDECAR_EXTENSIONS: ReadonlySet<string> = new Set(THUMBNAIL_EXTENSIONS);
+
 /** Generous for a spinning disk, short enough that a dead mount is obvious. */
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -196,6 +220,16 @@ function splitExtension(name: string): { base: string; ext: string } {
   return { base: name.slice(0, dot), ext: name.slice(dot + 1).toLowerCase() };
 }
 
+function extensionOf(path: string): string {
+  return splitExtension(path.slice(path.lastIndexOf("/") + 1)).ext;
+}
+
+/** Position in {@link THUMBNAIL_EXTENSIONS}' order; anything else sorts last. */
+function preferredThumbnail(ext: string): number {
+  const index = THUMBNAIL_EXTENSIONS.indexOf(ext);
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
+
 // --- Shapes -----------------------------------------------------------------
 
 export interface SubtitleFile {
@@ -231,6 +265,15 @@ export interface LibraryItem {
   modifiedAt: string;
   /** Sidecars sharing this file's base name, in the same folder. */
   subtitles: SubtitleFile[];
+  /**
+   * The provider's own image, when one was downloaded beside the file.
+   *
+   * Library-relative, like everything else here. Its **absence does not mean
+   * there is no thumbnail** — `GET /api/library/thumbnail` falls back to a
+   * generated frame — so this is "the creator chose this picture", not "a
+   * picture exists".
+   */
+  thumbnail?: string;
 }
 
 export type LibrarySort = "name" | "size" | "modified";
@@ -536,17 +579,41 @@ export function openLibrary(options: LibraryOptions): Library {
 
     for (const [folder, bucket] of byFolder) {
       const subs = bucket.filter((f) => SUBTITLE_EXTENSIONS.has(f.ext));
-      const media = bucket.filter((f) => !SUBTITLE_EXTENSIONS.has(f.ext));
+      const images = bucket.filter((f) => THUMBNAIL_SIDECAR_EXTENSIONS.has(f.ext));
+      const media = bucket.filter(
+        (f) => !SUBTITLE_EXTENSIONS.has(f.ext) && !THUMBNAIL_SIDECAR_EXTENSIONS.has(f.ext),
+      );
       // Longest base first: `Foo.en` must be tried before `Foo`.
       const candidates = [...media].sort((a, b) => b.base.length - a.base.length);
 
       const attached = new Map<string, SubtitleFile[]>();
+      const posters = new Map<string, string>();
       const claimed = new Set<string>();
 
-      for (const sub of subs) {
-        const owner = candidates.find(
-          (m) => sub.base === m.base || sub.base.toLowerCase().startsWith(`${m.base.toLowerCase()}.`),
+      const ownerOf = (file: RawFile): RawFile | undefined =>
+        candidates.find(
+          (m) => file.base === m.base || file.base.toLowerCase().startsWith(`${m.base.toLowerCase()}.`),
         );
+
+      // Images first, and by the same ownership rule as subtitles: an image
+      // that belongs to a video in this folder is that video's poster and not a
+      // library item. One that belongs to nothing stays an item — a stray
+      // picture is still a file the user may want to see and delete.
+      for (const image of images) {
+        const owner = ownerOf(image);
+        if (owner === undefined) continue;
+        // First one wins, in the preference order the extensions are listed in:
+        // a folder with both `Foo.jpg` and `Foo.webp` should answer with the
+        // JPEG, because that is what a media server reads.
+        const already = posters.get(owner.name);
+        if (already === undefined || preferredThumbnail(image.ext) < preferredThumbnail(extensionOf(already))) {
+          posters.set(owner.name, joinRelative(folder, image.name));
+        }
+        claimed.add(image.name);
+      }
+
+      for (const sub of subs) {
+        const owner = ownerOf(sub);
         if (owner === undefined) continue;
         const suffix = sub.base.length > owner.base.length ? sub.base.slice(owner.base.length + 1) : "";
         const parts = suffix === "" ? [] : suffix.split(".");
@@ -568,6 +635,7 @@ export function openLibrary(options: LibraryOptions): Library {
 
       for (const file of bucket) {
         if (claimed.has(file.name)) continue;
+        const poster = posters.get(file.name);
         items.push({
           path: joinRelative(folder, file.name),
           name: file.name,
@@ -576,6 +644,7 @@ export function openLibrary(options: LibraryOptions): Library {
           size: file.size,
           modifiedAt: new Date(file.modifiedMs).toISOString(),
           subtitles: (attached.get(file.name) ?? []).sort((a, b) => a.name.localeCompare(b.name)),
+          ...(poster === undefined ? {} : { thumbnail: poster }),
         });
       }
     }

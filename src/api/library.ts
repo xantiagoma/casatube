@@ -22,6 +22,8 @@
 import { Elysia, t } from "elysia";
 import { Result } from "better-result";
 import { join } from "node:path";
+import { readdir } from "node:fs/promises";
+import { NotFound } from "../core/errors";
 
 import {
   DEFAULT_TRASH_RETENTION_DAYS,
@@ -30,9 +32,10 @@ import {
   type LibrarySort,
   type SortOrder,
 } from "../core/library";
+import { createThumbnailer, THUMBNAIL_DIR } from "../core/thumbnails";
 import type { AppContext } from "./context";
 import { safeDestination } from "./destination";
-import { fail } from "./errors";
+import { fail, statusForTag } from "./errors";
 
 /**
  * Trash retention, in days.
@@ -74,6 +77,30 @@ export function libraryRoutes(ctx: AppContext) {
   const library = openLibrary({
     root: config.libraryDir,
     retentionDays: retentionDays(),
+    ...(config.ffprobeBinary === undefined ? {} : { ffprobePath: config.ffprobeBinary }),
+  });
+
+  /**
+   * Thumbnails, with the cache under `DATA_DIR` and never in the library.
+   *
+   * It borrows this module's `library` for `ffprobe` rather than opening a
+   * second one — `openLibrary` is a closure over paths and timeouts, not a
+   * connection, and the duration it reads is the only thing the generator needs
+   * before it can decide *where* to take the frame.
+   *
+   * ⚠️ Nothing is created on disk here. The cache directory appears the first
+   * time a frame is actually generated, so standing up the routes — in a test,
+   * or in a process whose library is empty — writes nothing.
+   */
+  const thumbnails = createThumbnailer({
+    libraryRoot: config.libraryDir,
+    cacheDir: join(config.dataDir, THUMBNAIL_DIR),
+    probe: (relPath) => library.probe(relPath),
+    ...(config.ffmpegBinary === undefined ? {} : { ffmpegPath: config.ffmpegBinary }),
+    width: config.thumbnails.width,
+    maxConcurrent: config.thumbnails.maxConcurrent,
+    generateTimeoutMs: config.thumbnails.timeoutMs,
+    maxEntries: config.thumbnails.maxEntries,
   });
 
   return (
@@ -136,6 +163,75 @@ export function libraryRoutes(ctx: AppContext) {
        * element sends them, so a route without range support plays only from
        * the start and cannot scrub.
        */
+      /**
+       * Everything that belongs to one video, as a single archive.
+       *
+       * `what=all` is the video with its sidecars; `what=extras` is only the
+       * sidecars — because subtitles and a thumbnail are a few hundred
+       * kilobytes and the video is the remaining 99.9%, and re-downloading a
+       * 4 GB file to fetch a subtitle is not a thing anyone wants.
+       *
+       * ⚠️ Streamed from `zip`'s stdout rather than assembled in memory.
+       * `Bun.Archive` was the obvious candidate and is the wrong tool here: it
+       * buffers the whole archive before returning anything, so a large video
+       * would be held in RAM in full — and it writes tar, which iOS handles
+       * far less gracefully than zip.
+       *
+       * `-0` is store, no compression: an mp4 is already compressed, so
+       * deflating it again spends CPU to save almost nothing.
+       */
+      .get(
+        "/bundle",
+        async ({ query, set }) => {
+          const path = safeDestination(query.path, config.libraryDir);
+          if (Result.isError(path)) return fail(path.error);
+
+          const found = await library.item(path.value);
+          if (Result.isError(found)) return fail(found.error);
+          const item = found.value;
+
+          const wantsVideo = (query.what ?? "all") === "all";
+          const folder = join(config.libraryDir, item.folder);
+
+          /**
+           * Everything sharing the video's base name.
+           *
+           * Read from the directory rather than from the item's own fields:
+           * a thumbnail written by the provider is a sidecar like any other,
+           * and a listing that only knew about subtitles would silently leave
+           * it out of a bundle called "all".
+           */
+          const base = item.name.slice(0, item.name.length - item.ext.length);
+          const entries = await readdir(folder).catch(() => [] as string[]);
+          const names = entries
+            .filter((n) => n === item.name || n.startsWith(`${base}.`))
+            .filter((n) => wantsVideo || n !== item.name)
+            .sort();
+
+          if (names.length === 0) {
+            return fail(new NotFound({ what: wantsVideo ? "files" : "extras", id: path.value }));
+          }
+          const proc = Bun.spawn(["zip", "-0", "-q", "-", ...names], {
+            cwd: folder,
+            stdout: "pipe",
+            stderr: "ignore",
+          });
+
+          const filename = `${base}${wantsVideo ? "" : " (extras)"}.zip`;
+          return new Response(proc.stdout, {
+            headers: {
+              "content-type": "application/zip",
+              // Both spellings: library names carry accents and quotes, and a
+              // bare `filename=` mangles them.
+              "content-disposition":
+                `attachment; filename="${filename.replace(/["\\]/g, "_")}"; ` +
+                `filename*=UTF-8''${encodeURIComponent(filename)}`,
+            },
+          });
+        },
+        { query: t.Object({ path: t.String(), what: t.Optional(t.UnionEnum(["all", "extras"], { default: undefined })) }) },
+      )
+
       .get(
         "/file",
         async ({ query, request, set }) => {
@@ -198,6 +294,70 @@ export function libraryRoutes(ctx: AppContext) {
             download: t.Optional(t.String()),
           }),
         },
+      )
+
+      /**
+       * The picture for one library item.
+       *
+       * | | |
+       * |---|---|
+       * | `200` | an image — `image/jpeg` unless a sidecar says otherwise |
+       * | `304` | the browser already has this exact picture |
+       * | `404` | there is none and none can be made. **Not an error**: the grid draws its grey rectangle |
+       * | `400` / `503` / `504` | the path left the root, the mount is down, the mount is slow |
+       *
+       * 🔴 **The provider's own image wins**, and it is looked for first: a
+       * poster the creator chose beats a frame we picked out of the middle of
+       * the file. Only what has no sidecar is generated, and only when the
+       * picture is *asked for* — `GET /api/library` never generates anything,
+       * which is what stops opening the screen from starting two hundred
+       * ffmpegs (see `core/thumbnails.ts`).
+       *
+       * ⚠️ **Every failure has an empty body**, like the HLS segment route and
+       * for the same reason: this URL goes in an `<img src>`, and a browser
+       * handed JSON where it expected an image reports nothing useful. The
+       * status code is the whole message.
+       *
+       * 📌 The `ETag` is derived from the file's identity — path, size, mtime —
+       * so re-downloading over the same name invalidates it, and `max-age`
+       * keeps a scrolled grid from asking twice.
+       */
+      .get(
+        "/thumbnail",
+        async ({ query, request }) => {
+          const path = safeDestination(query.path, config.libraryDir);
+          if (Result.isError(path)) {
+            return new Response(null, { status: statusForTag(path.error._tag) });
+          }
+          if (path.value === "") return new Response(null, { status: 404 });
+
+          const found = await thumbnails.thumbnail(path.value);
+          if (Result.isError(found)) {
+            return new Response(null, { status: statusForTag(found.error._tag) });
+          }
+
+          const { etag } = found.value;
+          const headers = {
+            "content-type": found.value.contentType,
+            "cache-control": "private, max-age=3600",
+            etag,
+            // Which of the two sources answered. Not needed by the browser —
+            // it is here because "why is this the wrong picture?" is otherwise
+            // unanswerable without reading the disk.
+            "x-thumbnail-source": found.value.source,
+          };
+
+          // A 304 costs one round trip and no bytes; a grid of a hundred cards
+          // revalidating is the difference between 3 KB and 3 MB.
+          if (request.headers.get("if-none-match") === etag) {
+            return new Response(null, { status: 304, headers });
+          }
+
+          return new Response(Bun.file(found.value.path), {
+            headers: { ...headers, "content-length": String(found.value.size) },
+          });
+        },
+        { query: t.Object({ path: t.String({ minLength: 1 }) }) },
       )
 
       .get(

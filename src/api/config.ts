@@ -12,6 +12,12 @@ import {
   DEFAULT_SEGMENT_SECONDS,
   DEFAULT_TRANSCODE_IDLE_MS,
 } from "../core/hls";
+import {
+  DEFAULT_GENERATE_TIMEOUT_MS,
+  DEFAULT_MAX_CONCURRENT,
+  DEFAULT_MAX_ENTRIES,
+  DEFAULT_THUMBNAIL_WIDTH,
+} from "../core/thumbnails";
 
 export interface ServerConfig {
   port: number;
@@ -35,6 +41,8 @@ export interface ServerConfig {
   ffprobeBinary?: string;
   /** On-demand HLS playback — see `core/hls.ts`. */
   hls: HlsConfig;
+  /** Library thumbnails — see `core/thumbnails.ts`. */
+  thumbnails: ThumbnailConfig;
   /**
    * How often the queue is re-read to decide whether the SSE stream has
    * anything new to say.
@@ -74,6 +82,25 @@ export interface HlsConfig {
   maxSessions: number;
 }
 
+/**
+ * The knobs on library thumbnails.
+ *
+ * ⚠️ Like the HLS ones, these are limits on **CPU and disk**, not preferences.
+ * A generated frame costs an ffprobe and an ffmpeg; the cache costs `DATA_DIR`.
+ * The defaults are chosen so that scrolling a cold library of a thousand files
+ * cannot become a thousand simultaneous subprocesses.
+ */
+export interface ThumbnailConfig {
+  /** Width of a generated frame, in pixels. Sidecars are served as they are. */
+  width: number;
+  /** ffmpeg processes at once. */
+  maxConcurrent: number;
+  /** Per generation, after which the process is killed. */
+  timeoutMs: number;
+  /** Cached frames kept before the oldest are pruned. */
+  maxEntries: number;
+}
+
 function int(value: string | undefined, fallback: number): number {
   if (value === undefined || value.trim() === "") return fallback;
   const parsed = Number.parseInt(value, 10);
@@ -101,6 +128,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       idleMs: int(env.HLS_IDLE_MS, DEFAULT_IDLE_MS),
       transcodeIdleMs: int(env.HLS_TRANSCODE_IDLE_MS, DEFAULT_TRANSCODE_IDLE_MS),
       maxSessions: int(env.HLS_MAX_SESSIONS, DEFAULT_MAX_SESSIONS),
+    },
+    thumbnails: {
+      width: int(env.THUMBNAIL_WIDTH, DEFAULT_THUMBNAIL_WIDTH),
+      maxConcurrent: int(env.THUMBNAIL_MAX_CONCURRENT, DEFAULT_MAX_CONCURRENT),
+      timeoutMs: int(env.THUMBNAIL_TIMEOUT_MS, DEFAULT_GENERATE_TIMEOUT_MS),
+      maxEntries: int(env.THUMBNAIL_MAX_ENTRIES, DEFAULT_MAX_ENTRIES),
     },
     trashRetentionDays: int(env.TRASH_RETENTION_DAYS, 30),
     dev: env.NODE_ENV !== "production" && str(env.CASATUBE_DEV) !== undefined,

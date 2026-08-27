@@ -5,6 +5,125 @@ session with none of this context. Newest first.
 
 ---
 
+## 2026-08-27 — The library has pictures, and the good ones come from the source
+
+> «la biblioteca no tiene miniaturas.»
+
+The grid drew a grey icon for everything. The pictures visible *before* a
+download are remote YouTube URLs that arrive with the probe; the moment the file
+was on disk, nobody kept anything.
+
+Now there are **two sources, in a fixed order**, and the order is the design.
+
+**561 tests, 0 failures** (was 516; +45). `tsc` clean.
+
+### 1. The provider's picture, as a sidecar — the preferred one
+
+`--write-thumbnail --convert-thumbnails jpg` on every fetch, and the file moves
+into the library with the video: `Me at the zoo.jpg` beside `Me at the zoo.mp4`,
+the same way subtitles already travelled.
+
+🔴 **It is preferred because it was *chosen*.** The creator's cover, or the frame
+the site picked, beats a frame we pull out of the middle of the file — and
+`Name.jpg` is the convention Jellyfin, Plex and Emby already read, so one small
+file buys a poster everywhere rather than only inside CasaTube.
+
+⚠️ `--convert-thumbnails jpg` is the load-bearing half: YouTube serves **WebP**,
+which several media servers ignore. See `docs/DISCOVERIES.md` for what happens
+when ffmpeg is not on `PATH` — the conversion fails quietly and the `.webp`
+stays, which is why the collector accepts all four formats instead of insisting.
+
+⚠️ The image arrives *first*, like subtitles do, so it is excluded from the byte
+budget. Counted, it would drive the progress bar to 100% before the video began
+— the trap `--write-subs` already taught us, from a second direction.
+
+### 2. A frame from ffmpeg — derived, and therefore not library content
+
+Everything with no sidecar — old downloads, files copied in by hand, providers
+that publish no image — gets one frame, cached under
+`DATA_DIR/thumbnails/<key>.jpg`.
+
+🔴 **These never go into the library.** A generated frame is not content: it can
+be deleted without losing anything, and writing it next to the video would mean
+a file nobody downloaded appearing in the grid, in the backups, and on the NAS.
+
+⚠️ **Not second 0.** An enormous number of videos open on a fade from black or a
+title card, so the obvious offset is the one most likely to be useless. The
+frame is taken at **10% of the duration**, floored at one second and kept half a
+second clear of the end — verified on the real 19-second MP4, which answers at
+1.9 s with a recognisable picture.
+
+📌 The cache key is `(path, size, mtime, width)` and **the key is the
+filename** — the same rule `core/hls.ts` follows for its playback verdict. A
+re-download over the same name is a different video, and an entry keyed on the
+path would go on serving a picture of the old one. Because the key is the name,
+a stale entry is never *found*, so nothing has to notice that it is stale.
+
+### The route
+
+`GET /api/library/thumbnail?path=` — sidecar, else cache, else generate.
+
+| | |
+|---|---|
+| `200` | an image, `ETag` + `cache-control: private, max-age=3600`, and `x-thumbnail-source: sidecar\|cache\|generated` |
+| `304` | the browser already has this exact picture |
+| `404` | there is none and none can be made — **not an error**, the grid draws its grey rectangle |
+| `400` / `503` / `504` | the path left the root, the mount is down, the mount hangs |
+
+⚠️ **Every failure has an empty body**, like the HLS segment route: this URL goes
+in an `<img src>`, and a browser handed JSON where it expected an image reports
+nothing useful. The status code is the whole message.
+
+### The limits, because this spawns processes on a shared box
+
+- 🔴 **Listing generates nothing.** Two hundred cards would be two hundred
+  ffmpegs; generation happens only when a *thumbnail* is asked for. There is a
+  test that asserts the process count is zero after a listing.
+- **Two ffmpegs at once**, and ten simultaneous requests for one file are **one**
+  process — the in-flight map is what makes a scroll cheap.
+- **A deadline, and a kill.** 20 s, after which the process is killed and the
+  request answers `Timeout`.
+- **Failures are remembered for five minutes**, keyed on the cache key. Without
+  it a corrupt file in a folder of two hundred is two subprocesses per card per
+  scroll, for ever.
+- **The output is renamed into place**, never served while it is being written —
+  and a killed run leaves nothing a later request could mistake for a valid entry.
+- **The cache is pruned** at 5 000 entries, oldest first.
+
+### `.jpg` files stopped being library items
+
+`core/library.ts` now attaches an image to the media file that shares its base
+name, exactly as it does a subtitle, and reports it as `item.thumbnail`.
+Without that, downloading a poster would add a **second card** to the grid for a
+file nobody asked for. An image that belongs to nothing stays an item — a stray
+picture is still something to see and delete.
+
+### Measured, against the real file
+
+Downloaded `Me at the zoo` through the API on a server started for the purpose:
+
+| | |
+|---|---|
+| `Videos/Me at the zoo.jpg` beside the MP4 | 23 689 bytes, JPEG 480×360, converted from WebP |
+| Sidecar request | `200`, `x-thumbnail-source: sidecar`, magic bytes `ff d8` |
+| Same request with `If-None-Match` | `304`, no body |
+| With the sidecar moved away, cold | `200`, `generated`, **61 ms**, 320×240 — not upscaled |
+| Second request | `200`, `cache`, **8 ms**, byte-identical |
+| Sidecar put back | `sidecar` again, cache untouched |
+| A file that is not there | `404`, zero bytes |
+| `?path=../../etc/passwd` | `400` |
+| After listing the library | `DATA_DIR/thumbnails` **does not exist** |
+
+### `src/web`, not touched
+
+Another agent owns that folder this session. The frontend needs one change:
+point the card's `<img src>` at
+`/api/library/thumbnail?path=${encodeURIComponent(item.path)}`, with `onError`
+falling back to the grey icon it already draws — a 404 is the normal answer for
+a file with no picture, not a fault.
+
+---
+
 ## 2026-08-27 — MKVs play in the browser, and you can jump to minute three
 
 > «los MKV no se reproducen… y avanzar en el vídeo me importa.»

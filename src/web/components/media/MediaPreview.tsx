@@ -180,18 +180,37 @@ export function MediaPreview({
       />
       <MediaPlayerLoading />
       <MediaPlayerError />
-      <MediaPlayerControls className="flex-col items-start gap-2">
+      <MediaPlayerControls className="flex-col items-start gap-2 px-3">
         <MediaPlayerSeek />
-        <div className="flex w-full items-center gap-2">
-          <MediaPlayerPlay />
-          <MediaPlayerSeekBackward />
-          <MediaPlayerSeekForward />
-          <MediaPlayerVolume expandable />
-          <MediaPlayerTime />
-          <div className="flex-1" />
-          <MediaPlayerPlaybackSpeed />
-          <MediaPlayerPiP />
-          <MediaPlayerFullscreen />
+        {/*
+          🔴 **Two groups that wrap, not one row and a spacer.** The eight
+          controls need about 360 px. The docked inspector used to hand the bar
+          284 of them, and a single non-wrapping row neither shrinks nor
+          scrolls: it pushes its tail outside the player's `overflow-hidden`,
+          where the last three — playback speed, PiP and **fullscreen** — were
+          painted nowhere and could not be clicked. Nothing errored and nothing
+          looked broken; the bar simply ended after the clock.
+
+          ⚠️ So a wider panel is only half the fix. `flex-wrap` is the half that
+          holds at *any* width: when the two groups no longer fit side by side
+          the right-hand one drops onto its own line instead of falling off the
+          end, and `ml-auto` keeps it right-aligned on either line. A long
+          duration (`1:23:45`) or an expanded volume slider can spend the slack
+          at any moment, which is the case no fixed width can cover.
+        */}
+        <div className="flex w-full flex-wrap items-center gap-x-1 gap-y-1.5">
+          <div className="flex items-center gap-x-1">
+            <MediaPlayerPlay />
+            <MediaPlayerSeekBackward />
+            <MediaPlayerSeekForward />
+            <MediaPlayerVolume expandable />
+            <MediaPlayerTime />
+          </div>
+          <div className="ml-auto flex items-center gap-x-1">
+            <MediaPlayerPlaybackSpeed />
+            <MediaPlayerPiP />
+            <MediaPlayerFullscreen />
+          </div>
         </div>
       </MediaPlayerControls>
     </MediaPlayer>

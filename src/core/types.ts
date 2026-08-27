@@ -335,6 +335,15 @@ export interface FetchResult {
   file: string;
   /** Sidecar subtitle files, if not embedded. */
   subtitleFiles: string[];
+  /**
+   * The provider's own thumbnail, written beside the media file.
+   *
+   * Optional because it is a *convenience*: a provider that publishes no image,
+   * or a thumbnail that failed to download, must never fail a job that has the
+   * video. The worker moves it into the library next to the video, under the
+   * same base name — the sidecar convention media servers already read.
+   */
+  thumbnailFile?: string;
 }
 
 export interface Provider {

@@ -79,7 +79,7 @@ export function Downloads() {
     <>
       <PageHeader title="Downloads" description="What is running, what finished, and what is waiting to try again." />
 
-      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_24rem]">
+      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_28rem]">
         <div className="min-w-0 space-y-4">
           <div className="flex flex-wrap items-center gap-3">
             <Tabs
@@ -196,7 +196,7 @@ export function Downloads() {
       >
         {/* The inspector brings its own close button; the sheet's default one
             would land right beside it — the double X Santi hit on the iPad. */}
-        <SheetContent side="right" className="w-full p-0 sm:max-w-md" showCloseButton={false}>
+        <SheetContent side="right" className="w-full p-0 sm:max-w-lg" showCloseButton={false}>
           <SheetTitle className="sr-only">Download details</SheetTitle>
           {inspector}
         </SheetContent>

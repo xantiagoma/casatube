@@ -218,6 +218,29 @@ leave segments behind for ever.
 | `FFMPEG_BIN` | `ffmpeg` | Both are in the image; set these only to point at a specific build |
 | `FFPROBE_BIN` | `ffprobe` | Used for the "can a browser already play this?" verdict, cached per file |
 
+### Thumbnails
+
+The picture on a library card comes from one of two places. The **provider's
+own** image is downloaded with the video and lands beside it as `Name.jpg` —
+that is library content, it is what media servers read, and it is always
+preferred. Anything with no sidecar gets **one frame from ffmpeg**, taken at 10%
+of the duration (not second 0, which on a great many videos is black), and
+cached in `DATA_DIR/thumbnails`.
+
+⚠️ **Listing the library generates nothing.** A frame is produced only when
+`GET /api/library/thumbnail?path=…` is called for that file, so opening a screen
+of two hundred cards cannot become two hundred ffmpeg processes.
+
+📌 The cache is derived data: deleting `DATA_DIR/thumbnails` is always safe, and
+it refills itself. Nothing generated is ever written into the library.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `THUMBNAIL_WIDTH` | `480` | Width of a generated frame. Never upscales a smaller video |
+| `THUMBNAIL_MAX_CONCURRENT` | `2` | ffmpeg processes at once. Requests over the cap wait |
+| `THUMBNAIL_TIMEOUT_MS` | `20000` | Per generation, after which the process is **killed** and the request answers |
+| `THUMBNAIL_MAX_ENTRIES` | `5000` | Cached frames kept before the oldest are pruned |
+
 ### yt-dlp
 
 | Variable | Default | What it does |

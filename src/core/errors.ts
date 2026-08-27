@@ -154,6 +154,22 @@ export class TranscodeBusy extends TaggedError("TranscodeBusy")<{
   limit: number;
 }> {}
 
+/**
+ * There is no picture for this file, and there is no way to make one.
+ *
+ * ⚠️ Deliberately **not** a 500 and deliberately not silence. A thumbnail is a
+ * convenience: the file itself is fine, the library screen already knows how to
+ * draw a grey rectangle, and the honest report is "there is nothing to show"
+ * rather than an error that makes a working download look broken. What it must
+ * not do is disappear — the detail says *why* (no video stream, ffmpeg refused
+ * it, the frame came out empty), which is the difference between a known
+ * limitation and a corrupt file nobody noticed.
+ */
+export class ThumbnailUnavailable extends TaggedError("ThumbnailUnavailable")<{
+  path: string;
+  detail: string;
+}> {}
+
 export class NotFound extends TaggedError("NotFound")<{
   what: string;
   id: string;
@@ -196,6 +212,9 @@ export type LibraryError =
   | NotFound
   | LocalProbeFailed
   | Timeout;
+
+/** What asking for a thumbnail can fail with, on top of the library's own faults. */
+export type ThumbnailError = ThumbnailUnavailable | LibraryError;
 
 /** What on-demand playback can fail with, on top of the library's own faults. */
 export type PlaybackError = TranscodeUnavailable | TranscodeBusy | LibraryError;

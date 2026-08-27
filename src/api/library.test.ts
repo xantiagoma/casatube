@@ -13,7 +13,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Elysia } from "elysia";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,13 +24,61 @@ import { TRASH_DIR } from "../core/library";
 
 let root: string;
 
-function appFor(libraryDir: string = root) {
-  const ctx = { config: { ...loadConfig({}), libraryDir } } as AppContext;
+function appFor(libraryDir: string = root, env: Record<string, string> = {}) {
+  const ctx = { config: { ...loadConfig(env), libraryDir } } as AppContext;
   return new Elysia({ prefix: "/api" }).use(libraryRoutes(ctx));
 }
 
 function get(path: string, libraryDir?: string): Promise<Response> {
   return appFor(libraryDir).handle(new Request(`http://local/api${path}`));
+}
+
+/**
+ * A server whose ffmpeg and ffprobe are shell scripts.
+ *
+ * The point of every thumbnail test below is what happens *around* ffmpeg —
+ * which source answers, whether a second request costs a process, whether
+ * listing starts any. Stand-ins make those assertions instead of hopes, and
+ * make the whole file runnable on a machine with no ffmpeg on it.
+ */
+function appWithFakeMedia(options: { ffmpeg?: "ok" | "fail"; video?: boolean } = {}) {
+  const dataDir = join(root, "..", `data-${Math.random().toString(36).slice(2, 8)}`);
+  mkdirSync(dataDir, { recursive: true });
+  const calls = join(dataDir, "calls.log");
+
+  const ffprobe = join(dataDir, "ffprobe.sh");
+  const streams = options.video === false ? "" : '{"index":0,"codec_type":"video","codec_name":"h264"}';
+  writeFileSync(
+    ffprobe,
+    `#!/bin/sh
+printf '%s' '{"format":{"duration":"100"},"streams":[${streams}]}'
+exit 0
+`,
+  );
+  chmodSync(ffprobe, 0o755);
+
+  const ffmpeg = join(dataDir, "ffmpeg.sh");
+  const body =
+    options.ffmpeg === "fail"
+      ? `echo "Invalid data found when processing input" >&2
+exit 1
+`
+      : `for last; do :; done
+printf '\\377\\330fake-jpeg' > "$last"
+exit 0
+`;
+  writeFileSync(ffmpeg, `#!/bin/sh
+echo run >> ${JSON.stringify(calls)}
+${body}`);
+  chmodSync(ffmpeg, 0o755);
+
+  const app = appFor(root, { DATA_DIR: dataDir, FFMPEG_BIN: ffmpeg, FFPROBE_BIN: ffprobe });
+  return {
+    dataDir,
+    ffmpegRuns: () =>
+      existsSync(calls) ? readFileSync(calls, "utf8").split("\n").filter((line) => line !== "").length : 0,
+    get: (path: string, init?: RequestInit) => app.handle(new Request(`http://local/api${path}`, init)),
+  };
 }
 
 function send(method: "DELETE" | "POST", path: string, body?: unknown): Promise<Response> {
@@ -357,5 +405,114 @@ describe("DELETE /api/library → restore → empty", () => {
   test("deleting something that is not there is 404, and restoring it too", async () => {
     expect((await send("DELETE", "/library?path=missing.mkv")).status).toBe(404);
     expect((await send("POST", "/library/restore", { path: "missing.mkv" })).status).toBe(404);
+  });
+});
+
+describe("GET /api/library/thumbnail", () => {
+  test("serves the provider's sidecar, and never starts ffmpeg for it", async () => {
+    put("youtube/Talk.mkv", "video");
+    put("youtube/Talk.jpg", "provider-picture");
+    const server = appWithFakeMedia();
+
+    const response = await server.get(`/library/thumbnail?path=${encodeURIComponent("youtube/Talk.mkv")}`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/jpeg");
+    expect(response.headers.get("x-thumbnail-source")).toBe("sidecar");
+    expect(response.headers.get("cache-control")).toContain("max-age");
+    expect(await response.text()).toBe("provider-picture");
+    expect(server.ffmpegRuns()).toBe(0);
+  });
+
+  test("a browser that already has the picture gets a 304 and no bytes", async () => {
+    put("Talk.mkv", "video");
+    put("Talk.jpg", "provider-picture");
+    const server = appWithFakeMedia();
+
+    const first = await server.get("/library/thumbnail?path=Talk.mkv");
+    const etag = first.headers.get("etag") ?? "";
+    expect(etag).not.toBe("");
+
+    const second = await server.get("/library/thumbnail?path=Talk.mkv", {
+      headers: { "if-none-match": etag },
+    });
+    expect(second.status).toBe(304);
+    expect(await second.text()).toBe("");
+  });
+
+  test("with no sidecar it generates once, then answers from the cache", async () => {
+    put("Talk.mkv", "video");
+    const server = appWithFakeMedia();
+
+    const first = await server.get("/library/thumbnail?path=Talk.mkv");
+    expect(first.status).toBe(200);
+    expect(first.headers.get("x-thumbnail-source")).toBe("generated");
+    // The magic bytes, not just the status: a 200 that is not an image is the
+    // failure this endpoint exists to avoid.
+    expect(new Uint8Array(await first.arrayBuffer()).subarray(0, 2)).toEqual(new Uint8Array([0xff, 0xd8]));
+    expect(server.ffmpegRuns()).toBe(1);
+
+    const second = await server.get("/library/thumbnail?path=Talk.mkv");
+    expect(second.headers.get("x-thumbnail-source")).toBe("cache");
+    expect(server.ffmpegRuns()).toBe(1);
+  });
+
+  test("🔴 listing the library generates nothing", async () => {
+    // The rule the whole design rests on. Two hundred cards on a screen must
+    // not be two hundred ffmpegs — the generation happens when a *thumbnail* is
+    // asked for, one request at a time.
+    for (const name of ["a", "b", "c", "d"]) put(`${name}.mkv`, "video");
+    const server = appWithFakeMedia();
+
+    const listing = (await (await server.get("/library")).json()) as Listing;
+    expect(listing.items).toHaveLength(4);
+    await server.get(`/library/item?path=a.mkv`);
+
+    expect(server.ffmpegRuns()).toBe(0);
+  });
+
+  test("a file that is not there is a clean 404 with no body", async () => {
+    const server = appWithFakeMedia();
+    const response = await server.get("/library/thumbnail?path=nope.mkv");
+    expect(response.status).toBe(404);
+    // ⚠️ Empty, not JSON: this URL goes in an `<img src>`, and a browser handed
+    // a paragraph where it expected an image reports nothing useful.
+    expect(await response.text()).toBe("");
+  });
+
+  test("ffmpeg failing is a 404 as well — the grid draws its grey rectangle", async () => {
+    put("broken.mkv", "not really a video");
+    const server = appWithFakeMedia({ ffmpeg: "fail" });
+
+    const response = await server.get("/library/thumbnail?path=broken.mkv");
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe("");
+  });
+
+  test("a file with no video stream is refused without running ffmpeg", async () => {
+    put("Song.m4a", "audio");
+    const server = appWithFakeMedia({ video: false });
+
+    expect((await server.get("/library/thumbnail?path=Song.m4a")).status).toBe(404);
+    expect(server.ffmpegRuns()).toBe(0);
+  });
+
+  test("a path that leaves the library is refused before anything runs", async () => {
+    const server = appWithFakeMedia();
+    const response = await server.get(`/library/thumbnail?path=${encodeURIComponent("../etc/passwd")}`);
+    expect(response.status).toBe(400);
+    expect(server.ffmpegRuns()).toBe(0);
+  });
+
+  test("a library that is not mounted answers 404, and that is all a stat can say", async () => {
+    // ⚠️ Worth writing down rather than assuming: an unmounted mount and a file
+    // that is not there produce the **same** ENOENT, so per file the honest
+    // answer is 404. `MountUnavailable` (503) is reserved for the case a stat
+    // can actually tell apart — a mount that *hangs*, which is what the deadline
+    // in `core/thumbnails.ts` catches and what `core/thumbnails.test.ts` covers.
+    const ctx = { config: { ...loadConfig({}), libraryDir: join(root, "not-mounted") } } as AppContext;
+    const app = new Elysia({ prefix: "/api" }).use(libraryRoutes(ctx));
+    const response = await app.handle(new Request("http://local/api/library/thumbnail?path=Talk.mkv"));
+    expect(response.status).toBe(404);
   });
 });

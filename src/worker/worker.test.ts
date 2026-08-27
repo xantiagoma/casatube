@@ -104,6 +104,38 @@ test("a job completes end to end and the file lands in the library", async () =>
   closeDb(db);
 });
 
+test("the provider's thumbnail lands next to the video, as a sidecar", async () => {
+  // 🔴 The move stage is where a sidecar is either kept or lost. The subtitles
+  // already travelled; the poster has to travel the same way and keep its name,
+  // because `Name.jpg` beside `Name.mkv` is what makes it a sidecar at all.
+  const provider: Provider = {
+    ...halfwayProvider({}),
+    async fetch(plan, ctx) {
+      await mkdir(ctx.workDir, { recursive: true });
+      const file = join(ctx.workDir, `${plan.outputName}.mkv`);
+      const poster = join(ctx.workDir, `${plan.outputName}.jpg`);
+      await writeFile(file, "video");
+      await writeFile(poster, "poster");
+      return Result.ok({ file, subtitleFiles: [], thumbnailFile: poster });
+    },
+  };
+  const { db, queue, worker } = await boot(provider);
+
+  const queued = await queue.enqueue({
+    url: "https://example.test/v", destination: "Videos",
+    preferences: DEFAULT_PREFERENCES,
+  });
+  const claimed = await queue.claimNext("slot-1");
+  await worker.run((claimed as { value: NonNullable<unknown> }).value as never);
+
+  expect(Result.unwrap(await queue.get(Result.unwrap(queued).job.id)).status).toBe("done");
+  const files = (await readdir(join(root, "library", "Videos"))).sort();
+  expect(files).toEqual(["A Video.jpg", "A Video.mkv"]);
+
+  await queue.close();
+  closeDb(db);
+});
+
 test("🔴 R2: a job interrupted mid-download survives a full restart", async () => {
   // --- first boot: get the job genuinely mid-download, then stop dead -------
   let first = await boot(halfwayProvider({ failFirstHalf: true }));

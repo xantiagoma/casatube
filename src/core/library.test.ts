@@ -214,6 +214,46 @@ describe("subtitles", () => {
     expect(listing.items.map((item) => item.path).sort()).toEqual(["a/Talk.mkv", "b/Talk.srt"]);
   });
 
+  test("a poster is attached to its video, not listed as an item of its own", async () => {
+    // 🔴 `Name.jpg` beside `Name.mkv` is a *sidecar*, exactly as the subtitle
+    // is. Left as an item it would be a second card in the grid for a file
+    // nobody downloaded — next to the video it is a picture of.
+    put("Videos/Talk.mkv");
+    put("Videos/Talk.jpg", "poster");
+
+    const listing = unwrap(await open().list({ sort: "name" }));
+    expect(listing.items.map((item) => item.path)).toEqual(["Videos/Talk.mkv"]);
+    expect(listing.items[0]?.thumbnail).toBe("Videos/Talk.jpg");
+  });
+
+  test("the JPEG wins when a folder has more than one image for a video", async () => {
+    put("Talk.mkv");
+    put("Talk.webp", "webp");
+    put("Talk.jpg", "jpeg");
+
+    const listing = unwrap(await open().list({ sort: "name" }));
+    expect(listing.items.map((item) => item.name)).toEqual(["Talk.mkv"]);
+    expect(listing.items[0]?.thumbnail).toBe("Talk.jpg");
+  });
+
+  test("an image that belongs to nothing stays a library item", async () => {
+    // A stray picture is still a file the user may want to see and delete —
+    // the same rule the unclaimed subtitle follows.
+    put("holiday.jpg", "a photo");
+
+    const listing = unwrap(await open().list({ sort: "name" }));
+    expect(listing.items.map((item) => item.name)).toEqual(["holiday.jpg"]);
+    expect(listing.items[0]?.thumbnail).toBeUndefined();
+  });
+
+  test("`item` agrees with the listing about the poster too", async () => {
+    put("Talk.mkv");
+    put("Talk.jpg", "poster");
+
+    const found = unwrap(await open().item("Talk.mkv"));
+    expect(found.thumbnail).toBe("Talk.jpg");
+  });
+
   test("`item` agrees with the listing about who owns a sidecar", async () => {
     put("Foo.mkv");
     put("Foo.en.mkv");

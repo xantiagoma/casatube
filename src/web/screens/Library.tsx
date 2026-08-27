@@ -435,7 +435,17 @@ export function LibraryScreen() {
       {search.trash ? (
         <TrashView />
       ) : (
-        <div className="grid gap-4 xl:grid-cols-[13rem_minmax(0,1fr)] 2xl:grid-cols-[13rem_minmax(0,1fr)_22rem]">
+        /*
+         * ⚠️ `28rem`, not the `22rem` this started at, and the reference design
+         * is why: its detail panel is a good quarter of the canvas. The old
+         * column left the player 284 px of control bar for 360 px of controls,
+         * and playback speed, PiP and **fullscreen** were the three that fell
+         * off the end — the widest layout in the app was the one with no
+         * fullscreen button. The grid drops to three columns here so the cards
+         * do not pay for it; see `MediaPreview` for the half of the fix that
+         * holds at any width.
+         */
+        <div className="grid gap-4 xl:grid-cols-[13rem_minmax(0,1fr)] 2xl:grid-cols-[13rem_minmax(0,1fr)_28rem]">
           <aside className="min-w-0 space-y-4">
             <Card className="p-0">
               <CardHeader className="px-3 pt-3 pb-2">
@@ -561,7 +571,7 @@ export function LibraryScreen() {
                 hint="Finished downloads land in the library. If you expected files, check that the mount is up."
               />
             ) : search.view === "grid" ? (
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-3">
                 {items.map((item) => (
                   <ItemCard
                     key={item.path}
@@ -652,8 +662,14 @@ export function LibraryScreen() {
         {/* 🔴 `showCloseButton={false}`: the panel inside has its own close, and
             the sheet's would sit on top of it — two X's a finger apart, which is
             how it looked on the iPad. The panel's is the one that stays, because
-            it is the same control the docked panel shows on a wide screen. */}
-        <SheetContent side="right" className="w-full p-0 sm:max-w-md" showCloseButton={false}>
+            it is the same control the docked panel shows on a wide screen.
+
+            ⚠️ `sm:max-w-lg` (32rem) rather than the old `md` (28rem). It beats
+            `SheetContent`'s own `sm:max-w-sm` because `cn` is `twMerge`, which
+            resolves same-variant conflicts by last-wins — this is *not* the
+            `sm:max-w-lg` vs `max-w-3xl` trap in DISCOVERIES, where the two
+            classes are different variants and twMerge leaves both standing. */}
+        <SheetContent side="right" className="w-full p-0 sm:max-w-lg" showCloseButton={false}>
           <SheetTitle className="sr-only">Item details</SheetTitle>
           {detail}
         </SheetContent>

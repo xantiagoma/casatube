@@ -2,6 +2,119 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## Going fullscreen resizes the viewport, so a `matchMedia` layout switch destroys the player (2026-08-27)
+
+Fullscreen made the video enter and immediately leave again, on desktop and at
+tablet width. It was not the player, not the SSE refresh and not Radix.
+
+**Entering fullscreen resizes the layout viewport to the screen.** A 1440 px
+window on a 1920 px monitor becomes a 1920 px viewport for as long as the video
+is fullscreen — measured with no emulation at all: `innerWidth` 945 → 1920 on
+the way in, 1920 → 945 on the way out. That crosses `useDockedPanels`'
+`(min-width: 1536px)`, and docked and undocked are **different components** (a
+`Sheet` and an `<aside>`, deliberately, so a hidden overlay cannot eat clicks).
+So React unmounts one and mounts the other — and **removing the fullscreen
+element from the document exits fullscreen.** The timeline, from the real MKV:
+
+```
+2109  <video> added          ← the docked aside mounts (viewport is now 1920)
+2117  fullscreenchange IN    innerWidth=1920
+2402  <video> removed        ← the sheet, holding the fullscreened player, unmounts
+2418  fullscreenchange OUT   ← because its element is gone
+2488  removed / added        ← viewport back to 945, panel swaps back
+```
+
+The fix is to freeze the query while `document.fullscreenElement` is set. The
+event order makes that sound: on the way **in** Chrome fires `resize` and the
+`matchMedia` change with `fullscreenElement` **already set**; on the way **out**
+it fires them with it **already null**. Verified, not assumed — a guard that
+ran before the element was registered would do nothing.
+
+⚠️ It is invisible to headless testing with a CDP viewport override:
+`Emulation.setDeviceMetricsOverride` pins `innerWidth`, so fullscreen changes
+nothing and the bug does not reproduce. Launching with `--screen-info={1920x1080}`
+and a smaller window is what makes it appear.
+
+📌 The general shape: **a `matchMedia` read is a fact about the window, and
+fullscreen changes that fact.** Any layout decision that swaps component
+identity — not just this one — is a decision that can delete the element the
+browser is currently showing full-screen.
+
+## A control bar that does not wrap loses its last buttons in silence (2026-08-27)
+
+The eight player controls need about 360 px. The docked inspector was giving the
+bar 284, and a `flex` row with no `flex-wrap` neither shrinks nor scrolls: it
+lays its children out past its own edge, where the player's `overflow-hidden`
+clips them. Playback speed, PiP and **fullscreen** were painted nowhere and
+could not be clicked — so the widest layout in the app was the one with no
+fullscreen button, which is half of why "fullscreen does not work".
+
+Nothing errors and nothing looks broken. The bar just ends after the clock, and
+the only way to see it is to compare the row's `scrollWidth` against its
+`getBoundingClientRect().width`, or a child's `right` against its parent's.
+
+📌 Widening the panel is the fix for *today's* eight controls. `flex-wrap` plus
+two groups is the fix for a ninth one, a `1:23:45` duration, or an expanded
+volume slider — any of which spends the slack again.
+
+## `cn` is `twMerge`, so a later class wins — but only against the *same* variant (2026-08-27)
+
+`SheetContent` hard-codes `sm:max-w-sm`; the caller passes `sm:max-w-lg` and
+gets 32rem, because `cn` runs `twMerge` and same-variant conflicts resolve
+last-wins in the string.
+
+⚠️ **This is not a contradiction of the `sm:max-w-lg` beats `max-w-3xl` entry
+below.** There the two classes are *different* variants, twMerge does not see a
+conflict, leaves both standing, and the CSS cascade decides — which is why the
+unprefixed one loses everywhere above `sm`. Same helper, opposite outcome: the
+question is always whether the two classes carry the same variant prefix.
+
+
+## `FFMPEG_BIN` does not reach yt-dlp, and the failure is a `.webp` (2026-08-27)
+
+`--convert-thumbnails jpg` is an ffmpeg post-processor, and yt-dlp looks for
+ffmpeg **on `PATH`** — nothing forwards our `FFMPEG_BIN` to it as
+`--ffmpeg-location`. On a box where ffmpeg is not on `PATH`, the run says:
+
+```
+postprocess ThumbnailsConvertor: started
+WARNING: You have requested merging of multiple formats but ffmpeg is not installed…
+ERROR: Preprocessing: ffmpeg not found. Please install or provide the path using --ffmpeg-location
+```
+
+The merge fails the job loudly, so the missing ffmpeg does get noticed — but the
+thumbnail half fails *quietly*: the original `Name.webp` simply stays where the
+JPEG was meant to be. WebP is not read by several media servers, so the symptom
+is "Jellyfin shows no poster", three layers away from the cause.
+
+📌 So the thumbnail collector accepts `.jpg`, `.jpeg`, `.png` **and** `.webp`
+rather than insisting on the conversion having happened. The image has
+ffmpeg on `PATH`, so production converts; a development machine may not, and
+losing the picture over the format would be the wrong trade.
+
+⚠️ Worth fixing separately: passing `--ffmpeg-location` when `FFMPEG_BIN` is set
+would make one variable mean one thing. Today `FFMPEG_BIN` configures *our*
+ffmpeg (HLS, thumbnails) and yt-dlp's is whatever `PATH` finds.
+
+## An import cycle is a runtime error that `tsc` is perfectly happy with (2026-08-27)
+
+`core/thumbnails.ts` imports the deadline helper and the path guard from
+`core/library.ts`; `core/library.ts` imported the list of image extensions back
+from `core/thumbnails.ts`. Types are erased, so the compiler saw nothing wrong —
+and the **value** import blew up at module initialisation:
+
+```
+ReferenceError: Cannot access 'THUMBNAIL_EXTENSION_SET' before initialization
+```
+
+It surfaced as every test in an unrelated file failing before the first
+`expect`, which reads like a broken test runner rather than a bad import.
+
+📌 The rule that fixes it: a shared constant belongs in the module with **no
+dependencies of its own** — here `core/library.ts`, which is imported by the
+other and imports nothing back. `bunx tsc --noEmit` cannot be the check for
+this; only running it is.
+
 ## Chrome says it plays HLS, and then does not (2026-08-27)
 
 Chrome 152 answers `"maybe"` to
@@ -249,3 +362,23 @@ tall black band unless you pass `h-auto`.
 were added with inline arrow functions and "removed" with freshly created ones —
 so four listeners leaked per mount. Worth knowing that vendored components are
 now our code: nobody upstream will fix that for us.
+
+## A flaky `probe` that could not be reproduced (2026-08-27)
+
+Reported: in a long-running server the first three `/api/library/item?probe=1`
+calls succeeded and the fourth returned `ProbeFailed`, repeatably-ish, while the
+same spawn loop standalone succeeded every time.
+
+**Not reproduced.** Inside the container, against the real `ffprobe` and the real
+library, `probe()` returned 15/15 sequentially and 2, 4, 8 and 16 in parallel
+with no failures.
+
+The likely explanation is environmental: the report came from a session running
+on the **host**, which has no `ffprobe` — the same report notes putting one on
+the `PATH` to make Duration and Bitrate render. So the failures were probably
+that improvised binary, not our spawn path.
+
+📌 Written down rather than closed silently, because "could not reproduce" is a
+result and the next person deserves to know what was already tried. If it comes
+back **inside the container**, the spawn path in `core/library.ts` is where to
+look, and the two experiments above are the ones not to repeat.

@@ -145,9 +145,25 @@ export const bunSpawner: Spawner = async (req) => {
 
 // --- Structured progress ----------------------------------------------------
 
-/** Files yt-dlp writes beside the media: subtitles today, thumbnails if ever asked for. */
-const SIDECAR_EXTENSIONS = new Set([
+/** Subtitle sidecars, which travel with the video and are collected after the run. */
+const SUBTITLE_SIDECAR_EXTENSIONS = new Set([
   ".vtt", ".srt", ".ass", ".ssa", ".ttml", ".srv1", ".srv2", ".srv3", ".json3", ".lrc", ".sbv",
+]);
+
+/**
+ * The thumbnail, in every form it can arrive in.
+ *
+ * `--convert-thumbnails jpg` makes it a JPEG, which is what media servers read
+ * — but the conversion is an ffmpeg post-processor, so on a machine without
+ * ffmpeg the original survives instead. YouTube serves WebP; other sites serve
+ * PNG. All three are accepted rather than losing the picture over the format.
+ */
+const THUMBNAIL_SIDECAR_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
+
+/** Everything yt-dlp writes *beside* the media file. */
+const SIDECAR_EXTENSIONS = new Set([
+  ...SUBTITLE_SIDECAR_EXTENSIONS,
+  ...THUMBNAIL_SIDECAR_EXTENSIONS,
 ]);
 
 const DL_TAG = "CT-DL";
@@ -789,6 +805,27 @@ export function buildFetchArgs(
     // `--no-abort-on-error` keeps a failed subtitle as a warning. The sidecars
     // that did arrive are collected afterwards by reading the directory, so a
     // partial result is still a result.
+    // 🔴 The thumbnail, as a **sidecar next to the video** — not embedded.
+    //
+    // It is the picture the creator chose, or the frame the site picked, and it
+    // is always a better answer than a frame taken out of the middle of the
+    // file (see `core/thumbnails.ts`). `Name.jpg` beside `Name.mkv` is the
+    // convention Jellyfin, Plex and Emby already read, so this costs one small
+    // file and buys a poster everywhere, not only in CasaTube.
+    //
+    // ⚠️ `--convert-thumbnails jpg` is not cosmetic: YouTube serves WebP, and a
+    // `.webp` poster is invisible to several media servers. The conversion is
+    // an ffmpeg post-processor, so where ffmpeg is missing the original stays —
+    // which is why the collector accepts all three formats.
+    //
+    // ⚠️ A thumbnail that cannot be downloaded is a warning in yt-dlp, never a
+    // failure, so this cannot cost a video. And the file is excluded from the
+    // progress budget by `SIDECAR_EXTENSIONS` — it arrives *first*, like
+    // subtitles do, and without that the bar would jump to 100% before the
+    // video started.
+    "--write-thumbnail",
+    "--convert-thumbnails",
+    "jpg",
     ...(manual.length > 0 ? ["--write-subs"] : []),
     ...(automatic.length > 0 ? ["--write-auto-subs"] : []),
     ...(subLanguages.length > 0 ? ["--sub-langs", subLanguages.join(",")] : []),
@@ -833,9 +870,41 @@ async function listSidecarSubtitles(workDir: string, outputName: string): Promis
     return [];
   }
   return names
-    .filter((n) => n.startsWith(`${outputName}.`) && SIDECAR_EXTENSIONS.has(extname(n)))
+    .filter((n) => n.startsWith(`${outputName}.`) && SUBTITLE_SIDECAR_EXTENSIONS.has(extname(n).toLowerCase()))
     .sort()
     .map((n) => join(workDir, n));
+}
+
+/**
+ * The thumbnail yt-dlp wrote, if it wrote one.
+ *
+ * ⚠️ Found by reading the directory rather than by trusting a name, for the
+ * same reason the subtitles are: `--convert-thumbnails` may or may not have
+ * run, the site decides the original format, and a thumbnail that failed to
+ * download is a **warning**, not an error — the video is there either way.
+ *
+ * Preference order is the extension list's, so a folder left with both the
+ * converted JPEG and an original WebP answers with the JPEG.
+ */
+async function listSidecarThumbnail(workDir: string, outputName: string): Promise<string | undefined> {
+  const { readdir } = await import("node:fs/promises");
+  const { join, extname } = await import("node:path");
+  let names: string[];
+  try {
+    names = await readdir(workDir);
+  } catch {
+    return undefined;
+  }
+  const found = names.filter(
+    (n) => n.startsWith(`${outputName}.`) && THUMBNAIL_SIDECAR_EXTENSIONS.includes(extname(n).toLowerCase()),
+  );
+  found.sort(
+    (a, b) =>
+      THUMBNAIL_SIDECAR_EXTENSIONS.indexOf(extname(a).toLowerCase()) -
+      THUMBNAIL_SIDECAR_EXTENSIONS.indexOf(extname(b).toLowerCase()),
+  );
+  const best = found[0];
+  return best === undefined ? undefined : join(workDir, best);
 }
 
 export function createYtdlpProvider(options: YtdlpOptions = {}): Provider {
@@ -988,9 +1057,11 @@ export function createYtdlpProvider(options: YtdlpOptions = {}): Provider {
         );
       }
 
+      const thumbnailFile = await listSidecarThumbnail(ctx.workDir, plan.outputName);
       return Result.ok({
         file: filePath,
         subtitleFiles: await listSidecarSubtitles(ctx.workDir, plan.outputName),
+        ...(thumbnailFile === undefined ? {} : { thumbnailFile }),
       } satisfies FetchResult);
     },
   };

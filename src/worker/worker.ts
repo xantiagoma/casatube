@@ -10,7 +10,7 @@ import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { JobQueue } from "../core/queue";
 import type { ProviderRegistry } from "../providers/registry";
-import type { DownloadPlan, Job, ProgressUpdate, StageName } from "../core/types";
+import type { DownloadPlan, FetchResult, Job, ProgressUpdate, StageName } from "../core/types";
 import { buildDownloadPlan, videoCodecNotice } from "../core/selection";
 import { demandsBackoff } from "../core/errors";
 import {
@@ -106,7 +106,7 @@ export class Worker {
       // Recovered from the row, not recomputed: a resume that skipped `analyze`
       // would otherwise have nothing to download.
       let plan: DownloadPlan | null = job.plan ?? null;
-      let downloaded: { file: string; subtitleFiles: string[] } | null = null;
+      let downloaded: FetchResult | null = null;
 
       const from = resumeFrom(job);
       const remaining = ["validate", "analyze", "download", "postprocess", "metadata", "move"]
@@ -185,11 +185,11 @@ export class Worker {
     ctx: {
       workDir: string; controller: AbortController;
       plan: DownloadPlan | null;
-      downloaded: { file: string; subtitleFiles: string[] } | null;
+      downloaded: FetchResult | null;
       onProgress(p: ProgressUpdate): void;
       log(line: string): void;
     },
-  ): Promise<Result<{ plan?: DownloadPlan; downloaded?: { file: string; subtitleFiles: string[] } } | null, any>> {
+  ): Promise<Result<{ plan?: DownloadPlan; downloaded?: FetchResult } | null, any>> {
     const { registry, queue } = this.#o;
 
     switch (stage) {
@@ -264,7 +264,16 @@ export class Worker {
           await rm(ctx.downloaded.file, { force: true });
         }
 
-        for (const sub of ctx.downloaded.subtitleFiles) {
+        // Subtitles and the thumbnail travel with the video, keeping their
+        // names — which is what makes them sidecars: `Name.en.srt` and
+        // `Name.jpg` beside `Name.mkv`, the layout every media server reads.
+        // A sidecar that fails to move must not fail the job: the video is
+        // there, and a missing poster is a grey rectangle, not a lost download.
+        const sidecars = [
+          ...ctx.downloaded.subtitleFiles,
+          ...(ctx.downloaded.thumbnailFile === undefined ? [] : [ctx.downloaded.thumbnailFile]),
+        ];
+        for (const sub of sidecars) {
           const subTarget = join(dirname(target), sub.split("/").pop() ?? "sub");
           try { await rename(sub, subTarget); }
           catch { await Bun.write(subTarget, Bun.file(sub)); await rm(sub, { force: true }); }

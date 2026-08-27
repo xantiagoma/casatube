@@ -94,8 +94,14 @@ LABEL org.opencontainers.image.title="CasaTube" \
 # fix metadata — PLAN §13: no transcoding, but it must actually work).
 # libstdc++ is what the bun binary links against; su-exec drops privileges;
 # tini reaps the yt-dlp/ffmpeg children so a cancelled job leaves no zombies.
+# zip streams a bundle of a video with its subtitles and thumbnail. It is used
+# with -0 (store, no compression): an mp4 is already compressed, so deflating it
+# again spends CPU to save almost nothing — and streaming its output keeps
+# memory flat, where building the archive in memory would mean holding a
+# multi-gigabyte file in RAM.
 RUN apk add --no-cache \
         ffmpeg \
+        zip \
         libstdc++ \
         su-exec \
         tini \

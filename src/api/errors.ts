@@ -47,6 +47,9 @@ const STATUS_BY_TAG: Record<string, number> = {
   LocalProbeFailed: 502,
   // Playback
   TranscodeUnavailable: 422,
+  // A thumbnail that cannot exist is a 404, not a fault: the grid draws its
+  // grey rectangle and the page is otherwise correct. See `core/errors.ts`.
+  ThumbnailUnavailable: 404,
   TranscodeBusy: 503,
   // Worker
   StageFailed: 500,
@@ -107,6 +110,8 @@ function describe(error: Taggedish): string {
       return "That destination escapes the library root.";
     case "LocalProbeFailed":
       return `ffprobe could not read that file: ${String(error.detail ?? "unknown reason")}`;
+    case "ThumbnailUnavailable":
+      return `There is no thumbnail for this file: ${String(error.detail ?? "unknown reason")}`;
     case "TranscodeUnavailable":
       return `This file cannot be played in a browser: ${String(error.detail ?? "unknown reason")}`;
     case "TranscodeBusy":

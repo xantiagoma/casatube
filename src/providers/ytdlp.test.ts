@@ -270,6 +270,10 @@ describe("ProgressAccumulator", () => {
     expect(isMediaFile(undefined)).toBe(true);
     expect(isMediaFile("/w/zoo.en.vtt")).toBe(false);
     expect(isMediaFile("/w/zoo.es-419.SRT")).toBe(false);
+    // ⚠️ The thumbnail arrives first, like subtitles do. Counted in the byte
+    // budget it would drive the bar to 100% before the video began.
+    expect(isMediaFile("/w/zoo.jpg")).toBe(false);
+    expect(isMediaFile("/w/zoo.webp")).toBe(false);
   });
 
   test("two files that share a format id are still counted separately", () => {
@@ -333,6 +337,48 @@ test("sidecar subtitle files are reported, other files are not", async () => {
       join(dir, "A Video.en.vtt"),
       join(dir, "A Video.es-419.srt"),
     ]);
+    // The image is a sidecar too, but not a subtitle: it travels in its own
+    // field, because the worker gives it a different name at the far end.
+    expect(Result.isOk(result) && result.value.thumbnailFile).toBe(join(dir, "A Video.jpg"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the thumbnail is found whatever format it arrived in, JPEG preferred", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "casatube-"));
+  try {
+    const file = join(dir, "A Video.mkv");
+    await writeFile(file, "x");
+    // What a machine without ffmpeg leaves behind: the original, unconverted.
+    await writeFile(join(dir, "A Video.webp"), "x");
+    const { spawn } = fakeSpawner({ stdout: [`CT-FILE|${file}`] });
+
+    const onlyWebp = await createYtdlpProvider({ spawn }).fetch(plan(), fakeContext(dir));
+    expect(Result.isOk(onlyWebp) && onlyWebp.value.thumbnailFile).toBe(join(dir, "A Video.webp"));
+
+    await writeFile(join(dir, "A Video.jpg"), "x");
+    const both = await createYtdlpProvider({ spawn: fakeSpawner({ stdout: [`CT-FILE|${file}`] }).spawn }).fetch(
+      plan(),
+      fakeContext(dir),
+    );
+    expect(Result.isOk(both) && both.value.thumbnailFile).toBe(join(dir, "A Video.jpg"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("no thumbnail is not a failure — the video is what matters", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "casatube-"));
+  try {
+    const file = join(dir, "A Video.mkv");
+    await writeFile(file, "x");
+    const { spawn } = fakeSpawner({ stdout: [`CT-FILE|${file}`] });
+
+    const result = await createYtdlpProvider({ spawn }).fetch(plan(), fakeContext(dir));
+
+    expect(Result.isOk(result)).toBe(true);
+    expect(Result.isOk(result) && result.value.thumbnailFile).toBeUndefined();
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -673,6 +719,18 @@ describe("argv", () => {
     expect(args).toContain("--newline");
     // Warnings carry real information; they are logged, not suppressed.
     expect(args).not.toContain("--no-warnings");
+  });
+
+  test("the thumbnail is written as a sidecar, and converted to JPEG", () => {
+    // The provider's picture beats a frame taken out of the middle of the file,
+    // and `Name.jpg` beside `Name.mkv` is what media servers already read.
+    // ⚠️ The conversion is the load-bearing half: YouTube serves WebP, which
+    // several media servers ignore entirely.
+    const args = buildFetchArgs(plan(), "/tmp/w");
+    expect(args).toContain("--write-thumbnail");
+    expect(args[args.indexOf("--convert-thumbnails") + 1]).toBe("jpg");
+    // Not embedded: a sidecar is readable by anything, an embedded cover is not.
+    expect(args).not.toContain("--embed-thumbnail");
   });
 
   test("a literal % in a title does not become a template field", () => {
