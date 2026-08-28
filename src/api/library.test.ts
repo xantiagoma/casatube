@@ -664,3 +664,51 @@ describe("bundle", () => {
     expect(res.status).toBe(400);
   });
 });
+
+// --- Subtitles a browser can actually load (2026-08-28) ----------------------
+
+describe("GET /api/library/subtitle", () => {
+  const SRT = "1\n00:00:01,000 --> 00:00:04,000\nHola, ¿qué tal?\n";
+
+  test("🔴 a SubRip sidecar comes back as WebVTT", async () => {
+    // A `<track>` takes only WebVTT, and a `.srt` served as itself is dropped
+    // by the browser in silence — no cue, no error, no console line. Which is
+    // why the subtitles were downloaded, listed on screen, and unwatchable.
+    writeFileSync(join(root, "Talk.mkv"), "video");
+    writeFileSync(join(root, "Talk.en.srt"), SRT);
+
+    const response = await get("/library/subtitle?path=Talk.en.srt");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/vtt");
+
+    const body = await response.text();
+    expect(body.startsWith("WEBVTT")).toBe(true);
+    expect(body).toContain("00:00:01.000 --> 00:00:04.000");
+    // The comma in the dialogue is not a timestamp and must survive.
+    expect(body).toContain("Hola, ¿qué tal?");
+  });
+
+  test("a WebVTT sidecar is served as it is", async () => {
+    const vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhola\n";
+    writeFileSync(join(root, "Talk.es.vtt"), vtt);
+
+    const response = await get("/library/subtitle?path=Talk.es.vtt");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(vtt);
+  });
+
+  test("🔴 ASS is refused with 415 rather than mangled into VTT", async () => {
+    // It carries positioning, fonts and drawing commands WebVTT cannot express,
+    // so a converted one is a worse subtitle wearing the same name.
+    writeFileSync(join(root, "Talk.ja.ass"), "[Script Info]\n");
+
+    const response = await get("/library/subtitle?path=Talk.ja.ass");
+    expect(response.status).toBe(415);
+    expect(((await response.json()) as { tag: string }).tag).toBe("UnsupportedSubtitle");
+  });
+
+  test("a path that escapes the library is refused, and a missing one is a 404", async () => {
+    expect((await get("/library/subtitle?path=../../etc/passwd")).status).toBe(400);
+    expect((await get("/library/subtitle?path=nope.srt")).status).toBe(404);
+  });
+});

@@ -32,6 +32,7 @@ import {
   readMp4Layout,
   rewritePlaylist,
   sessionId,
+  sessionKey,
   type HlsManager,
 } from "./hls";
 import type { MediaProbe, ProbeStream } from "./library";
@@ -863,5 +864,63 @@ describe("createHlsManager", () => {
 
     expect(existsSync(join(temp, HLS_DIR, sessionId("Film.mkv")))).toBe(false);
     expect((await manager.stats()).sessions).toHaveLength(0);
+  });
+});
+
+
+// --- Choosing an audio track (2026-08-28) -----------------------------------
+
+describe("audio tracks", () => {
+  test("🔴 no index leaves ffmpeg's own choice, exactly as before", () => {
+    // Every session behaved this way before the option existed, and a file with
+    // one audio track still wants it. `-map` appearing unconditionally would
+    // change what every existing playback does.
+    const args = buildFfmpegArgs("/in.mkv", "/out");
+    expect(args).not.toContain("-map");
+  });
+
+  test("🔴 an index maps that audio stream, and keeps the video optional", () => {
+    const args = buildFfmpegArgs("/in.mkv", "/out", { audioIndex: 1 });
+    expect(args.join(" ")).toContain("-map 0:v:0? -map 0:a:1");
+  });
+
+  test("🔴 the video map carries a question mark, or a file with no video fails", () => {
+    // Without it ffmpeg exits with "Stream map '0:v:0' matches no streams",
+    // which would turn choosing an audio track into a failed playback.
+    const args = buildFfmpegArgs("/in.mkv", "/out", { audioIndex: 0 });
+    expect(args).toContain("0:v:0?");
+    expect(args).not.toContain("0:v:0");
+  });
+
+  test("index 0 is a real choice, not the same as absent", () => {
+    expect(buildFfmpegArgs("/in.mkv", "/out", { audioIndex: 0 }).join(" ")).toContain("-map 0:a:0");
+  });
+});
+
+describe("sessionKey and sessionId", () => {
+  test("🔴 two audio tracks of one file are two sessions", () => {
+    // Keying both on the path would hand the second viewer the first one's
+    // remux: the menu moves and the sound does not.
+    expect(sessionKey("a/b.mkv")).toBe("a/b.mkv");
+    expect(sessionKey("a/b.mkv", 1)).not.toBe(sessionKey("a/b.mkv"));
+    expect(sessionKey("a/b.mkv", 0)).not.toBe(sessionKey("a/b.mkv", 1));
+    // And they must not share a directory, or one ffmpeg overwrites the other's
+    // segments while a player is reading them.
+    expect(sessionId("a/b.mkv", 0)).not.toBe(sessionId("a/b.mkv", 1));
+    expect(sessionId("a/b.mkv")).not.toBe(sessionId("a/b.mkv", 0));
+  });
+});
+
+describe("rewritePlaylist with an audio choice", () => {
+  test("🔴 every segment URL carries it, or the segments come from the wrong session", () => {
+    // A query string is not part of how a player resolves a relative URI, so a
+    // segment line naming only the path is fetched from the default remux —
+    // the language would change back without the menu noticing.
+    const playlist = "#EXTM3U\n#EXTINF:6.0,\n00000.ts\n#EXTINF:6.0,\n00001.ts\n";
+    const rewritten = rewritePlaylist(playlist, "a/b.mkv", 1);
+    expect(rewritten).toContain("00000.ts?path=a%2Fb.mkv&audio=1");
+    expect(rewritten).toContain("00001.ts?path=a%2Fb.mkv&audio=1");
+    // And without a choice it is exactly what it was.
+    expect(rewritePlaylist(playlist, "a/b.mkv")).toContain("00000.ts?path=a%2Fb.mkv\n");
   });
 });

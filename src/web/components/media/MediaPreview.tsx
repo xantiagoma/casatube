@@ -21,6 +21,7 @@ import { Film, Music, Play } from "lucide-react";
 
 import {
   MediaPlayer,
+  MediaPlayerCaptions,
   MediaPlayerControls,
   MediaPlayerError,
   MediaPlayerFullscreen,
@@ -31,6 +32,7 @@ import {
   MediaPlayerSeek,
   MediaPlayerSeekBackward,
   MediaPlayerSeekForward,
+  MediaPlayerSettings,
   MediaPlayerTime,
   MediaPlayerVideo,
   MediaPlayerVolume,
@@ -55,6 +57,41 @@ export interface MediaPreviewProps {
   className?: string;
   /** Why there is no player, when there is none. */
   unplayableHint?: string;
+  /**
+   * Sidecar subtitles, already converted to WebVTT by the server.
+   *
+   * 🔴 A `<track>` takes **only** WebVTT, and a `.srt` handed over as itself is
+   * dropped in silence — no cue, no error, no console line. So these carry the
+   * URL of `GET /api/library/subtitle`, never of `/file`.
+   */
+  subtitles?: readonly SubtitleTrack[];
+  /**
+   * Seconds to resume from once this source is ready.
+   *
+   * 🔴 For the audio-track switch, which changes `src` and therefore restarts
+   * the video at zero. Being thrown back to the beginning of a two-hour film
+   * for choosing the Spanish track is not a trade anybody would accept — so the
+   * caller remembers where the viewer was and hands it back.
+   *
+   * ⚠️ Applied **once per source**, on the first `loadedmetadata`. Applying it
+   * on every one would fight the viewer's own seeking.
+   */
+  resumeAt?: number;
+}
+
+export interface SubtitleTrack {
+  /** A WebVTT URL. */
+  src: string;
+  /** What the menu shows. */
+  label: string;
+  /**
+   * A BCP-47 tag, or absent.
+   *
+   * ⚠️ Never guessed. `srclang` is what a browser matches against the viewer's
+   * language preference, and a wrong tag offers Spanish and plays Japanese —
+   * worse than no tag at all.
+   */
+  language?: string;
 }
 
 /** The poster, with the duration chip the reference design puts in the corner. */
@@ -132,8 +169,32 @@ export function MediaPreview({
   kind = "video",
   className,
   unplayableHint,
+  subtitles,
+  resumeAt,
 }: MediaPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const tracks = subtitles ?? [];
+
+  /**
+   * Put the viewer back where they were after the source changed.
+   *
+   * ⚠️ `loadedmetadata`, not `canplay` or an effect body: before metadata
+   * exists the element has no duration, and a `currentTime` set against it is
+   * silently discarded — the seek appears to work and the video starts at zero.
+   */
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || resumeAt === undefined || resumeAt <= 0) return;
+    let done = false;
+    const seek = (): void => {
+      if (done || !videoRef.current) return;
+      done = true;
+      videoRef.current.currentTime = resumeAt;
+    };
+    if (video.readyState >= 1) seek();
+    video.addEventListener("loadedmetadata", seek, { once: true });
+    return () => video.removeEventListener("loadedmetadata", seek);
+  }, [src, resumeAt]);
 
   /**
    * Attach `hls.js` when the source is a playlist the browser cannot open
@@ -195,7 +256,29 @@ export function MediaPreview({
         preload="metadata"
         playsInline
         className="aspect-video w-full"
-      />
+      >
+        {/*
+          ⚠️ **No `default` on any of them.** A `default` track switches itself
+          on, and a person who downloaded English *and* Japanese has not said
+          which one they want to read — guessing puts Japanese over the picture
+          and makes them go and find the way to turn it off. The button and the
+          menu are one click away, and the choice is theirs.
+
+          🔴 The `key` includes the `src`. React reuses a `<track>` at the same
+          position otherwise, and the browser keeps the *old* cues: switching
+          between two library items with subtitles would show the first one's
+          text over the second one's video.
+        */}
+        {tracks.map((track) => (
+          <track
+            key={`${track.src}`}
+            kind="subtitles"
+            src={track.src}
+            label={track.label}
+            {...(track.language ? { srcLang: track.language } : {})}
+          />
+        ))}
+      </MediaPlayerVideo>
       <MediaPlayerLoading />
       <MediaPlayerError />
       <MediaPlayerControls className="flex-col items-start gap-2 px-3">
@@ -225,6 +308,19 @@ export function MediaPreview({
             <MediaPlayerTime />
           </div>
           <div className="ml-auto flex items-center gap-x-1">
+            {/* 🔴 Only when there is something to switch on. A captions button
+                over a video with no subtitles is a control that does nothing —
+                and the menu underneath would say "No captions available",
+                which is a sentence nobody needed to open a menu to learn. */}
+            {tracks.length > 0 ? (
+              <>
+                <MediaPlayerCaptions />
+                {/* The button toggles the first track; the menu is where a
+                    second language is chosen. Both, because with one subtitle
+                    the menu is a detour and with three the button is a guess. */}
+                {tracks.length > 1 ? <MediaPlayerSettings /> : null}
+              </>
+            ) : null}
             <MediaPlayerPlaybackSpeed />
             <MediaPlayerPiP />
             <MediaPlayerFullscreen />

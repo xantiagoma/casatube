@@ -410,6 +410,13 @@ export interface FfmpegArgsOptions {
   segmentSeconds?: number;
   /** From the verdict. `aac`/`mp3`/`ac3` are copied; anything else is re-encoded. */
   audioCodec?: string;
+  /**
+   * Which audio track, counted among the **audio** streams — `0` is the first.
+   *
+   * Absent means ffmpeg's own choice, which is what every session did before
+   * this existed and what a file with one audio track still wants.
+   */
+  audioIndex?: number;
 }
 
 /**
@@ -442,6 +449,21 @@ export function buildFfmpegArgs(input: string, dir: string, options: FfmpegArgsO
     "-hide_banner",
     "-loglevel", "error",
     "-i", input,
+    /**
+     * 🔴 **Which audio, when one was asked for.** Without any `-map`, ffmpeg
+     * picks a single "best" audio stream by its own rules — so a file with
+     * English and Spanish tracks played one of them and the other never left
+     * the server. There was no way to ask for the second.
+     *
+     * ⚠️ `0:v:0?` with the question mark. It makes the video map *optional*, so
+     * the same argument list is still correct for a container that turns out to
+     * have no video stream at all — without it ffmpeg exits with "Stream map
+     * '0:v:0' matches no streams", which would turn choosing an audio track
+     * into a failed playback.
+     */
+    ...(options.audioIndex === undefined
+      ? []
+      : ["-map", "0:v:0?", "-map", `0:a:${options.audioIndex}`]),
     "-c:v", "copy",
     ...(copyAudio ? ["-c:a", "copy"] : ["-c:a", "aac", "-b:a", "192k", "-ac", "2"]),
     "-sn",
@@ -483,8 +505,13 @@ const START_AT_ZERO = "#EXT-X-START:TIME-OFFSET=0,PRECISE=YES";
  * `/api/library/hls/00000.ts` with no idea which file it belongs to. Rewriting
  * on the way out keeps ffmpeg's own output on disk untouched and correct.
  */
-export function rewritePlaylist(playlist: string, relPath: string): string {
-  const suffix = `?path=${encodeURIComponent(relPath)}`;
+export function rewritePlaylist(playlist: string, relPath: string, audioIndex?: number): string {
+  // ⚠️ The audio choice travels with every segment URL. The query string is not
+  // part of how a player resolves a relative URI, so a segment line that
+  // carried only the path would be fetched from the default session.
+  const suffix =
+    `?path=${encodeURIComponent(relPath)}` +
+    (audioIndex === undefined ? "" : `&audio=${audioIndex}`);
   const lines = playlist.split("\n").map((line) => {
     const trimmed = line.trim();
     if (trimmed === "" || trimmed.startsWith("#")) return line;
@@ -528,6 +555,8 @@ export interface HlsSessionInfo {
 interface Session {
   id: string;
   relPath: string;
+  /** Which audio track this remux carries; absent means ffmpeg's own choice. */
+  audioIndex?: number;
   dir: string;
   state: SessionState;
   startedAt: number;
@@ -589,9 +618,18 @@ export interface HlsManager {
   /** Cached per file. The `ffprobe` behind it runs once per (size, mtime). */
   verdict(relPath: string): Promise<Result<PlaybackVerdict, HlsError>>;
   /** Start the session if there is none, and answer with the index. */
-  playlist(relPath: string): Promise<Result<{ body: string; info: HlsSessionInfo }, HlsError>>;
+  playlist(
+    relPath: string,
+    /** Which audio track, among the audio streams. Absent leaves ffmpeg's choice. */
+    audioIndex?: number,
+  ): Promise<Result<{ body: string; info: HlsSessionInfo }, HlsError>>;
   /** One segment, waiting briefly if ffmpeg is writing it right now. */
-  segment(relPath: string, name: string): Promise<Result<{ path: string; size: number }, HlsError>>;
+  segment(
+    relPath: string,
+    name: string,
+    /** ⚠️ Must match the playlist the segment was listed in. */
+    audioIndex?: number,
+  ): Promise<Result<{ path: string; size: number }, HlsError>>;
   stats(): Promise<HlsStats>;
   /** Remove what has gone idle. Returns how many sessions went. */
   sweep(at?: number): Promise<number>;
@@ -616,9 +654,20 @@ function describeCause(cause: unknown): string {
   return code === undefined ? message : `${code}: ${message}`;
 }
 
-/** A short, stable directory name per file — and one that cannot contain a separator. */
-export function sessionId(relPath: string): string {
-  return createHash("sha256").update(relPath).digest("hex").slice(0, 16);
+/**
+ * What identifies one remux: the file, **and which audio track was asked for**.
+ *
+ * 🔴 Not just the path. A file with English and Spanish audio produces two
+ * different remuxes, and keying them both on the path would hand the second
+ * viewer the first one's session — the menu would move and the sound would not.
+ */
+export function sessionKey(relPath: string, audioIndex?: number): string {
+  return audioIndex === undefined ? relPath : `${relPath}#a${audioIndex}`;
+}
+
+/** A short, stable directory name per session — and one that cannot contain a separator. */
+export function sessionId(relPath: string, audioIndex?: number): string {
+  return createHash("sha256").update(sessionKey(relPath, audioIndex)).digest("hex").slice(0, 16);
 }
 
 /**
@@ -772,8 +821,13 @@ export function createHlsManager(options: HlsOptions): HlsManager {
     return rm(session.dir, { recursive: true, force: true }).catch(() => {});
   }
 
-  function spawn(relPath: string, absolute: string, audioCodec: string | undefined): Session {
-    const id = sessionId(relPath);
+  function spawn(
+    relPath: string,
+    absolute: string,
+    audioCodec: string | undefined,
+    audioIndex: number | undefined,
+  ): Session {
+    const id = sessionId(relPath, audioIndex);
     const dir = join(root, id);
     // Synchronous on purpose — see `ensure`. Also removes whatever a previous,
     // discarded session left behind under the same (path-derived) name.
@@ -781,11 +835,20 @@ export function createHlsManager(options: HlsOptions): HlsManager {
     mkdirSync(dir, { recursive: true });
 
     const at = now();
-    const session: Session = { id, relPath, dir, state: "starting", startedAt: at, lastAccessAt: at };
+    const session: Session = {
+      id,
+      relPath,
+      dir,
+      state: "starting",
+      startedAt: at,
+      lastAccessAt: at,
+      ...(audioIndex === undefined ? {} : { audioIndex }),
+    };
 
     const args = buildFfmpegArgs(absolute, dir, {
       segmentSeconds,
       ...(audioCodec === undefined ? {} : { audioCodec }),
+      ...(audioIndex === undefined ? {} : { audioIndex }),
     });
 
     let proc: ReturnType<typeof Bun.spawn>;
@@ -833,9 +896,15 @@ export function createHlsManager(options: HlsOptions): HlsManager {
    * the same directory, which corrupts the playlist as well as burning the CPU
    * twice. The async work (the verdict) happens *before* this is called.
    */
-  function ensure(relPath: string, absolute: string, audioCodec: string | undefined): Result<Session, TranscodeBusy> {
+  function ensure(
+    relPath: string,
+    absolute: string,
+    audioCodec: string | undefined,
+    audioIndex: number | undefined,
+  ): Result<Session, TranscodeBusy> {
     const at = now();
-    const existing = sessions.get(relPath);
+    const key = sessionKey(relPath, audioIndex);
+    const existing = sessions.get(key);
     if (existing !== undefined) {
       const stale = existing.state === "failed" && at - (existing.endedAt ?? existing.startedAt) >= failedRetryMs;
       if (!stale) {
@@ -858,8 +927,8 @@ export function createHlsManager(options: HlsOptions): HlsManager {
       void discard(idle, "making room");
     }
 
-    const session = spawn(relPath, absolute, audioCodec);
-    sessions.set(relPath, session);
+    const session = spawn(relPath, absolute, audioCodec, audioIndex);
+    sessions.set(key, session);
     return Result.ok(session);
   }
 
@@ -907,7 +976,10 @@ export function createHlsManager(options: HlsOptions): HlsManager {
     }
   }
 
-  async function playlist(relPath: string): Promise<Result<{ body: string; info: HlsSessionInfo }, HlsError>> {
+  async function playlist(
+    relPath: string,
+    audioIndex?: number,
+  ): Promise<Result<{ body: string; info: HlsSessionInfo }, HlsError>> {
     const decided = await verdict(relPath);
     if (Result.isError(decided)) return decided;
     if (decided.value.mode === "direct") {
@@ -925,7 +997,7 @@ export function createHlsManager(options: HlsOptions): HlsManager {
     const absolute = resolveInRoot(libraryRoot, relPath);
     if (Result.isError(absolute)) return absolute;
 
-    const session = ensure(relPath, absolute.value, decided.value.audioCodec);
+    const session = ensure(relPath, absolute.value, decided.value.audioCodec, audioIndex);
     if (Result.isError(session)) return session;
 
     const ready = await waitForPlaylist(session.value);
@@ -934,7 +1006,7 @@ export function createHlsManager(options: HlsOptions): HlsManager {
     session.value.lastAccessAt = now();
     const segments = playlistSegments(ready.value);
     return Result.ok({
-      body: rewritePlaylist(ready.value, relPath),
+      body: rewritePlaylist(ready.value, relPath, audioIndex),
       info: info(session.value, segments.length, await bytesOf(session.value.dir)),
     });
   }
@@ -956,11 +1028,19 @@ export function createHlsManager(options: HlsOptions): HlsManager {
    * playlist to catch up, not for a file to stop growing, which is not
    * something a reader can observe.
    */
-  async function segment(relPath: string, name: string): Promise<Result<{ path: string; size: number }, HlsError>> {
+  async function segment(
+    relPath: string,
+    name: string,
+    audioIndex?: number,
+  ): Promise<Result<{ path: string; size: number }, HlsError>> {
     if (!SEGMENT_NAME.test(name)) {
       return Result.err(new NotFound({ what: "hls segment", id: name }));
     }
-    const session = sessions.get(relPath);
+    // ⚠️ The same key the playlist was served from. A segment asked for
+    // without it would be answered from the *default* session — a player
+    // switching language would keep hearing the old track while its menu said
+    // otherwise, which is the failure this key exists to prevent.
+    const session = sessions.get(sessionKey(relPath, audioIndex));
     if (session === undefined) {
       // The session went while the player was watching — swept, evicted, or the
       // server restarted. Nothing to do but say so; the player reloads the

@@ -23,7 +23,7 @@ import { Elysia, t } from "elysia";
 import { Result } from "better-result";
 import { join } from "node:path";
 import { readdir } from "node:fs/promises";
-import { NotFound, TranscodeUnavailable } from "../core/errors";
+import { MountUnavailable, NotFound, TranscodeUnavailable, UnsupportedSubtitle } from "../core/errors";
 
 import {
   DEFAULT_TRASH_RETENTION_DAYS,
@@ -33,6 +33,7 @@ import {
   type SortOrder,
 } from "../core/library";
 import { createThumbnailer, THUMBNAIL_DIR } from "../core/thumbnails";
+import { srtToVtt, SERVABLE_SUBTITLE_FORMATS, VTT_MEDIA_TYPE } from "../core/subtitles";
 import type { AppContext } from "./context";
 import { safeDestination } from "./destination";
 import { fail, statusForTag } from "./errors";
@@ -377,6 +378,61 @@ export function libraryRoutes(ctx: AppContext) {
        * so re-downloading over the same name invalidates it, and `max-age`
        * keeps a scrolled grid from asking twice.
        */
+      /**
+       * One sidecar subtitle, as WebVTT.
+       *
+       * 🔴 A `<track>` element takes **only** WebVTT, and the download writes
+       * whatever the source offered — YouTube hands out `.vtt`, plenty of other
+       * sites hand out `.srt`. So a SubRip file beside a video is a subtitle
+       * nobody can watch until something converts it, and until this route
+       * existed the player was never given one at all.
+       *
+       * ⚠️ **Read whole and converted in memory, deliberately.** A subtitle for
+       * a two-hour film is a few hundred kilobytes; the route that streams
+       * ranges is `/file`, and reaching for it here would buy nothing and cost
+       * the conversion.
+       *
+       * ⚠️ `.ass` and `.ssa` are refused with 415 rather than mangled. They
+       * carry positioning, fonts and drawing commands WebVTT cannot express, so
+       * a converted one is a worse subtitle wearing the same name. They are
+       * still downloadable through `/file`.
+       */
+      .get(
+        "/subtitle",
+        async ({ query }) => {
+          const path = safeDestination(query.path, config.libraryDir);
+          if (Result.isError(path)) return fail(path.error);
+
+          const found = await library.item(path.value);
+          if (Result.isError(found)) return fail(found.error);
+
+          const format = found.value.ext.toLowerCase().replace(/^\./, "");
+          if (!SERVABLE_SUBTITLE_FORMATS.has(format)) {
+            return fail(
+              new UnsupportedSubtitle({ path: path.value, format: format || "unknown" }),
+            );
+          }
+
+          const absolute = join(config.libraryDir, path.value);
+          const source = await Bun.file(absolute)
+            .text()
+            .catch(() => null);
+          if (source === null) {
+            return fail(new MountUnavailable({ path: absolute, detail: "the subtitle could not be read" }));
+          }
+
+          return new Response(srtToVtt(source), {
+            headers: {
+              "content-type": VTT_MEDIA_TYPE,
+              // Sidecars do not change under a name — a new subtitle for the
+              // same video is a new download with a new name.
+              "cache-control": "private, max-age=3600",
+            },
+          });
+        },
+        { query: t.Object({ path: t.String({ minLength: 1 }) }) },
+      )
+
       .get(
         "/thumbnail",
         async ({ query, request }) => {

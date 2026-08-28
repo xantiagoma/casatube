@@ -10,7 +10,7 @@
  * ⚠️ The library is usually a network mount. A failure here is rendered in
  * place and takes nothing else with it.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearch } from "@tanstack/react-router";
 import {
   Check,
@@ -40,10 +40,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDockedPanels } from "@/hooks/use-media-query";
 import { cn } from "@/lib/utils";
 import type { LibraryItem } from "../../core/library";
+import { SERVABLE_SUBTITLE_FORMATS, subtitleLanguageTag } from "../../core/subtitles";
 import { Donut } from "../components/charts/Sparkline";
 import { EmptyState, ErrorState } from "../components/common/Bits";
 import { PageHeader } from "../components/layout/AppShell";
@@ -52,7 +55,7 @@ import { LibraryToolbar } from "../components/library/LibraryToolbar";
 import { ConvertingBadge, FileTranscodes, TranscodeJobsCard } from "../components/library/TranscodeJobs";
 import { TranscodeDialog } from "../components/library/TranscodeDialog";
 import { activeTranscodes, hasActiveTranscode, transcodesForPath } from "../components/library/transcode-view";
-import { MediaPreview } from "../components/media/MediaPreview";
+import { MediaPreview, type SubtitleTrack } from "../components/media/MediaPreview";
 import { formatBytes, formatDateTime, formatDuration } from "../data/format";
 import {
   canPlayHlsNatively,
@@ -61,6 +64,7 @@ import {
   libraryBundleUrl,
   libraryFileUrl,
   libraryHlsUrl,
+  librarySubtitleUrl,
   libraryThumbnailUrl,
   normaliseExt,
   useEmptyTrash,
@@ -103,6 +107,55 @@ function playableUrl(item: LibraryItem): string | null {
   // everything else goes through `hls.js`, so this no longer returns null for
   // a browser: only for a file nothing can play.
   return libraryHlsUrl(item.path);
+}
+
+/**
+ * The sidecars a `<track>` can actually take, as tracks.
+ *
+ * 🔴 The subtitles were downloaded, listed in this very panel, and **never
+ * reached the player**. Two things were missing: a route that converts SubRip
+ * to WebVTT (a `<track>` takes nothing else, and a `.srt` is dropped in
+ * silence) and this — handing them over.
+ *
+ * ⚠️ `.ass` and `.ssa` are filtered out here rather than offered and refused at
+ * 415. They carry positioning and styling WebVTT cannot express, so they are
+ * not a track; they stay in the list below, where they can be downloaded.
+ *
+ * The label is the language when the filename declares one — `Foo.en.srt` — and
+ * the filename otherwise, because "en" and "English subtitles" are both better
+ * than a menu of identical entries.
+ */
+function playableSubtitles(item: LibraryItem): SubtitleTrack[] {
+  return item.subtitles
+    .filter((subtitle) => SERVABLE_SUBTITLE_FORMATS.has(subtitle.ext.toLowerCase()))
+    .map((subtitle) => {
+      const tag = subtitleLanguageTag(subtitle.language);
+      const name = languageName(subtitle.language) ?? subtitle.name;
+      return {
+        src: librarySubtitleUrl(subtitle.path),
+        label: subtitle.forced ? `${name} (forced)` : name,
+        ...(tag ? { language: tag } : {}),
+      };
+    });
+}
+
+/**
+ * A language tag as a word, when the browser knows one.
+ *
+ * `Intl.DisplayNames` is the same trick `TrackPickers` uses: "Latin American
+ * Spanish" with no table to maintain. Returns `undefined` for a tag it does not
+ * recognise, so the caller can fall back to the filename rather than show the
+ * raw tag back.
+ */
+function languageName(tag: string | undefined): string | undefined {
+  if (!tag) return undefined;
+  try {
+    const display = new Intl.DisplayNames([navigator.language, "en"], { type: "language" });
+    const name = display.of(tag);
+    return name && name.toLowerCase() !== tag.toLowerCase() ? name : tag;
+  } catch {
+    return tag;
+  }
 }
 
 /** Why there is no player, said in terms of the thing that is actually wrong. */
@@ -378,6 +431,26 @@ function DetailPanel({
   const transcodes = useTranscodes();
   const [confirming, setConfirming] = useState(false);
 
+  /**
+   * The chosen audio track, and where the viewer was when they chose it.
+   *
+   * `null` is "whatever ffmpeg picks", which is what a file with one audio
+   * track wants and what every session did before this existed — deliberately
+   * not the same as `0`, which pins the first track and gets its own remux.
+   *
+   * ⚠️ Keyed on `path` through the `useEffect` below rather than on a `key`
+   * prop, because the panel stays mounted while the selection moves from one
+   * file to another: without the reset, choosing the Spanish track on one video
+   * would ask for track 1 of the next one, which may be a different language or
+   * may not exist.
+   */
+  const [audio, setAudio] = useState<number | null>(null);
+  const [resumeAt, setResumeAt] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    setAudio(null);
+    setResumeAt(undefined);
+  }, [path]);
+
   if (detail.isPending) return <div className="p-4"><Skeleton className="h-64 w-full" /></div>;
   if (detail.isError) {
     return (
@@ -392,8 +465,21 @@ function DetailPanel({
   const mine = transcodesForPath(jobs, item.path);
   const converting = hasActiveTranscode(jobs, item.path);
   const verdict = playback.data;
-  const src = verdict === undefined ? playableUrl(item) : verdict.url;
-  const isHls = src !== null && src.includes("/hls/");
+  const baseSrc = verdict === undefined ? playableUrl(item) : verdict.url;
+  const isHls = baseSrc !== null && baseSrc.includes("/hls/");
+
+  /**
+   * 🔴 The audio tracks, and the one being played.
+   *
+   * A file with several audio languages used to play whichever one ffmpeg
+   * picked, with no way to ask for another: the HLS remux ran with no `-map`,
+   * so the other tracks never left the server. `audio` is an index **among the
+   * audio streams**, which is what `-map 0:a:N` counts — not the absolute
+   * stream index the probe reports.
+   */
+  const audioTracks = (probe?.streams ?? []).filter((stream) => stream.kind === "audio");
+  const src =
+    baseSrc !== null && isHls && audio !== null ? `${baseSrc}&audio=${audio}` : baseSrc;
   // The server's sentence when it has one: it names the real obstacle
   // ("fragmented", "VP9 cannot be carried by HLS"), which the extension-only
   // fallback below can only guess at.
@@ -424,7 +510,61 @@ function DetailPanel({
           kind={kindOf(item)}
           unplayableHint={hint}
           hls={isHls}
+          subtitles={playableSubtitles(item)}
+          resumeAt={resumeAt}
         />
+
+        {/*
+          🔴 **Only over HLS, and only with more than one track.** A direct-play
+          MP4 is handed to the browser whole, so choosing a track is the
+          browser's own business and re-fetching it with a query parameter would
+          change nothing. Over HLS the choice is the server's — `-map 0:a:N` on
+          the remux — which is why it can be offered here and nowhere else.
+        */}
+        {isHls && audioTracks.length > 1 ? (
+          <div className="space-y-1.5">
+            <Label htmlFor="audio-track" className="text-xs">
+              Audio track
+            </Label>
+            <Select
+              value={audio === null ? "auto" : String(audio)}
+              onValueChange={(next) => {
+                // Remember where they were: changing `src` restarts the video,
+                // and being thrown to the beginning of a two-hour film for
+                // choosing a language is not a trade anybody would accept.
+                const video = document.querySelector<HTMLVideoElement>("[data-slot=media-player-video]");
+                setResumeAt(video && video.currentTime > 1 ? video.currentTime : undefined);
+                setAudio(next === "auto" ? null : Number(next));
+              }}
+            >
+              <SelectTrigger id="audio-track" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">Default track</SelectItem>
+                {audioTracks.map((stream, index) => (
+                  <SelectItem key={stream.index} value={String(index)}>
+                    {[
+                      languageName(stream.language) ?? `Track ${index + 1}`,
+                      stream.title,
+                      stream.codec,
+                      stream.channels ? `${stream.channels}ch` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {/* ⚠️ Said, not discovered. Switching starts a **new** remux from
+                the beginning of the file; the playback resumes where it was,
+                but the first few seconds after the switch are ffmpeg catching
+                up rather than a stall. */}
+            <p className="text-xs text-muted-foreground">
+              Changing this restarts the remux from the beginning of the file and picks up where you were.
+            </p>
+          </div>
+        ) : null}
 
         {/*
           * 🔴 The one place where converting is the *answer* rather than an

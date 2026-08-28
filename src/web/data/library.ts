@@ -72,6 +72,18 @@ export function libraryFileUrl(path: string, options: { download?: boolean } = {
 }
 
 /**
+ * One sidecar subtitle, converted to WebVTT — `GET /api/library/subtitle`.
+ *
+ * ⚠️ **Not `libraryFileUrl`.** A `<track>` takes only WebVTT, and a `.srt`
+ * served as itself is a track the browser drops in silence: no cue, no error,
+ * no console line. This route is the conversion.
+ */
+export function librarySubtitleUrl(path: string): string {
+  const query = new URLSearchParams({ path });
+  return `/api/library/subtitle?${query.toString()}`;
+}
+
+/**
  * The HLS index for a file no browser opens directly — `GET
  * /api/library/hls/index.m3u8`, which starts an on-demand remux of the video
  * stream (copied, never re-encoded) and answers as soon as the first segment

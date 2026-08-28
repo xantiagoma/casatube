@@ -356,6 +356,29 @@ somebody else's subtitles. Sidecars follow the final name, suffix included.
 the one place `replace` is the default. The file it replaces goes to `.trash/`,
 where it stays restorable for the retention window; nothing is deleted.
 
+### Subtitles and audio tracks in the player
+
+**Subtitles.** Sidecars are served through `GET /api/library/subtitle`, which
+converts SubRip to WebVTT on the way out — a `<track>` element takes nothing
+else, and a `.srt` handed over as itself is dropped by the browser in silence.
+`.ass` and `.ssa` answer 415 instead: they carry positioning, fonts and drawing
+commands WebVTT cannot express, so a converted one would be a worse subtitle
+wearing the same name. They remain downloadable.
+
+⚠️ No track switches itself on. A file with two languages has not told anyone
+which one to read, so the captions button and the menu beside it are where the
+choice is made.
+
+**Audio.** A file with several audio tracks plays through HLS, and the remux
+carries **one** of them. `GET /api/library/hls/index.m3u8?path=…&audio=N` picks
+which — `N` counts among the audio streams, so `0` is the first — and the
+player's *Audio track* selector is that parameter.
+
+📌 Each choice is its own remux and its own session, so switching starts ffmpeg
+again from the beginning of the file; playback resumes where it was. Sessions
+are still capped by `HLS_MAX_SESSIONS`, and two tracks of one film are two of
+them.
+
 ### Notifications
 
 Notifications are rows, because one that fires while the tab is closed is still

@@ -153,7 +153,7 @@ export function hlsRoutes(ctx: AppContext) {
           const path = safeDestination(query.path, config.libraryDir);
           if (Result.isError(path)) return fail(path.error);
 
-          const answered = await manager.playlist(path.value);
+          const answered = await manager.playlist(path.value, query.audio);
           if (Result.isError(answered)) return fail(answered.error);
 
           return new Response(answered.value.body, {
@@ -163,7 +163,20 @@ export function hlsRoutes(ctx: AppContext) {
             },
           });
         },
-        { query: t.Object({ path: t.String({ minLength: 1 }) }) },
+        {
+          query: t.Object({
+            path: t.String({ minLength: 1 }),
+            /**
+             * Which audio track, counted among the audio streams.
+             *
+             * ⚠️ Absent is **not** the same as `0`: absent leaves ffmpeg its own
+             * choice, which is what a file with one audio track wants and what
+             * every session did before this existed. Sending `0` pins the first
+             * track explicitly and gets its own session.
+             */
+            audio: t.Optional(t.Integer({ minimum: 0, maximum: 63 })),
+          }),
+        },
       )
 
       /**
@@ -184,7 +197,7 @@ export function hlsRoutes(ctx: AppContext) {
             return new Response(null, { status: 404 });
           }
 
-          const found = await manager.segment(path.value, params.segment);
+          const found = await manager.segment(path.value, params.segment, query.audio);
           if (Result.isError(found)) {
             return new Response(null, { status: statusForTag(found.error._tag) });
           }
@@ -197,7 +210,13 @@ export function hlsRoutes(ctx: AppContext) {
             },
           });
         },
-        { query: t.Object({ path: t.String({ minLength: 1 }) }), params: t.Object({ segment: t.String() }) },
+        {
+          query: t.Object({
+            path: t.String({ minLength: 1 }),
+            audio: t.Optional(t.Integer({ minimum: 0, maximum: 63 })),
+          }),
+          params: t.Object({ segment: t.String() }),
+        },
       )
   );
 }

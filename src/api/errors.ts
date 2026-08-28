@@ -52,6 +52,9 @@ const STATUS_BY_TAG: Record<string, number> = {
   LocalProbeFailed: 502,
   // Playback
   TranscodeUnavailable: 422,
+  // 415: the request was understood and the *format* is the thing we cannot
+  // serve. Never retryable — the file will not become a different format.
+  UnsupportedSubtitle: 415,
   // A thumbnail that cannot exist is a 404, not a fault: the grid draws its
   // grey rectangle and the page is otherwise correct. See `core/errors.ts`.
   ThumbnailUnavailable: 404,
@@ -129,6 +132,11 @@ function describe(error: Taggedish): string {
       return `A job that is ${String(error.from ?? "in this state")} cannot become ${String(error.to ?? "that")}.`;
     case "LeaseLost":
       return "Another worker took this job.";
+    case "UnsupportedSubtitle":
+      return (
+        `${String(error.format ?? "That format").toUpperCase()} subtitles cannot be shown in a browser — ` +
+        "they carry styling WebVTT has no way to express. The file can still be downloaded."
+      );
     case "PluginRejected":
       return (
         `The "${String(error.plugin ?? "unknown")}" plugin failed at ` +

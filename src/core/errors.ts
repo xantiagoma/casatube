@@ -101,6 +101,20 @@ export class PluginRejected extends TaggedError("PluginRejected")<{
   detail: string;
 }> {}
 
+/**
+ * A subtitle format a browser cannot be given.
+ *
+ * ⚠️ 415 rather than a best-effort conversion. `.ass` and `.ssa` carry
+ * positioning, fonts and drawing commands WebVTT has no way to express, so a
+ * converted one is not the subtitle that was downloaded — it is a worse
+ * subtitle wearing its name, and the viewer has no way to tell. The file stays
+ * downloadable; it is simply not offered as a track.
+ */
+export class UnsupportedSubtitle extends TaggedError("UnsupportedSubtitle")<{
+  path: string;
+  format: string;
+}> {}
+
 /** The user cancelled, or the process was interrupted. Not a failure. */
 export class Cancelled extends TaggedError("Cancelled")<{ jobId: string }> {}
 
