@@ -398,6 +398,81 @@ describe("DELETE and retry", () => {
   });
 });
 
+describe("naming a download", () => {
+  test("a typed name and a conflict policy are stored on the job", async () => {
+    const app = await makeApp();
+    const body = (await (
+      await post(app, "/api/jobs", {
+        url: "https://example.test/a",
+        destination: "",
+        outputName: "Charla sobre nada",
+        onConflict: "replace",
+      })
+    ).json()) as { job: { outputName: string; onConflict: string } };
+
+    expect(body.job.outputName).toBe("Charla sobre nada");
+    expect(body.job.onConflict).toBe("replace");
+  });
+
+  test("🔴 omitting the policy means suffix, and never replace", async () => {
+    // The two readings of a collision are "download this again" and "these are
+    // two different videos"; only the first is safe to guess, and guessing it
+    // wrong destroys a file.
+    const app = await makeApp();
+    const body = (await (
+      await post(app, "/api/jobs", { url: "https://example.test/a", destination: "" })
+    ).json()) as { job: { onConflict: string; outputName: string | null } };
+
+    expect(body.job.onConflict).toBe("suffix");
+    expect(body.job.outputName).toBeNull();
+  });
+
+  test("a policy the server does not know is refused", async () => {
+    const app = await makeApp();
+    const response = await post(app, "/api/jobs", {
+      url: "https://example.test/a",
+      destination: "",
+      onConflict: "overwrite",
+    });
+    expect(response.status).toBe(422);
+  });
+
+  test("🔴 redownload replaces, because it means *this* file", async () => {
+    // The one place `replace` is the right default: the route only ever
+    // re-queues a job that already exists, so "the name it already has" is a
+    // fact rather than a guess. A suffix here would leave the caller to clean
+    // up after a repair.
+    const app = await makeApp();
+    const created = (await (
+      await post(app, "/api/jobs", {
+        url: "https://example.test/a",
+        destination: "",
+        outputName: "Keep this name",
+      })
+    ).json()) as { job: { id: string } };
+    await queue.update(created.job.id, { status: "done" });
+
+    const again = (await (
+      await post(app, `/api/jobs/${created.job.id}/redownload`, {})
+    ).json()) as { job: { onConflict: string; outputName: string } };
+
+    expect(again.job.onConflict).toBe("replace");
+    // And it keeps the name, or it would not be replacing anything.
+    expect(again.job.outputName).toBe("Keep this name");
+  });
+
+  test("the probe previews the filename it would write", async () => {
+    // PLAN §15: caught before 800 MB, not after. The provider's title is "A
+    // talk about nothing"; what matters is that a name comes back at all and
+    // that it is the cleaned one.
+    const app = await makeApp();
+    const body = (await (
+      await post(app, "/api/probe", { url: "https://example.test/a" })
+    ).json()) as { outputName: string };
+    expect(body.outputName).toBe("A talk about nothing");
+  });
+});
+
 describe("POST /api/jobs/:id/priority", () => {
   test("moves a waiting job, and the list order follows", async () => {
     const app = await makeApp();

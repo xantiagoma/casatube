@@ -51,6 +51,73 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+interface NameCheck {
+  name: string;
+  taken: boolean;
+  suggestion: string;
+  using: string[];
+  destination: string;
+}
+
+async function nameCheck(libraryDir: string, destination: string, name: string): Promise<Response> {
+  const query = new URLSearchParams({ destination, name });
+  return appFor(libraryDir).handle(new Request(`http://local/api/destinations/name-check?${query}`));
+}
+
+describe("GET /api/destinations/name-check", () => {
+  test("a free name comes back free, in a folder that does not exist yet", async () => {
+    // Not a failure: the move stage creates the folder. Reporting it as an
+    // error would make an ordinary first download look broken.
+    const body = (await (await nameCheck(root, "Talks", "A Talk")).json()) as NameCheck;
+    expect(body).toMatchObject({ name: "A Talk", taken: false, suggestion: "A Talk", using: [] });
+  });
+
+  test("🔴 a taken name says what is using it, and what to use instead", async () => {
+    mkdirSync(join(root, "Talks"));
+    writeFileSync(join(root, "Talks", "A Talk.mkv"), "video");
+    writeFileSync(join(root, "Talks", "A Talk.en.srt"), "subs");
+
+    const body = (await (await nameCheck(root, "Talks", "A Talk")).json()) as NameCheck;
+    expect(body.taken).toBe(true);
+    expect(body.suggestion).toBe("A Talk (2)");
+    // Named, not counted: "2 files" is something to go and decode.
+    expect(body.using.sort()).toEqual(["A Talk.en.srt", "A Talk.mkv"]);
+  });
+
+  test("🔴 a lone sidecar takes the name too", async () => {
+    mkdirSync(join(root, "Talks"));
+    writeFileSync(join(root, "Talks", "A Talk.en.srt"), "subs");
+
+    const body = (await (await nameCheck(root, "Talks", "A Talk")).json()) as NameCheck;
+    expect(body.taken).toBe(true);
+    expect(body.using).toEqual(["A Talk.en.srt"]);
+  });
+
+  test("🔴 the answer is the cleaned name, so a slash cannot look like a folder", async () => {
+    const body = (await (await nameCheck(root, "", "../etc/passwd")).json()) as NameCheck;
+    expect(body.name).not.toContain("/");
+    expect(body.taken).toBe(false);
+  });
+
+  test("a destination that escapes the library is refused", async () => {
+    const response = await nameCheck(root, "../escaped", "A Talk");
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { tag: string }).tag).toBe("PathOutsideRoot");
+  });
+
+  test("🔴 a library that cannot be read is not reported as free", async () => {
+    // "The folder is not there" and "the folder could not be read" are
+    // different answers. Collapsing them would tell the form a name is free
+    // because nothing could look — and the download would land beside a file
+    // nobody could see.
+    const file = join(root, "not-a-folder");
+    writeFileSync(file, "this is a file");
+    const response = await nameCheck(root, "not-a-folder", "A Talk");
+    expect(response.status).toBe(503);
+    expect(((await response.json()) as { tag: string }).tag).toBe("MountUnavailable");
+  });
+});
+
 describe("GET /api/destinations", () => {
   test("lists the folders that exist, two levels deep", async () => {
     mkdirSync(join(root, "youtube", "talks"), { recursive: true });

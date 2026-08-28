@@ -26,7 +26,7 @@ import { Result } from "better-result";
 import { resolvePreferences } from "../core/queue";
 import type { AppContext } from "./context";
 import { fail } from "./errors";
-import { videoCodecNotice } from "../core/selection";
+import { toOutputName, videoCodecNotice } from "../core/selection";
 import { mediaOptions, suggestFor } from "./options";
 import { preferencesSchema } from "./schemas";
 
@@ -65,6 +65,16 @@ export function probeRoutes(ctx: AppContext) {
         info: info.value,
         options: mediaOptions(info.value, preferences),
         suggested: suggestFor(info.value, preferences),
+        /**
+         * 🔴 The filename, before anything is queued — PLAN §15's *"so a bad
+         * name is caught before 800 MB, not after"*, which until now was a
+         * sentence in the plan and nothing in the product.
+         *
+         * The **cleaned** name, produced by the same function the download plan
+         * uses, so the form shows what would really be written rather than the
+         * title with its emoji and channel branding still in it.
+         */
+        outputName: toOutputName(info.value.title, info.value.externalId),
         warnings: notice ? [notice] : [],
       };
     },

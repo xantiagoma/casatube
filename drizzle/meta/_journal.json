@@ -57,6 +57,13 @@
       "when": 1787874457924,
       "tag": "0007_hard_genesis",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1787877351328,
+      "tag": "0008_lying_goliath",
+      "breakpoints": true
     }
   ]
 }

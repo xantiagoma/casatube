@@ -13,12 +13,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result } from "better-result";
 import { openDb, closeDb } from "../core/db";
-import { openJobQueue, shutdownEmbeddedQueue } from "../core/queue";
+import { openJobQueue, shutdownEmbeddedQueue, type EnqueueInput, type JobQueue } from "../core/queue";
 import { createRegistry } from "../providers/registry";
 import { Worker } from "./worker";
 import { createPluginRuntime, type PluginRuntime } from "../core/plugin-runtime";
 import { DEFAULT_PREFERENCES } from "../core/types";
-import type { Provider } from "../core/types";
+import type { Job, Provider } from "../core/types";
 
 let root: string;
 
@@ -390,6 +390,182 @@ test("🔴 an observer that throws does not fail a download that worked", async 
 
   expect(Result.unwrap(await queue.get(queued.job.id)).status).toBe("done");
   expect(await readdir(join(root, "library", "Videos"))).toHaveLength(1);
+
+  await queue.close();
+  closeDb(db);
+});
+
+// --- Names, and never overwriting one (2026-08-28) --------------------------
+
+/** A provider that writes a video, a subtitle and a poster, all on one stem. */
+function sidecarProvider(): Provider {
+  return {
+    ...halfwayProvider({}),
+    async fetch(plan, ctx) {
+      await mkdir(ctx.workDir, { recursive: true });
+      const file = join(ctx.workDir, `${plan.outputName}.mkv`);
+      const subtitle = join(ctx.workDir, `${plan.outputName}.en.srt`);
+      const poster = join(ctx.workDir, `${plan.outputName}.jpg`);
+      await writeFile(file, "video");
+      await writeFile(subtitle, "1\n00:00:00,000 --> 00:00:01,000\nhi\n");
+      await writeFile(poster, "poster");
+      return Result.ok({ file, subtitleFiles: [subtitle], thumbnailFile: poster });
+    },
+  };
+}
+
+async function runOne(
+  queue: JobQueue,
+  worker: Worker,
+  input: EnqueueInput,
+): Promise<Job> {
+  const queued = Result.unwrap(await queue.enqueue(input));
+  await worker.run(Result.unwrap(await queue.claimNext("slot-1")) as never);
+  return Result.unwrap(await queue.get(queued.job.id));
+}
+
+test("🔴 two videos with the same title stay two files", async () => {
+  // `rename` on POSIX silently replaces, so the second download used to destroy
+  // the first — and `stat(target)` then confirmed the overwrite as a success,
+  // because a non-empty file was indeed there.
+  const { db, queue, worker } = await boot(halfwayProvider({}));
+
+  const first = await runOne(queue, worker, { url: "https://example.test/one", destination: "Videos" });
+  const second = await runOne(queue, worker, { url: "https://example.test/two", destination: "Videos" });
+
+  const files = (await readdir(join(root, "library", "Videos"))).sort();
+  expect(files).toEqual(["A Video (2).mkv", "A Video.mkv"]);
+  // And the row says which one it actually is, not what the plan predicted.
+  expect(first.outputFile?.endsWith("A Video.mkv")).toBe(true);
+  expect(second.outputFile?.endsWith("A Video (2).mkv")).toBe(true);
+  // Said out loud on the job, because the file is not called what it was going
+  // to be called.
+  expect(second.log.join("\n")).toContain("saved as \"A Video (2)\"");
+
+  await queue.close();
+  closeDb(db);
+});
+
+test("🔴 sidecars follow the suffixed name, or they attach to the wrong video", async () => {
+  // `Talk (2).mkv` beside `Talk.en.srt` is worse than no subtitle: every media
+  // server reads that subtitle as belonging to the *other* video.
+  const { db, queue, worker } = await boot(sidecarProvider());
+
+  await runOne(queue, worker, { url: "https://example.test/one", destination: "Videos" });
+  await runOne(queue, worker, { url: "https://example.test/two", destination: "Videos" });
+
+  const files = (await readdir(join(root, "library", "Videos"))).sort();
+  expect(files).toEqual([
+    "A Video (2).en.srt",
+    "A Video (2).jpg",
+    "A Video (2).mkv",
+    "A Video.en.srt",
+    "A Video.jpg",
+    "A Video.mkv",
+  ]);
+
+  await queue.close();
+  closeDb(db);
+});
+
+test("🔴 a name is taken by its sidecars too, not only by the video", async () => {
+  // A folder holding `Talk.en.srt` and no `Talk.mkv` — a half-cleaned library,
+  // or a subtitle downloaded on its own. Dropping a new `Talk.mkv` in beside it
+  // adopts somebody else's subtitles.
+  const { db, queue, worker } = await boot(halfwayProvider({}));
+  await mkdir(join(root, "library", "Videos"), { recursive: true });
+  await writeFile(join(root, "library", "Videos", "A Video.en.srt"), "not ours");
+
+  const job = await runOne(queue, worker, { url: "https://example.test/one", destination: "Videos" });
+
+  expect(job.outputFile?.endsWith("A Video (2).mkv")).toBe(true);
+  expect(await Bun.file(join(root, "library", "Videos", "A Video.en.srt")).text()).toBe("not ours");
+
+  await queue.close();
+  closeDb(db);
+});
+
+test("a name typed by a person beats the title", async () => {
+  const { db, queue, worker } = await boot(halfwayProvider({}));
+
+  const job = await runOne(queue, worker, {
+    url: "https://example.test/one",
+    destination: "Videos",
+    outputName: "Charla sobre nada",
+  });
+
+  expect(await readdir(join(root, "library", "Videos"))).toEqual(["Charla sobre nada.mkv"]);
+  expect(job.outputFile?.endsWith("Charla sobre nada.mkv")).toBe(true);
+
+  await queue.close();
+  closeDb(db);
+});
+
+test("🔴 a typed name is cleaned, so a slash cannot become a folder", async () => {
+  const { db, queue, worker } = await boot(halfwayProvider({}));
+
+  const job = await runOne(queue, worker, {
+    url: "https://example.test/one",
+    destination: "Videos",
+    outputName: "../../etc/passwd",
+  });
+
+  const files = await readdir(join(root, "library", "Videos"));
+  expect(files).toHaveLength(1);
+  expect(files[0]).not.toContain("/");
+  expect(job.outputFile?.startsWith(join(root, "library", "Videos"))).toBe(true);
+
+  await queue.close();
+  closeDb(db);
+});
+
+test("🔴 replace sends the old copy to the trash rather than deleting it", async () => {
+  // "Download this again" is a reasonable thing to mean and a terrible thing to
+  // be wrong about, so the file it replaces stays restorable.
+  const { db, queue, worker } = await boot(sidecarProvider());
+
+  await runOne(queue, worker, { url: "https://example.test/one", destination: "Videos" });
+  const second = await runOne(queue, worker, {
+    url: "https://example.test/two",
+    destination: "Videos",
+    onConflict: "replace",
+  });
+
+  // The new one has the plain name — no suffix — and the old one is gone from
+  // the folder but not from the disk.
+  const files = (await readdir(join(root, "library", "Videos"))).sort();
+  expect(files).toEqual(["A Video.en.srt", "A Video.jpg", "A Video.mkv"]);
+  expect(second.outputFile?.endsWith("A Video.mkv")).toBe(true);
+  expect(second.log.join("\n")).toContain(".trash");
+
+  /**
+   * 🔴 The video and its **subtitles** are one trash entry, so restoring it is
+   * one action and brings them back together.
+   *
+   * ⚠️ The poster is a second entry, and that is `library.remove`'s existing
+   * rule rather than a decision made here: it sweeps `SUBTITLE_EXTENSIONS` and
+   * nothing else. Asserted rather than glossed over — restoring the video gets
+   * the subtitles and not the `.jpg`, and the library regenerates a thumbnail
+   * from a frame when one is missing.
+   */
+  const trashed = (await readdir(join(root, "library", ".trash"))).filter((n) => n !== "trash.jsonl");
+  const contents = (
+    await Promise.all(trashed.map((entry) => readdir(join(root, "library", ".trash", entry))))
+  )
+    .map((names) => names.sort().join(", "))
+    .sort();
+  expect(contents).toEqual(["A Video.en.srt, A Video.mkv", "A Video.jpg"]);
+
+  await queue.close();
+  closeDb(db);
+});
+
+test("suffix is the default, because guessing 'replace' wrong destroys a file", async () => {
+  const { db, queue, worker } = await boot(halfwayProvider({}));
+  const job = Result.unwrap(
+    await queue.enqueue({ url: "https://example.test/one", destination: "Videos" }),
+  );
+  expect(job.job.onConflict).toBe("suffix");
 
   await queue.close();
   closeDb(db);

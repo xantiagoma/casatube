@@ -26,6 +26,7 @@ import { MountUnavailable } from "../core/errors";
 import type { AppContext } from "./context";
 import { fail } from "./errors";
 import { safeDestination } from "./destination";
+import { freeStem, stemIsTaken, toOutputName } from "../core/selection";
 
 /** Generous for a spinning disk, short enough that a dead mount is obvious. */
 const LIST_TIMEOUT_MS = 5_000;
@@ -179,6 +180,81 @@ export function destinationRoutes(ctx: AppContext) {
           at: new Date().toISOString(),
         };
       })
+
+      /**
+       * Is this filename free in that folder — and if not, what is using it?
+       *
+       * 🔴 The same trade `POST /api/destinations` makes: find out *before*
+       * 800 MB rather than after. The move stage never overwrites, so a taken
+       * name is not a disaster any more — it lands `Name (2)` and says so — but
+       * "I meant to replace that" and "these are two different videos" are
+       * decisions only the person queueing can make, and they can only make
+       * them if they are told.
+       *
+       * ⚠️ **Advisory, and it says so by being a separate call.** The folder can
+       * change between this answer and the move; the move stage checks again,
+       * with a listing of its own, and that check is the one that is
+       * load-bearing. Two checks, and only the late one decides.
+       *
+       * The name is cleaned here with exactly the function the plan uses, so
+       * what comes back is the name that would really be written — a slash
+       * typed into the box does not become a folder, and the form shows that
+       * before it is queued rather than after.
+       */
+      .get(
+        "/name-check",
+        async ({ query }) => {
+          const destination = safeDestination(query.destination ?? "", config.libraryDir);
+          if (Result.isError(destination)) return fail(destination.error);
+
+          const name = toOutputName(query.name);
+          const folder = join(config.libraryDir, destination.value);
+          /**
+           * 🔴 "The folder is not there" and "the folder could not be read" are
+           * different answers and must not collapse into one.
+           *
+           * A folder that does not exist yet holds nothing — a real answer, and
+           * the move stage creates it. A mount that is asleep holds *unknown*,
+           * and reporting that as "the name is free" is the silent substitution
+           * this whole change is about: the form would say "free" and the
+           * download would land beside a file nobody could see.
+           */
+          const entries = await withDeadline(
+            readdir(folder).catch((cause: NodeJS.ErrnoException) => {
+              if (cause?.code === "ENOENT") return [] as string[];
+              throw cause;
+            }),
+            LIST_TIMEOUT_MS,
+            folder,
+            "reading the folder",
+          );
+          if (Result.isError(entries)) return fail(entries.error);
+          const existing = entries.value;
+
+          const taken = stemIsTaken(existing, name);
+          return {
+            /** What would actually be written — the cleaned name, not the typed one. */
+            name,
+            taken,
+            /** Free, or the next name that is. Empty when a thousand are taken. */
+            suggestion: taken ? freeStem(existing, name) : name,
+            /** The files already built on that name, so the answer is specific. */
+            using: existing.filter((entry) => {
+              const lower = entry.toLowerCase();
+              const wanted = name.toLowerCase();
+              return lower === wanted || lower.startsWith(`${wanted}.`);
+            }),
+            destination: destination.value,
+            at: new Date().toISOString(),
+          };
+        },
+        {
+          query: t.Object({
+            destination: t.Optional(t.String()),
+            name: t.String({ minLength: 1, maxLength: 300 }),
+          }),
+        },
+      )
 
       /**
        * Create one, from a name typed into the form.

@@ -6,13 +6,14 @@
  * that dies must lose nothing but time.
  */
 import { Result } from "better-result";
-import { mkdir, rename, rm, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
+import { basename, dirname, extname, join } from "node:path";
 import type { JobQueue } from "../core/queue";
 import type { ProviderRegistry } from "../providers/registry";
 import type { PluginRuntime } from "../core/plugin-runtime";
 import type { DownloadPlan, FetchResult, Job, ProgressUpdate, StageName } from "../core/types";
-import { buildDownloadPlan, videoCodecNotice } from "../core/selection";
+import { buildDownloadPlan, freeStem, stemIsTaken, videoCodecNotice } from "../core/selection";
+import { openLibrary, SUBTITLE_EXTENSIONS } from "../core/library";
 import { demandsBackoff } from "../core/errors";
 import { Semaphore } from "./semaphore";
 import type { HookArgs } from "../core/plugin-runtime";
@@ -184,6 +185,8 @@ export class Worker {
       // would otherwise have nothing to download.
       let plan: DownloadPlan | null = job.plan ?? null;
       let downloaded: FetchResult | null = null;
+      /** Where the move stage actually put it, suffix and all. */
+      let movedTo: string | null = null;
 
       const from = resumeFrom(job);
       const remaining = ["validate", "analyze", "download", "postprocess", "metadata", "move"]
@@ -227,6 +230,12 @@ export class Worker {
 
         if (outcome.value?.plan) plan = outcome.value.plan;
         if (outcome.value?.downloaded) downloaded = outcome.value.downloaded;
+        // 🔴 Where the bytes *actually* went, which is not always where the
+        // plan said: a name already in use lands `Name (2)`. Recomputing the
+        // path from the temporary filename would record a file that does not
+        // exist under that name — and `POST /api/jobs/file-state` would then
+        // report a finished download as missing.
+        if (outcome.value?.movedTo) movedTo = outcome.value.movedTo;
 
         stages = markDone(stages, stage, nowIso(now));
         await queue.update(job.id, { stages });
@@ -234,7 +243,7 @@ export class Worker {
 
       const finished = await queue.update(job.id, {
         status: "done", progress: 100,
-        outputFile: downloaded ? await this.#finalPath(job, downloaded.file) : null,
+        outputFile: movedTo ?? (downloaded ? await this.#finalPath(job, downloaded.file) : null),
       });
       if (Result.isOk(finished)) {
         if (this.#o.notifier) void this.#o.notifier.completed(finished.value);
@@ -257,8 +266,70 @@ export class Worker {
     }
   }
 
+  /**
+   * Where a file *would* land, before any collision is resolved.
+   *
+   * ⚠️ Only a prediction now. The move stage returns where the bytes actually
+   * went, and that is what `outputFile` records — a path computed from the
+   * temporary filename would name a file that may not exist under that name.
+   */
   async #finalPath(job: Job, file: string): Promise<string> {
     return join(this.#o.libraryDir, job.destination, file.split("/").pop() ?? "output");
+  }
+
+  /**
+   * Send everything built on `stem` to the library's trash.
+   *
+   * Every sidecar goes with the video, and for the same reason they were
+   * renamed together: leaving `Talk.en.srt` behind would attach the old
+   * subtitles to the new download.
+   */
+  async #trash(
+    job: Job,
+    folder: string,
+    existing: readonly string[],
+    stem: string,
+    log: (line: string) => void,
+  ): Promise<Result<null, { _tag: string; stage: string; detail: string }>> {
+    const library = openLibrary({ root: this.#o.libraryDir });
+    const lower = stem.toLowerCase();
+    const doomed = existing
+      .filter((name) => {
+        const candidate = name.toLowerCase();
+        return candidate === lower || candidate.startsWith(`${lower}.`);
+      })
+      // ⚠️ The video first, subtitles last. `library.remove` takes a video's
+      // subtitles with it **in one trash entry**, and one entry is what makes
+      // the undo work as a unit: restoring it brings the video and its
+      // subtitles back together. Removing the subtitle first would put them in
+      // two entries that have to be found and restored separately.
+      .sort((a, b) => Number(isSubtitle(a)) - Number(isSubtitle(b)));
+
+    for (const name of doomed) {
+      // ⚠️ `library.remove` takes a video's **subtitles** with it, in one trash
+      // entry, so by the time this loop reaches `Name.en.srt` it is usually
+      // already gone. A vanished file is the library doing its job, not a
+      // failure — but a file that is still there after a failed remove is.
+      const absolute = join(folder, name);
+      const removed = await library.remove(join(job.destination, name), {
+        reason: "replaced by a download",
+      });
+      if (Result.isOk(removed)) {
+        log(`replaced "${name}" — the old copy is in .trash and can be restored`);
+        continue;
+      }
+      if (!(await stat(absolute).then(() => true).catch(() => false))) continue;
+
+      // 🔴 Refuse rather than fall back to overwriting. "Replace" was asked for
+      // on the understanding that the old file stays recoverable; a replace
+      // whose trash step failed is a delete nobody agreed to.
+      return Result.err({
+        _tag: "StageFailed",
+        stage: "move",
+        detail: `could not move the existing ${name} to the trash: ${JSON.stringify(removed.error)}`,
+      });
+    }
+    return Result.ok(null);
   }
 
   async #stage(
@@ -271,7 +342,7 @@ export class Worker {
       onProgress(p: ProgressUpdate): void;
       log(line: string): void;
     },
-  ): Promise<Result<{ plan?: DownloadPlan; downloaded?: FetchResult } | null, any>> {
+  ): Promise<Result<{ plan?: DownloadPlan; downloaded?: FetchResult; movedTo?: string } | null, any>> {
     const { registry, queue } = this.#o;
 
     switch (stage) {
@@ -289,7 +360,9 @@ export class Worker {
         const info = await provider.value.probe(job.url, ctx.controller.signal);
         if (Result.isError(info)) return info;
 
-        const built = buildDownloadPlan(job.url, info.value, job.preferences);
+        // `job.outputName` is what a person typed into the form; absent, the
+        // provider's title is used exactly as before.
+        const built = buildDownloadPlan(job.url, info.value, job.preferences, job.outputName);
         if (Result.isError(built)) return built;
 
         /**
@@ -358,44 +431,120 @@ export class Worker {
       case "metadata":
         return Result.ok(null);
 
+      /**
+       * 🔴 **Nothing here may ever replace a file that is already there.**
+       *
+       * This stage used to `rename` onto the target path, and `rename` on POSIX
+       * *silently replaces*. Two videos whose titles clean down to the same
+       * name — a live set and its re-upload, two talks called "Keynote", the
+       * same video fetched twice at different codecs — and the second destroyed
+       * the first. The stage's own verification then confirmed it: `stat` found
+       * a non-empty file at the target, because there was one, and reported
+       * success. Both downloads "worked" and one of the files was gone.
+       */
       case "move": {
         if (!ctx.downloaded) return Result.ok(null);
-        const target = await this.#finalPath(job, ctx.downloaded.file);
-        await mkdir(dirname(target), { recursive: true });
 
-        // Same filesystem: a rename, instant. Different: a copy, which may be
-        // minutes over a network mount. Both are correct; only one is fast.
-        try {
-          await rename(ctx.downloaded.file, target);
-        } catch {
-          await Bun.write(target, Bun.file(ctx.downloaded.file));
-          await rm(ctx.downloaded.file, { force: true });
+        const folder = join(this.#o.libraryDir, job.destination);
+        await mkdir(folder, { recursive: true });
+
+        const original = ctx.downloaded.file.split("/").pop() ?? "output";
+        const extension = extname(original);
+        const stem = basename(original, extension);
+
+        // One listing answers for the video and every sidecar at once.
+        const existing = await readdir(folder).catch(() => [] as string[]);
+
+        let finalStem = stem;
+        if (stemIsTaken(existing, stem)) {
+          if (job.onConflict === "replace") {
+            // ⚠️ To the trash, not to `unlink`. "Download this again" is a
+            // reasonable thing to mean and a terrible thing to be wrong about,
+            // so the file it replaces stays restorable for the retention window
+            // — and the journal records that a download did it.
+            const trashed = await this.#trash(job, folder, existing, stem, ctx.log);
+            if (Result.isError(trashed)) return trashed;
+          } else {
+            finalStem = freeStem(existing, stem);
+            if (finalStem === "") {
+              return Result.err({
+                _tag: "StageFailed",
+                stage: "move",
+                detail: `${stem} and a thousand suffixes of it are all taken in ${job.destination || "the library root"}`,
+              });
+            }
+            // 🔴 Said out loud, on the job, because the file is not called what
+            // the plan said it would be called. A rename nobody is told about
+            // is the silent substitution this whole change is about.
+            ctx.log(
+              `"${stem}" already exists in ${job.destination || "the library root"} — saved as "${finalStem}" instead`,
+            );
+          }
         }
+
+        const target = join(folder, `${finalStem}${extension}`);
+        await moveFile(ctx.downloaded.file, target);
 
         // Subtitles and the thumbnail travel with the video, keeping their
         // names — which is what makes them sidecars: `Name.en.srt` and
         // `Name.jpg` beside `Name.mkv`, the layout every media server reads.
+        //
+        // ⚠️ They follow the video's **final** stem, suffix included. A
+        // `Talk (2).mkv` sitting beside `Talk.en.srt` is worse than no
+        // subtitle: every media server would read that subtitle as belonging to
+        // the *other* video, which is exactly the collision this stage exists
+        // to prevent.
+        //
         // A sidecar that fails to move must not fail the job: the video is
         // there, and a missing poster is a grey rectangle, not a lost download.
         const sidecars = [
           ...ctx.downloaded.subtitleFiles,
           ...(ctx.downloaded.thumbnailFile === undefined ? [] : [ctx.downloaded.thumbnailFile]),
         ];
-        for (const sub of sidecars) {
-          const subTarget = join(dirname(target), sub.split("/").pop() ?? "sub");
-          try { await rename(sub, subTarget); }
-          catch { await Bun.write(subTarget, Bun.file(sub)); await rm(sub, { force: true }); }
+        for (const sidecar of sidecars) {
+          const name = sidecar.split("/").pop() ?? "sidecar";
+          const renamed = name.startsWith(`${stem}.`) ? `${finalStem}${name.slice(stem.length)}` : name;
+          try {
+            await moveFile(sidecar, join(folder, renamed));
+          } catch {
+            // Already logged by its absence; the video is what matters.
+          }
         }
 
         // Verify rather than assume: a move that silently produced nothing is
         // exactly the failure mode this project exists to eliminate.
-        const s = await stat(target).catch(() => null);
-        if (!s || s.size === 0) {
+        const written = await stat(target).catch(() => null);
+        if (!written || written.size === 0) {
           return Result.err({ _tag: "StageFailed", stage: "move", detail: `nothing at ${target}` });
         }
-        return Result.ok(null);
+        return Result.ok({ movedTo: target });
       }
     }
+  }
+}
+
+/** The same set `library.remove` uses to decide what travels with a video. */
+function isSubtitle(name: string): boolean {
+  return SUBTITLE_EXTENSIONS.has(extname(name).slice(1).toLowerCase());
+}
+
+/**
+ * Move one file, across filesystems if it has to be.
+ *
+ * Same filesystem: a rename, instant. Different: a copy, which may be minutes
+ * over a network mount. Both are correct; only one is fast.
+ *
+ * ⚠️ The caller has already established that nothing is at `target`. This does
+ * not check, because a check here would be a second opinion about a question
+ * the move stage answered with a directory listing — and two answers to one
+ * question is how they come to disagree.
+ */
+async function moveFile(from: string, target: string): Promise<void> {
+  try {
+    await rename(from, target);
+  } catch {
+    await Bun.write(target, Bun.file(from));
+    await rm(from, { force: true });
   }
 }
 

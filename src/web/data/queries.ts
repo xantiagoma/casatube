@@ -19,7 +19,16 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tan
 
 import type { DestinationFolder } from "../../api/destinations";
 import type { MediaOptions, Suggestion } from "../../api/options";
-import type { Job, JobSortKey, JobStatus, MediaInfo, Preferences, Priority, SortOrder } from "../../core/types";
+import type {
+  ConflictPolicy,
+  Job,
+  JobSortKey,
+  JobStatus,
+  MediaInfo,
+  Preferences,
+  Priority,
+  SortOrder,
+} from "../../core/types";
 import type { JobBucket } from "../../core/job-buckets";
 import { api, unwrap } from "./client";
 import { keys } from "./keys";
@@ -154,6 +163,10 @@ export interface EnqueueRequest {
    * can honour — the panel says so rather than drawing a switch that lies.
    */
   pluginsOff?: string[];
+  /** The filename to save as. Absent means the title. */
+  outputName?: string;
+  /** What to do if that name is taken. Absent means `suffix`. */
+  onConflict?: ConflictPolicy;
   title?: string;
   thumbnail?: string;
   duration?: number;
@@ -188,6 +201,8 @@ export function useEnqueue() {
           ...(request.pluginsOff && request.pluginsOff.length > 0
             ? { pluginsOff: request.pluginsOff }
             : {}),
+          ...(request.outputName ? { outputName: request.outputName } : {}),
+          ...(request.onConflict ? { onConflict: request.onConflict } : {}),
         }),
       ),
     // Invalidate rather than write the new job in: the stream is about to say
@@ -270,6 +285,53 @@ export interface ProbeResult {
   options: MediaOptions;
   /** What the selection logic would pick, so the form can start there. */
   suggested: Suggestion;
+  /**
+   * The filename that would be written — cleaned, not the raw title.
+   *
+   * 🔴 PLAN §15's "so a bad name is caught before 800 MB, not after". The form
+   * puts it in an editable box rather than only showing it, because being told
+   * the name is wrong and being unable to change it is half a feature.
+   */
+  outputName: string;
+}
+
+/** What `GET /api/destinations/name-check` answers. */
+export interface NameCheck {
+  /** The cleaned name — what would really be written. */
+  name: string;
+  taken: boolean;
+  /** Free, or the next name that is. */
+  suggestion: string;
+  /** The files already built on that name. Named, not counted. */
+  using: string[];
+  destination: string;
+  at: string;
+}
+
+/**
+ * Is this name free in that folder?
+ *
+ * ⚠️ **Advisory.** The move stage checks again with a listing of its own, and
+ * *that* check is the one that decides — this one exists so the decision
+ * ("replace it", "call it something else", "that is a different video") can be
+ * made before 800 MB rather than discovered in the job log after.
+ *
+ * `staleTime: 0` because the folder is shared with everything else on the
+ * machine: an answer from thirty seconds ago is a guess.
+ */
+export function useNameCheck(
+  destination: string,
+  name: string,
+  enabled: boolean,
+): UseQueryResult<NameCheck, Error> {
+  const trimmed = name.trim();
+  return useQuery({
+    queryKey: keys.nameCheck(destination, trimmed),
+    queryFn: async () =>
+      unwrap(await api.api.destinations["name-check"].get({ query: { destination, name: trimmed } })),
+    enabled: enabled && trimmed !== "",
+    staleTime: 0,
+  });
 }
 
 /**

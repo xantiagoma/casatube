@@ -16,7 +16,10 @@ import {
   EFFICIENT_CODEC_PREFERENCE,
   FALLBACK_OUTPUT_NAME,
   selectAudioTracks,
+  freeStem,
   selectSubtitles,
+  stemIsTaken,
+  suffixStem,
   selectVideoFormat,
   toLanguageTag,
   toOutputName,
@@ -775,5 +778,80 @@ describe("buildDownloadPlan", () => {
     const snapshot = structuredClone(INFO);
     buildDownloadPlan(URL, INFO, prefs({ originalOnly: false, audioLanguages: ["es", "ja"] }));
     expect(INFO).toEqual(snapshot);
+  });
+});
+
+
+// --- Names that cannot collide (2026-08-28) ---------------------------------
+
+describe("stemIsTaken", () => {
+  test("🔴 a stem is taken by its sidecars, not only by the video", () => {
+    // `Name.mkv`, `Name.en.srt`, `Name.jpg` are one thing with one name. A
+    // check that only looked at the video would let a new download land beside
+    // somebody else's subtitles and adopt them.
+    expect(stemIsTaken(["A Talk.en.srt"], "A Talk")).toBe(true);
+    expect(stemIsTaken(["A Talk.jpg"], "A Talk")).toBe(true);
+    expect(stemIsTaken(["A Talk.mkv"], "A Talk")).toBe(true);
+  });
+
+  test("🔴 case-insensitively, because the library may not care about case", () => {
+    // exFAT and a macOS share treat `Talk.mkv` and `talk.mkv` as one file, so a
+    // check that says the name is free there hands over an overwrite.
+    expect(stemIsTaken(["talk.mkv"], "Talk")).toBe(true);
+    expect(stemIsTaken(["TALK.EN.SRT"], "talk")).toBe(true);
+  });
+
+  test("a longer name that merely starts the same is a different name", () => {
+    // `A Talk 2.mkv` is not `A Talk`. Only a `.` boundary makes it the same
+    // stem — otherwise every download would collide with its own prefixes.
+    expect(stemIsTaken(["A Talk 2.mkv"], "A Talk")).toBe(false);
+    expect(stemIsTaken(["A Talking Head.mkv"], "A Talk")).toBe(false);
+    expect(stemIsTaken([], "A Talk")).toBe(false);
+  });
+});
+
+describe("freeStem", () => {
+  test("the plain name when nothing is using it", () => {
+    expect(freeStem([], "A Talk")).toBe("A Talk");
+    expect(freeStem(["Something else.mkv"], "A Talk")).toBe("A Talk");
+  });
+
+  test("counts up past everything already there", () => {
+    expect(freeStem(["A Talk.mkv"], "A Talk")).toBe("A Talk (2)");
+    expect(freeStem(["A Talk.mkv", "A Talk (2).mkv"], "A Talk")).toBe("A Talk (3)");
+    // Including the sidecars of a suffixed name.
+    expect(freeStem(["A Talk.mkv", "A Talk (2).en.srt"], "A Talk")).toBe("A Talk (3)");
+  });
+
+  test("a hole in the sequence is used rather than skipped", () => {
+    expect(freeStem(["A Talk.mkv", "A Talk (3).mkv"], "A Talk")).toBe("A Talk (2)");
+  });
+
+  test("🔴 gives up with an empty string rather than returning a name that overwrites", () => {
+    // The caller fails the job. Returning the plain stem would be the exact
+    // silent replacement this function exists to prevent.
+    const crowded = Array.from({ length: 5 }, (_, i) => `${suffixStem("A Talk", i + 1)}.mkv`);
+    expect(freeStem(crowded, "A Talk", 5)).toBe("");
+  });
+});
+
+describe("buildDownloadPlan: a name typed by a person", () => {
+  test("beats the title, and is cleaned the same way", () => {
+    const named = buildDownloadPlan(URL, INFO, prefs({}), "Charla / sobre : nada");
+    expect(Result.isOk(named)).toBe(true);
+    if (!Result.isOk(named)) return;
+    expect(named.value.outputName).not.toContain("/");
+    expect(named.value.outputName).toContain("Charla");
+  });
+
+  test("blank or absent falls back to the title, exactly as before", () => {
+    const fromTitle = buildDownloadPlan(URL, INFO, prefs({}));
+    expect(Result.isOk(fromTitle)).toBe(true);
+    if (!Result.isOk(fromTitle)) return;
+
+    for (const empty of [undefined, null, "", "   "]) {
+      const plan = buildDownloadPlan(URL, INFO, prefs({}), empty);
+      expect(Result.isOk(plan) && plan.value.outputName).toBe(fromTitle.value.outputName);
+    }
   });
 });

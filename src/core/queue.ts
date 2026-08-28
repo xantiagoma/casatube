@@ -346,6 +346,8 @@ export class JobQueue {
         paused: false,
         notBefore: null,
         preferences,
+        outputName: input.outputName?.trim() || null,
+        onConflict: input.onConflict ?? "suffix",
         // ⚠️ Duplicated names are collapsed and order does not matter — this is
         // a set stored as a list. `fingerprint` deliberately does *not* include
         // it: the same video with a media-server refresh skipped is the same

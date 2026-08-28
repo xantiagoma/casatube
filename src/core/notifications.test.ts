@@ -60,6 +60,8 @@ const JOB: Job = {
   plan: null,
   preferences: DEFAULT_PREFERENCES,
   pluginsOff: [],
+  outputName: null,
+  onConflict: "suffix",
   fingerprint: "fp-1",
   log: [],
   error: null,

@@ -33,6 +33,9 @@ export const keys = {
    */
   jobFileState: (ids: readonly string[]) => ["jobs", "file-state", [...ids].sort().join(",")] as const,
   destinations: ["destinations"] as const,
+  /** Whether one filename is free in one folder. Keyed by both, obviously. */
+  nameCheck: (destination: string, name: string) =>
+    ["destinations", "name-check", destination, name] as const,
   probe: (url: string) => ["probe", url] as const,
 
   library: (query: Record<string, unknown>) => ["library", query] as const,

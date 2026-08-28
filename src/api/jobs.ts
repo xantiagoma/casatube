@@ -9,7 +9,7 @@
 import { Elysia, t } from "elysia";
 import { Result } from "better-result";
 
-import { DEFAULT_PREFERENCES, JOB_SORT_KEYS, SORT_ORDERS, type JobStatus } from "../core/types";
+import { CONFLICT_POLICIES, DEFAULT_PREFERENCES, JOB_SORT_KEYS, SORT_ORDERS, type JobStatus } from "../core/types";
 import { AppSettingsStore } from "../core/app-settings";
 import { jobFileStates } from "../core/file-state";
 import { JOB_BUCKETS } from "../core/job-buckets";
@@ -195,6 +195,10 @@ export function jobRoutes(ctx: AppContext) {
             // source could stop a job from being *recorded* — the one thing
             // that must not be able to fail.
             title: body.title ?? null,
+            // The name to save as, and what to do if it is taken. `suffix` by
+            // default — see `core/types.ts` for why the safe reading has to win.
+            outputName: body.outputName ?? null,
+            onConflict: body.onConflict,
             thumbnail: body.thumbnail ?? null,
             duration: body.duration ?? null,
             source: body.source ?? null,
@@ -220,6 +224,22 @@ export function jobRoutes(ctx: AppContext) {
             /** Re-download even if a finished job matches — PLAN §15. */
             force: t.Optional(t.Boolean()),
             title: t.Optional(t.String()),
+            /**
+             * The filename to save as, before any collision suffix.
+             *
+             * ⚠️ Cleaned server-side like a title — a slash in it is not a
+             * folder — so what lands may differ from what was sent. The form
+             * shows the cleaned version before anything is queued.
+             */
+            outputName: t.Optional(t.String({ maxLength: 300 })),
+            /**
+             * ⚠️ `{ default: undefined }` for the reason `videoCodec` has it:
+             * `t.UnionEnum` otherwise sets `default: values[0]`, which turns an
+             * omitted field into a stated choice. Here the default would even
+             * be the *right* one — `suffix` — which is what makes it dangerous:
+             * the bug would surface the day this list is reordered.
+             */
+            onConflict: t.Optional(t.UnionEnum([...CONFLICT_POLICIES], { default: undefined })),
             thumbnail: t.Optional(t.String()),
             duration: t.Optional(t.Number()),
             source: t.Optional(t.String()),
@@ -367,9 +387,26 @@ export function jobRoutes(ctx: AppContext) {
           preferences: job.preferences,
           priority: job.priority,
           title: job.title,
+          outputName: job.outputName,
+          /**
+           * 🔴 `replace`, and this is the one place it is the right default.
+           *
+           * "Download this again" means *this file*, at the name it already
+           * has — a suffix here would leave `Talk.mkv` and `Talk (2).mkv` side
+           * by side and make the caller clean up after a repair. The old copy
+           * still goes to `.trash` rather than being deleted, so the safety is
+           * kept even where the intent is explicit.
+           *
+           * ⚠️ This route only ever re-queues a job that already exists, so
+           * "the name it already has" is a fact rather than a guess. That is
+           * exactly what `POST /api/jobs` cannot know, which is why the default
+           * there is the other one.
+           */
+          onConflict: "replace",
           thumbnail: job.thumbnail,
           duration: job.duration,
           source: job.source,
+          pluginsOff: job.pluginsOff,
           force: true,
         });
         if (Result.isError(enqueued)) return fail(enqueued.error);

@@ -2,6 +2,48 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## The move stage silently replaced files, and its own check confirmed it (2026-08-28)
+
+Two videos whose titles clean down to the same name — a live set and its
+re-upload, two talks called "Keynote", **the same video fetched twice at
+different codecs** — produced *one* file. The second destroyed the first.
+
+```ts
+await rename(ctx.downloaded.file, target);   // POSIX: replaces silently
+```
+
+`rename(2)` replaces an existing target without complaint. That is the whole
+bug, and it is one line.
+
+📌 What made it invisible is the line underneath. The stage verifies its own
+work — the right instinct, and the reason the file-state check exists at all:
+
+```ts
+const s = await stat(target).catch(() => null);
+if (!s || s.size === 0) return Result.err(...)
+```
+
+After an overwrite there **is** a non-empty file at the target, so the check
+passed. Both downloads reported success, both rows pointed at the same path, and
+the earlier file was gone. A verification that asks "is there something there?"
+cannot tell "we put it there" apart from "something else was already there" —
+and the second is the case worth catching.
+
+⚠️ The sidecars are the half that is easy to miss when fixing it. `Name.mkv`,
+`Name.en.srt` and `Name.jpg` are one thing with one name, so:
+
+- a stem is **taken by its sidecars**, not only by the video — a folder holding
+  a lone `Name.en.srt` must not accept a new `Name.mkv`, which would silently
+  adopt somebody else's subtitles;
+- and they must follow the **final** name. `Talk (2).mkv` beside `Talk.en.srt`
+  is worse than no subtitle at all: every media server reads that subtitle as
+  belonging to the other video.
+
+📌 And the comparison is case-**insensitive**, because a library on exFAT or on
+a macOS share treats `Talk.mkv` and `talk.mkv` as one file. A check that says
+the name is free there is a check that hands over an overwrite.
+
+
 ## The live queue stopped showing new work past 200 jobs, and said nothing (2026-08-27)
 
 Found while giving `GET /api/jobs` a server-side sort. The SSE watcher built

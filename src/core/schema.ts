@@ -33,6 +33,25 @@ export const jobs = sqliteTable(
     destination: text("destination").notNull(),
     /** Cleaned and safe as a filename; null until analysed. */
     title: text("title"),
+    /**
+     * The filename a person asked for, before any collision suffix.
+     *
+     * Null means "use the title", which is what every job did before this
+     * existed. Kept on the row rather than only in `plan` because the plan is
+     * built by the `analyze` stage, and the request has to survive from the
+     * moment it was made until then — including across a restart.
+     */
+    outputName: text("output_name"),
+    /**
+     * What to do when the name is already taken in the destination.
+     *
+     * `suffix` — the default and the safe one — lands `Name (2)` and says so.
+     * `replace` sends the existing file to `.trash/` first, where it stays
+     * recoverable for the retention window; it is what "download this again"
+     * means, and it is never the default because the other reading of a
+     * collision is *two different videos with one title*, which is data loss.
+     */
+    onConflict: text("on_conflict").notNull().default("suffix"),
 
     status: text("status").notNull().default("queued"),
     /** Stage records, serialised. Derived status comes from these. */

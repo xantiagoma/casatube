@@ -616,6 +616,57 @@ export function toOutputName(title: string, fallback = ""): string {
   return safe.length > 0 ? safe : FALLBACK_OUTPUT_NAME;
 }
 
+/**
+ * Everything a name owns in a folder: the file, and every sidecar beside it.
+ *
+ * ⚠️ **Not just `Name.mkv`.** The layout every media server reads is
+ * `Name.mkv`, `Name.en.srt`, `Name.jpg` — one stem, several files — so a stem
+ * is taken if *anything* in the folder is built on it. Checking only the video
+ * extension would let a new download drop `Name.mkv` into a folder that already
+ * has `Name.en.srt` and quietly adopt somebody else's subtitles.
+ *
+ * Compared case-insensitively on purpose: a library on exFAT or on a macOS
+ * share treats `Talk.mkv` and `talk.mkv` as one file, and a check that says the
+ * name is free there is a check that hands over an overwrite.
+ */
+export function stemIsTaken(existing: readonly string[], stem: string): boolean {
+  const wanted = stem.toLowerCase();
+  return existing.some((name) => {
+    const lower = name.toLowerCase();
+    return lower === wanted || lower.startsWith(`${wanted}.`);
+  });
+}
+
+/** `Talk` → `Talk (2)`. The convention every downloader and browser already uses. */
+export function suffixStem(stem: string, attempt: number): string {
+  return attempt <= 1 ? stem : `${stem} (${attempt})`;
+}
+
+/**
+ * A stem nothing in the folder is using yet.
+ *
+ * 🔴 The reason this exists: the move stage used `rename`, which on POSIX
+ * **silently replaces** an existing file. Two videos that clean down to the
+ * same title — a live set and its re-upload, two talks called "Keynote", the
+ * same video fetched twice at different codecs — and the second destroyed the
+ * first. Worse, the stage's own verification (`stat(target)`, non-empty) then
+ * *confirmed* the overwrite as a success. Both downloads "worked" and one of
+ * the files was gone.
+ *
+ * Pure, and given the directory listing rather than reading it, so the rule can
+ * be tested without a filesystem — and so one `readdir` answers for the video
+ * and all of its sidecars at once.
+ */
+export function freeStem(existing: readonly string[], stem: string, limit = 1_000): string {
+  for (let attempt = 1; attempt <= limit; attempt += 1) {
+    const candidate = suffixStem(stem, attempt);
+    if (!stemIsTaken(existing, candidate)) return candidate;
+  }
+  // A thousand files sharing one name is not a case worth a cleverer answer,
+  // and returning the plain stem would be an overwrite. The caller fails.
+  return "";
+}
+
 // --- The plan ---------------------------------------------------------------
 
 /** The only way this can fail: the ceiling excluded every available format. */
@@ -635,6 +686,16 @@ export function buildDownloadPlan(
   url: string,
   info: MediaInfo,
   preferences: Preferences,
+  /**
+   * A name typed by a person, which beats the one derived from the title.
+   *
+   * ⚠️ Cleaned through {@link toOutputName} like any other, and for the same
+   * reasons: a slash in it is a path, a name of 300 characters is refused by
+   * the filesystem, and neither should reach `-o` for a download to fail on at
+   * the end. What comes back may therefore differ from what was typed — the
+   * form shows the cleaned version before anything is queued.
+   */
+  outputName?: string | null,
 ): Result<DownloadPlan, SelectionError> {
   let video: VideoFormat | null = null;
   if (info.videoFormats.length > 0) {
@@ -663,6 +724,9 @@ export function buildDownloadPlan(
     languageTags: buildLanguageTags(audio, subtitles),
     sponsorblock: preferences.sponsorblock,
     subtitleMode: preferences.embedSubtitles ? "embed" : "sidecar",
-    outputName: toOutputName(info.title, info.externalId),
+    outputName:
+      outputName != null && outputName.trim() !== ""
+        ? toOutputName(outputName, info.externalId)
+        : toOutputName(info.title, info.externalId),
   });
 }

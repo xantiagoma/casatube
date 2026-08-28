@@ -58,10 +58,17 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { CodecOutcome } from "../../../api/options";
-import { DEFAULT_PREFERENCES, type Preferences, type Priority } from "../../../core/types";
+import { DEFAULT_PREFERENCES, type ConflictPolicy, type Preferences, type Priority } from "../../../core/types";
 import { formatBytes, formatDuration, hostOf } from "../../data/format";
 import { useLocalPref } from "../../data/prefs";
-import { useEnqueue, useJobDefaults, useProbe, type EnqueueOutcome, type ProbeResult } from "../../data/queries";
+import {
+  useEnqueue,
+  useJobDefaults,
+  useNameCheck,
+  useProbe,
+  type EnqueueOutcome,
+  type ProbeResult,
+} from "../../data/queries";
 import { MediaPreview } from "../media/MediaPreview";
 import { AnalysisDrawer } from "./AnalysisDrawer";
 import type { Choices } from "./choices";
@@ -161,6 +168,129 @@ function DestinationAndPriority({
           </SelectContent>
         </Select>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The filename, editable, with the folder checked while you type.
+ *
+ * 🔴 PLAN §15 asked for the name to be shown *before* 800 MB rather than after,
+ * and this is the half that was missing: the name is **editable**, because
+ * being told the name is wrong and being unable to change it is half a feature.
+ *
+ * 🔴 And the collision. The move stage can no longer overwrite anything — a
+ * taken name lands `Name (2)` and says so — but "I meant to replace that" and
+ * "these are two different videos" are decisions only the person queueing can
+ * make. So the answer names the files that are in the way and offers both
+ * readings, rather than picking one quietly.
+ *
+ * ⚠️ The check is **advisory** and the panel never blocks the button. The
+ * folder is shared with everything else on the machine and can change between
+ * this answer and the move; the move stage checks again, and that check is the
+ * one that decides. A form that refused to queue on a stale answer would be
+ * wrong more often than the collision it was guarding against.
+ */
+function OutputName({
+  idPrefix,
+  destination,
+  name,
+  suggestion,
+  onName,
+  conflict,
+  onConflict,
+}: {
+  idPrefix: string;
+  destination: string;
+  /** What the box holds — already defaulted to the analyzed name by the caller. */
+  name: string;
+  /** What the server said the title cleans down to, for the "reset" affordance. */
+  suggestion: string;
+  onName(next: string): void;
+  conflict: ConflictPolicy;
+  onConflict(next: ConflictPolicy): void;
+}) {
+  const check = useNameCheck(destination, name, true);
+  const answer = check.data;
+  const taken = answer?.taken === true;
+
+  return (
+    <div className="space-y-2">
+      <div className="space-y-1.5">
+        <Label htmlFor={`${idPrefix}-name`}>Save as</Label>
+        <div className="flex items-center gap-2">
+          <Input
+            id={`${idPrefix}-name`}
+            value={name}
+            onChange={(event) => onName(event.target.value)}
+            spellCheck={false}
+            autoComplete="off"
+            className="flex-1"
+          />
+          <span className="shrink-0 text-xs text-muted-foreground">.mkv</span>
+        </div>
+        {/* ⚠️ The *cleaned* name, when it differs. A slash typed here does not
+            become a folder and an emoji does not survive, and finding that out
+            from the file on disk afterwards is exactly the surprise this box
+            exists to remove. */}
+        {answer && answer.name !== name.trim() ? (
+          <p className="text-xs text-muted-foreground">
+            Saved as <span className="font-mono">{answer.name}</span> — the rest is not usable in a filename.
+          </p>
+        ) : null}
+        {name.trim() !== suggestion ? (
+          <button
+            type="button"
+            className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            onClick={() => onName(suggestion)}
+          >
+            Use the title: {suggestion}
+          </button>
+        ) : null}
+      </div>
+
+      {check.isError ? (
+        <p className="text-xs text-muted-foreground">
+          Could not check the folder ({check.error.message}). The download still queues — nothing is ever
+          overwritten, so a name already in use becomes “{name} (2)”.
+        </p>
+      ) : null}
+
+      {taken && answer ? (
+        <div className="space-y-2 rounded-lg border border-warning/40 bg-warning/5 p-3">
+          <p className="flex items-start gap-1.5 text-xs">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden />
+            <span>
+              <span className="font-medium">That name is already in use</span> in{" "}
+              {answer.destination === "" ? "the library root" : answer.destination} —{" "}
+              <span className="font-mono">{answer.using.join(", ")}</span>.
+            </span>
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={conflict === "suffix" ? "default" : "outline"}
+              onClick={() => onConflict("suffix")}
+            >
+              Keep both — save as “{answer.suggestion}”
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={conflict === "replace" ? "default" : "outline"}
+              onClick={() => onConflict("replace")}
+            >
+              Replace it
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {conflict === "replace"
+              ? "The existing file and its subtitles go to .trash, where they stay restorable — nothing is deleted."
+              : "Two different videos can clean down to one title, so this is the default. Nothing is ever overwritten."}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -281,6 +411,16 @@ export function DownloadForm({ className }: { className?: string }) {
    */
   const [pluginsOff, setPluginsOff] = useState<string[]>([]);
 
+  /**
+   * The filename, and what to do if it is taken.
+   *
+   * `null` means "whatever the analysis suggested" rather than an empty box:
+   * the suggestion arrives with the probe, after this state exists, and storing
+   * a copy of it would leave the field stale when the URL changes.
+   */
+  const [outputName, setOutputName] = useState<string | null>(null);
+  const [onConflict, setOnConflict] = useState<ConflictPolicy>("suffix");
+
   const base: Preferences = defaults.data?.resolved ?? DEFAULT_PREFERENCES;
 
   // Read before `probe` is declared: the query is keyed by the URL alone, so
@@ -316,6 +456,9 @@ export function DownloadForm({ className }: { className?: string }) {
 
   const setChoices = (next: Partial<Choices>) => setEdits((current) => ({ ...current, ...next }));
 
+  const suggestedName = analyzed?.outputName ?? "";
+  const name = outputName ?? suggestedName;
+
   function submit(force = false) {
     const info = analyzed?.info;
     enqueue.mutate(
@@ -330,6 +473,11 @@ export function DownloadForm({ className }: { className?: string }) {
         ...(info?.duration ? { duration: info.duration } : {}),
         ...(info?.source ? { source: info.source } : {}),
         ...(pluginsOff.length > 0 ? { pluginsOff } : {}),
+        // Only when it is a departure. Sending the suggestion back would pin a
+        // name the server derived, so a later fix to the cleaning rules would
+        // not reach jobs queued today.
+        ...(name !== "" && name !== suggestedName ? { outputName: name } : {}),
+        ...(onConflict !== "suffix" ? { onConflict } : {}),
       },
       {
         // 🔴 A queued job is the end of this panel's job: the row is already in
@@ -413,6 +561,8 @@ export function DownloadForm({ className }: { className?: string }) {
                 // would silently apply it to a download nobody chose it for.
                 setEdits({});
                 setPluginsOff([]);
+                setOutputName(null);
+                setOnConflict("suffix");
                 enqueue.reset();
               }}
               placeholder="https://…"
@@ -497,6 +647,11 @@ export function DownloadForm({ className }: { className?: string }) {
           onPriority={setPriority}
           pluginsOff={pluginsOff}
           onPluginsOff={setPluginsOff}
+          outputName={name}
+          suggestedName={suggestedName}
+          onOutputName={setOutputName}
+          onConflict={onConflict}
+          onOnConflict={setOnConflict}
           sponsorblock={sponsorblock}
           onSponsorblock={(next) => setToggles((current) => ({ ...current, sponsorblock: next }))}
           embedSubtitles={embedSubtitles}
@@ -550,6 +705,12 @@ function OptionsPanel(props: {
   /** Plugins this download opts out of — see `PluginNotice`. */
   pluginsOff: readonly string[];
   onPluginsOff(next: string[]): void;
+  /** The filename, and the name the analysis suggested for it. */
+  outputName: string;
+  suggestedName: string;
+  onOutputName(next: string): void;
+  onConflict: ConflictPolicy;
+  onOnConflict(next: ConflictPolicy): void;
   footer: ReactNode;
 }) {
   const { analyzed, choices } = props;
@@ -627,14 +788,25 @@ function OptionsPanel(props: {
           />
         </Step>
 
-        <Step index={next()} title="Destination" hint="Where it lands, and how soon.">
-          <DestinationAndPriority
-            idPrefix="panel"
-            destination={props.destination}
-            onDestination={props.onDestination}
-            priority={props.priority}
-            onPriority={props.onPriority}
-          />
+        <Step index={next()} title="Destination" hint="Where it lands, what it is called, and how soon.">
+          <div className="space-y-3">
+            <DestinationAndPriority
+              idPrefix="panel"
+              destination={props.destination}
+              onDestination={props.onDestination}
+              priority={props.priority}
+              onPriority={props.onPriority}
+            />
+            <OutputName
+              idPrefix="panel"
+              destination={props.destination}
+              name={props.outputName}
+              suggestion={props.suggestedName}
+              onName={props.onOutputName}
+              conflict={props.onConflict}
+              onConflict={props.onOnConflict}
+            />
+          </div>
         </Step>
 
         {/* Outside the numbered steps, and still deliberately so: the numbers

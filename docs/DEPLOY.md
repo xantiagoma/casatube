@@ -335,6 +335,27 @@ it refills itself. Nothing generated is ever written into the library.
 | `THUMBNAIL_TIMEOUT_MS` | `20000` | Per generation, after which the process is **killed** and the request answers |
 | `THUMBNAIL_MAX_ENTRIES` | `5000` | Cached frames kept before the oldest are pruned |
 
+### Filenames, and what happens when one is taken
+
+A download is saved as its cleaned title — or as whatever you type into **Save
+as** in the download panel, which is checked against the destination folder
+while you type and shows what is already using that name.
+
+🔴 **Nothing is ever overwritten.** A name already in use lands as
+`Name (2).mkv` and the job log says so. The two readings of a collision are "I
+am downloading this again" and "these are two different videos that clean down
+to one title", and only the first is safe to guess — so it is never guessed.
+
+⚠️ A name is taken by its **sidecars** too. `Name.mkv`, `Name.en.srt` and
+`Name.jpg` are one thing with one name, so a folder holding a lone
+`Name.en.srt` will not accept a new `Name.mkv` — that would silently adopt
+somebody else's subtitles. Sidecars follow the final name, suffix included.
+
+📌 To replace on purpose, choose **Replace it** in the panel, or use
+*Re-download* on a finished job — which is what that button means and why it is
+the one place `replace` is the default. The file it replaces goes to `.trash/`,
+where it stays restorable for the retention window; nothing is deleted.
+
 ### Notifications
 
 Notifications are rows, because one that fires while the tab is closed is still

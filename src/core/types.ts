@@ -44,6 +44,18 @@ export const TERMINAL_STATUSES: readonly JobStatus[] = [
  * reports counts in it. A status added to `JobStatus` and forgotten here is a
  * bucket that silently counts zero, so the test asserts the two agree.
  */
+/**
+ * What happens when the destination already holds that name.
+ *
+ * ⚠️ `suffix` is the default and has to be: the two readings of a collision are
+ * "I am downloading this again" and "these are two different videos that clean
+ * down to one title", and only the first is safe to guess. Guessing it wrong
+ * destroys a file.
+ */
+export const CONFLICT_POLICIES = ["suffix", "replace"] as const;
+
+export type ConflictPolicy = (typeof CONFLICT_POLICIES)[number];
+
 export const ALL_STATUSES: readonly JobStatus[] = [
   "downloading", "processing", "moving", "analyzing",
   "waiting-for-destination", "queued", "done", "failed", "cancelled",
@@ -181,6 +193,13 @@ export interface EnqueueInput {
    * went wrong with the first copy (PLAN §15).
    */
   force?: boolean;
+  /**
+   * The filename to save as, before any collision suffix. Cleaned like a title.
+   * Absent means "use the title the provider reports".
+   */
+  outputName?: string | null;
+  /** What to do if that name is already taken. Defaults to `suffix`. */
+  onConflict?: ConflictPolicy;
   /**
    * Plugins this one download opts **out** of, by name.
    *
