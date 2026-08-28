@@ -223,6 +223,49 @@ describe("unreadCount", () => {
   });
 });
 
+describe("remove and clearRead", () => {
+  test("🔴 dismissing one takes an unread row too, unlike every bulk operation", async () => {
+    // Deciding you do not need a report is the ordinary reason to press the
+    // button. The rules that spare unread rows belong to retention and purge,
+    // where "tidy up" must never take the warning nobody has seen.
+    const store = storeFor();
+    at("2026-08-27T10:00:00.000Z");
+    const unread = await store.create({ title: "never seen", level: "error" });
+
+    const removed = await store.remove(unread.id);
+    expect(Result.isOk(removed)).toBe(true);
+    expect(await store.list()).toEqual([]);
+    expect(await store.unreadCount()).toBe(0);
+  });
+
+  test("dismissing one that is already gone says so", async () => {
+    // Two tabs open: the second press should report the row is gone rather
+    // than pretend it removed it.
+    const store = storeFor();
+    const gone = await store.remove("no-such-id");
+    expect(Result.isError(gone)).toBe(true);
+    if (Result.isError(gone)) expect(gone.error._tag).toBe("NotFound");
+  });
+
+  test("🔴 clearRead empties what has been dealt with and keeps what has not", async () => {
+    const store = storeFor();
+    at("2026-08-27T10:00:00.000Z");
+    const seen = await store.create({ title: "dealt with" });
+    const unseen = await store.create({ title: "still waiting" });
+    await store.markRead(seen.id);
+
+    expect(await store.clearRead()).toBe(1);
+    expect((await store.list()).map((n) => n.id)).toEqual([unseen.id]);
+  });
+
+  test("clearRead on a list with nothing read removes nothing", async () => {
+    const store = storeFor();
+    await store.create({ title: "one" });
+    expect(await store.clearRead()).toBe(0);
+    expect(await store.list()).toHaveLength(1);
+  });
+});
+
 describe("purge", () => {
   test("🔴 spares the unread ones by default", async () => {
     const store = storeFor();

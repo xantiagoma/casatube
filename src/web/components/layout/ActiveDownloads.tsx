@@ -130,7 +130,7 @@ export function ActiveDownloads({ live }: { live: boolean }) {
           ) : null}
         </div>
 
-        <ScrollArea className="max-h-96">
+        <ScrollArea viewportClassName="max-h-96">
           <ul className="divide-y">
             {activity.running.map((job) => (
               <ActivityCard key={job.id} job={job} />

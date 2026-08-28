@@ -49,6 +49,31 @@ export function useMarkAllRead() {
 }
 
 /**
+ * Dismiss one — `DELETE /api/notifications/:id`.
+ *
+ * ⚠️ Unread ones included, deliberately. Deciding you do not need a report is
+ * the ordinary reason to press the button; the rules that spare unread rows
+ * belong to the two *bulk* operations, where "tidy up" must never be able to
+ * take the warning nobody has seen.
+ */
+export function useDismissNotification() {
+  const client = useQueryClient();
+  return useMutation<Notification, Error, string>({
+    mutationFn: async (id) => unwrap(await api.api.notifications({ id }).delete()),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ["notifications"] }),
+  });
+}
+
+/** Clear everything already read — `POST /api/notifications/clear-read`. */
+export function useClearRead() {
+  const client = useQueryClient();
+  return useMutation<{ deleted: number }, Error, void>({
+    mutationFn: async () => unwrap(await api.api.notifications["clear-read"].post()),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ["notifications"] }),
+  });
+}
+
+/**
  * ⚠️ Destructive, and its defaults say so: unread notifications are spared and
  * the cutoff is 30 days unless the caller insists otherwise.
  */

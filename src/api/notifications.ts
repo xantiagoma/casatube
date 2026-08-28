@@ -107,6 +107,34 @@ export function notificationRoutes(ctx: NotificationsContext) {
       .post("/read-all", async () => ({ updated: await store.markAllRead() }))
 
       /**
+       * Dismiss one.
+       *
+       * ⚠️ It removes an **unread** notification too, and that is the point:
+       * deciding you do not need a report is the ordinary reason to press the
+       * button. The rules that spare unread rows belong to the two *bulk*
+       * operations — retention and `DELETE /`, where "tidy up" must never be
+       * able to take the warning nobody has seen.
+       */
+      .delete(
+        "/:id",
+        async ({ params }) => {
+          const removed = await store.remove(params.id);
+          if (Result.isError(removed)) return fail(removed.error);
+          return removed.value;
+        },
+        { params: t.Object({ id: t.String({ minLength: 1 }) }) },
+      )
+
+      /**
+       * Clear everything that has been read.
+       *
+       * The bell's own broom, and bounded by *read* rather than by age: after
+       * dealing with forty notifications what somebody wants is an empty list,
+       * and "older than 30 days" is not that.
+       */
+      .post("/clear-read", async () => ({ deleted: await store.clearRead() }))
+
+      /**
        * Delete old ones.
        *
        * `olderThanDays: 0` means "everything up to now", which is the honest

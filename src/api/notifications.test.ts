@@ -157,6 +157,57 @@ describe("POST /api/notifications/read-all", () => {
   });
 });
 
+describe("DELETE /api/notifications/:id", () => {
+  test("🔴 dismisses one, unread included", async () => {
+    const written = await store().create({ title: "never seen", level: "error" });
+
+    const response = await del(`/api/notifications/${written.id}`);
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as Notification).id).toBe(written.id);
+
+    const listing = (await (await get("/api/notifications")).json()) as Listing;
+    expect(listing.notifications).toEqual([]);
+    expect(listing.unreadCount).toBe(0);
+  });
+
+  test("one that is already gone is a 404, not a quiet success", async () => {
+    const response = await del("/api/notifications/no-such-id");
+    expect(response.status).toBe(404);
+    expect(((await response.json()) as { tag: string }).tag).toBe("NotFound");
+  });
+
+  test("it takes exactly one, and leaves the rest", async () => {
+    const seeder = store();
+    const first = await seeder.create({ title: "one" });
+    const second = await seeder.create({ title: "two" });
+
+    await del(`/api/notifications/${first.id}`);
+    const listing = (await (await get("/api/notifications")).json()) as Listing;
+    expect(listing.notifications.map((n) => n.id)).toEqual([second.id]);
+  });
+});
+
+describe("POST /api/notifications/clear-read", () => {
+  test("🔴 clears what has been read and keeps what has not", async () => {
+    const seeder = store();
+    const seen = await seeder.create({ title: "dealt with" });
+    const unseen = await seeder.create({ title: "still waiting" });
+    await seeder.markRead(seen.id);
+
+    const body = (await (await post("/api/notifications/clear-read")).json()) as { deleted: number };
+    expect(body.deleted).toBe(1);
+
+    const listing = (await (await get("/api/notifications")).json()) as Listing;
+    expect(listing.notifications.map((n) => n.id)).toEqual([unseen.id]);
+    expect(listing.unreadCount).toBe(1);
+  });
+
+  test("nothing read means nothing removed", async () => {
+    await store().create({ title: "one" });
+    expect(((await (await post("/api/notifications/clear-read")).json()) as { deleted: number }).deleted).toBe(0);
+  });
+});
+
 describe("DELETE /api/notifications", () => {
   test("🔴 by default it never deletes something nobody has read", async () => {
     const seeder = store();

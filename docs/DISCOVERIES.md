@@ -2,6 +2,39 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## `max-h-*` on a Radix `ScrollArea` gives you neither a max height nor a scroll (2026-08-28)
+
+The notification bell spilled its list out of the popover and could not be
+scrolled. Two symptoms, one cause, and the obvious-looking code:
+
+```tsx
+<ScrollArea className="max-h-96">   // wrong
+```
+
+The **viewport** is the element Radix gives `overflow: scroll`, and shadcn's
+wrapper gives it `size-full` — `height: 100%`. A `max-height` on the root leaves
+the root's height *indefinite*, so `height: 100%` on the child resolves as
+`auto`: the viewport grows to the full height of its content. Measured with 40
+rows:
+
+| | |
+|---|---|
+| root `clientHeight` | 384 px (`max-h-96`) |
+| viewport `clientHeight` | **3483 px** |
+| viewport `scrollHeight` | 3483 px |
+
+`scrollHeight === clientHeight`, so there is nothing to scroll — and the
+viewport, being taller than the root, paints straight through it.
+
+📌 The fix is to put the limit on the **viewport** (`viewportClassName` on our
+wrapper), not on the root. A definite `h-96` on the root also works and is
+worse: the panel is then 384 px tall for a list of two.
+
+⚠️ Both callers in this repo had it. Worth remembering as a shape rather than a
+line: **an element with `height: 100%` cannot be constrained by a parent's
+`max-height`** — the percentage needs a definite length to resolve against.
+
+
 ## The move stage silently replaced files, and its own check confirmed it (2026-08-28)
 
 Two videos whose titles clean down to the same name — a live set and its

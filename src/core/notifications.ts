@@ -267,6 +267,42 @@ export class NotificationStore {
   }
 
   /**
+   * Delete one, by id.
+   *
+   * 🔴 Separate from {@link NotificationStore.purge}, which is a retention
+   * broom and spares unread rows by design. This is a person pointing at one
+   * row and saying *that one* — including an unread one, because dismissing
+   * something you have decided you do not need is the ordinary reason to press
+   * the button, and a delete that quietly refused would be a control that does
+   * nothing.
+   *
+   * `NotFound` rather than a silent success: two tabs open, and the second
+   * press should say the row is already gone rather than pretend it removed it.
+   */
+  async remove(id: string): Promise<Result<Notification, NotFound>> {
+    const deleted = await this.db.delete(notifications).where(eq(notifications.id, id)).returning();
+    const row = deleted[0];
+    if (!row) return Result.err(new NotFound({ what: "notification", id }));
+    return Result.ok(row);
+  }
+
+  /**
+   * Delete every notification that has been read.
+   *
+   * The bell's own "clear" — bounded by *read*, not by age, because the thing
+   * somebody wants when a list of forty has been dealt with is an empty list,
+   * and "older than 30 days" is not that. Unread rows are untouched: the one
+   * nobody has seen is the only one still doing a job.
+   */
+  async clearRead(): Promise<number> {
+    const deleted = await this.db
+      .delete(notifications)
+      .where(sql`${notifications.readAt} is not null`)
+      .returning({ id: notifications.id });
+    return deleted.length;
+  }
+
+  /**
    * Delete old notifications. Returns how many went.
    *
    * `RETURNING` rather than a driver-specific "changes" count: SQLite and
