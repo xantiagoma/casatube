@@ -346,6 +346,11 @@ export class JobQueue {
         paused: false,
         notBefore: null,
         preferences,
+        // ⚠️ Duplicated names are collapsed and order does not matter — this is
+        // a set stored as a list. `fingerprint` deliberately does *not* include
+        // it: the same video with a media-server refresh skipped is the same
+        // download, not a different one.
+        pluginsOff: [...new Set(input.pluginsOff ?? [])],
         fingerprint,
         log: [],
         thumbnail: input.thumbnail ?? null,

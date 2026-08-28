@@ -27,6 +27,7 @@ import { createRegistry } from "../providers/registry";
 import { createApp } from "../server";
 import { loadConfig } from "./config";
 import { createQueueWatcher } from "./watcher";
+import { createPluginRuntime, type PluginRuntime } from "../core/plugin-runtime";
 import type { ClientBundle } from "./web";
 
 const INFO: MediaInfo = {
@@ -56,7 +57,11 @@ let dir: string;
 let db: Db;
 let queue: JobQueue;
 
-async function makeApp(provider: Provider = fakeProvider(), configOverrides: Record<string, unknown> = {}) {
+async function makeApp(
+  provider: Provider = fakeProvider(),
+  configOverrides: Record<string, unknown> = {},
+  plugins?: PluginRuntime,
+) {
   db = openDb({ path: join(dir, "casatube.db") });
   queue = await openJobQueue({ db, queueDbPath: join(dir, "queue.db") });
   const watcher = createQueueWatcher(queue, { pollMs: 20, heartbeatMs: 100 });
@@ -75,6 +80,7 @@ async function makeApp(provider: Provider = fakeProvider(), configOverrides: Rec
       // `key: null` rather than the ambient CREDENTIALS_KEY: a test must not
       // change behaviour because of what happens to be in the environment.
       credentials: new CredentialStore({ db, key: null, tempDir: dir, warn: () => {} }),
+      plugins,
       config: { ...loadConfig({}), dataDir: dir, dev: false, ...configOverrides },
     },
     BUNDLE,
@@ -285,6 +291,84 @@ describe("POST /api/jobs", () => {
     expect(body.job.preferences.audioLanguages).toEqual([]);
     // Sorted and de-duplicated by `resolvePreferences`, never derived from audio.
     expect(body.job.preferences.subtitleLanguages).toEqual(["en", "es"]);
+  });
+});
+
+// --- Plugins on the enqueue path (2026-08-27) -------------------------------
+
+describe("POST /api/jobs and plugins", () => {
+  /** A real runtime over a plugin file this test writes. */
+  async function runtimeWith(source: string, name: string): Promise<PluginRuntime> {
+    const pluginDir = join(dir, "plugins");
+    mkdirSync(pluginDir, { recursive: true });
+    writeFileSync(join(pluginDir, `${name}.ts`), source);
+    const runtime = createPluginRuntime({ dir: pluginDir, registry: createRegistry({ fallback: null }) });
+    await runtime.load();
+    return runtime;
+  }
+
+  const shortener = `export default {
+  name: "shortener", version: "1.0.0", description: "rewrites URLs", capabilities: [], matches: ["*"],
+  hooks: [{ at: "url:resolve", kind: "transform" }],
+  setup({ on }) { on("url:resolve", (url) => url.replace("short.test", "long.test")); },
+};
+`;
+
+  test("🔴 url:resolve rewrites the URL before the row is written", async () => {
+    // Before the worker gained a plugin runtime, this hook — like all six —
+    // was never dispatched at all. The row is what survives a restart, so a
+    // rewrite that happened afterwards would not be the job that was queued.
+    const app = await makeApp(fakeProvider(), {}, await runtimeWith(shortener, "shortener"));
+    const body = (await (
+      await post(app, "/api/jobs", { url: "https://short.test/abc", destination: "" })
+    ).json()) as { job: { url: string } };
+
+    expect(body.job.url).toBe("https://long.test/abc");
+  });
+
+  test("a per-download opt-out is stored on the job and keeps the original URL", async () => {
+    const app = await makeApp(fakeProvider(), {}, await runtimeWith(shortener, "shortener"));
+    const body = (await (
+      await post(app, "/api/jobs", {
+        url: "https://short.test/abc",
+        destination: "",
+        pluginsOff: ["shortener"],
+      })
+    ).json()) as { job: { url: string; pluginsOff: string[] } };
+
+    expect(body.job.url).toBe("https://short.test/abc");
+    // Stored, because a retry next week has to respect the same choice.
+    expect(body.job.pluginsOff).toEqual(["shortener"]);
+  });
+
+  test("🔴 a transforming hook that throws refuses the job instead of queueing a URL nobody resolved", async () => {
+    const app = await makeApp(
+      fakeProvider(),
+      {},
+      await runtimeWith(
+        `export default {
+  name: "broken", version: "1.0.0", description: "throws", capabilities: [], matches: ["*"],
+  hooks: [{ at: "url:resolve", kind: "transform" }],
+  setup({ on }) { on("url:resolve", () => { throw new Error("nope"); }); },
+};
+`,
+        "broken",
+      ),
+    );
+
+    const response = await post(app, "/api/jobs", { url: "https://short.test/abc", destination: "" });
+    expect(response.status).toBe(422);
+    const body = (await response.json()) as { tag: string; message: string };
+    expect(body.tag).toBe("PluginRejected");
+    // The plugin is named, because the fix is in the plugin.
+    expect(body.message).toContain("broken");
+    // And nothing was queued.
+    expect(((await (await get(app, "/api/jobs")).json()) as { total: number }).total).toBe(0);
+  });
+
+  test("no runtime at all is not an error — the app stands up without plugins", async () => {
+    const app = await makeApp();
+    expect((await post(app, "/api/jobs", { url: "https://example.test/a", destination: "" })).status).toBe(200);
   });
 });
 

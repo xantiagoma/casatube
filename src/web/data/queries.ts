@@ -146,6 +146,14 @@ export interface EnqueueRequest {
   preferences: Preferences;
   priority?: Priority;
   force?: boolean;
+  /**
+   * Plugins this one download opts **out** of.
+   *
+   * ⚠️ Only out. A plugin that is off server-wide was never activated and has
+   * no hooks registered, so "on for this download" is not something the server
+   * can honour — the panel says so rather than drawing a switch that lies.
+   */
+  pluginsOff?: string[];
   title?: string;
   thumbnail?: string;
   duration?: number;
@@ -174,6 +182,12 @@ export function useEnqueue() {
           thumbnail: request.thumbnail,
           duration: request.duration,
           source: request.source,
+          // Omitted when empty rather than sent as `[]`: "no exclusions" is the
+          // absence of the field, and a request that always carries one is a
+          // request whose default is invisible in a log.
+          ...(request.pluginsOff && request.pluginsOff.length > 0
+            ? { pluginsOff: request.pluginsOff }
+            : {}),
         }),
       ),
     // Invalidate rather than write the new job in: the stream is about to say

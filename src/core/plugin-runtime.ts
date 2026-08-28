@@ -593,6 +593,25 @@ export interface PluginRuntime {
    * to run — the returned promise never waits for them, and never fails on them.
    */
   run<P extends HookPoint>(at: P, ...args: HookArgs[P]): Promise<Result<HookOutcome[P], PluginHookFailed>>;
+  /**
+   * The same, with a per-download opt-out.
+   *
+   * 🔴 `skip` can only ever take a plugin **away**. There is no "run this one
+   * anyway": a plugin that is off server-wide was never activated, its
+   * `setup()` never ran and its hooks were never registered, so there is
+   * nothing to dispatch to. Offering the other direction would be a switch that
+   * moves and changes nothing — the failure this codebase has already paid for
+   * twice (`MAX_CONCURRENT_DOWNLOADS`, `LOG_LEVEL`).
+   *
+   * Names that match no plugin are ignored rather than rejected: a job carries
+   * its exclusions for as long as it exists, and a plugin can be deleted while
+   * a job that opted out of it is still queued.
+   */
+  runWith<P extends HookPoint>(
+    skip: readonly string[],
+    at: P,
+    ...args: HookArgs[P]
+  ): Promise<Result<HookOutcome[P], PluginHookFailed>>;
   /** Resolves once every observer started so far has settled. For tests and shutdown. */
   observersIdle(): Promise<void>;
 }
@@ -935,10 +954,15 @@ export function createPluginRuntime(options: PluginRuntimeOptions): PluginRuntim
     return (args[0] as Job | undefined)?.url ?? null;
   }
 
-  function eligible(at: HookPoint, url: string | null): HookRecord[] {
+  function eligible(at: HookPoint, url: string | null, skip: readonly string[] = []): HookRecord[] {
     return (hooks.get(at) ?? []).filter((hook) => {
       const entry = entries.get(hook.plugin);
       if (!entry || !entry.enabled || !entry.live) return false;
+      // 🔴 The per-download opt-out. Applied *here*, with the server-wide
+      // checks, so there is exactly one place that decides whether a hook runs
+      // — a second gate somewhere downstream is how "off" comes to mean
+      // different things at different lifecycle points.
+      if (skip.includes(hook.plugin)) return false;
       // `matches` is the same declaration the UI showed. If it did not claim
       // this URL there, it does not get to act on it here.
       return url === null || manifestMatches(entry.manifest, url);
@@ -963,12 +987,13 @@ export function createPluginRuntime(options: PluginRuntimeOptions): PluginRuntim
     void done.finally(() => observers.delete(done));
   }
 
-  async function run<P extends HookPoint>(
+  async function runWith<P extends HookPoint>(
+    skip: readonly string[],
     at: P,
     ...args: HookArgs[P]
   ): Promise<Result<HookOutcome[P], PluginHookFailed>> {
     const current = [...args] as unknown[];
-    const selected = eligible(at, urlOf(at, current));
+    const selected = eligible(at, urlOf(at, current), skip);
 
     // Started first, and never awaited: an observer must not delay the pipeline
     // any more than it can fail it. Each gets its own copy of the arguments so
@@ -1059,7 +1084,8 @@ export function createPluginRuntime(options: PluginRuntimeOptions): PluginRuntim
       return Result.ok(resolvedFor(reloaded.manifest));
     },
 
-    run,
+    run: (at, ...args) => runWith([], at, ...args),
+    runWith,
 
     observersIdle: async () => {
       // Every promise here already swallowed its own failure, so this cannot

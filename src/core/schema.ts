@@ -85,6 +85,21 @@ export const jobs = sqliteTable(
     /** Preferences resolved for this job, serialised. */
     preferences: text("preferences", { mode: "json" }).$type<Preferences>().notNull(),
     /**
+     * Plugins this download opted **out** of, by name.
+     *
+     * 🔴 A skip-list rather than a map of on/off, because only one direction is
+     * implementable and pretending otherwise would be a switch that lies: a
+     * plugin that is off server-wide is never activated, its `setup()` never
+     * runs and its hooks are never registered, so there is nothing to dispatch
+     * to. "Off for this one download" is a real answer; "on for this one
+     * download" is not, and the UI says so instead of offering it.
+     *
+     * Durable because it is a decision about this job: a retry a week later,
+     * after the plugin was turned on for everything else, must still respect
+     * the choice that was made when the job was queued.
+     */
+    pluginsOff: text("plugins_off", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
+    /**
      * Stable hash of url + resolved configuration.
      * Duplicate detection compares this, not the URL: 720p when 1080p is on
      * disk is a different request, not a duplicate (PLAN §15).

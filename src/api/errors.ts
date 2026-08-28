@@ -59,6 +59,9 @@ const STATUS_BY_TAG: Record<string, number> = {
   // 409: the library is in a state that refuses this request — a name already
   // taken, a file already queued. Nothing is wrong; something is in the way.
   TranscodeRejected: 409,
+  // A plugin refused the request. 422: it was understood, and a *plugin* — not
+  // the server and not the source — decided it could not go ahead.
+  PluginRejected: 422,
   // Worker
   StageFailed: 500,
   Cancelled: 409,
@@ -126,6 +129,13 @@ function describe(error: Taggedish): string {
       return `A job that is ${String(error.from ?? "in this state")} cannot become ${String(error.to ?? "that")}.`;
     case "LeaseLost":
       return "Another worker took this job.";
+    case "PluginRejected":
+      return (
+        `The "${String(error.plugin ?? "unknown")}" plugin failed at ` +
+        `${String(error.at ?? "a hook")} and the job was not created: ` +
+        `${String(error.detail ?? "no reason given")}. Turn it off for this ` +
+        `download, or fix it under Settings.`
+      );
     case "MountUnavailable":
       return `The library is unreachable: ${String(error.detail ?? "")}`.trim();
     case "PathOutsideRoot":

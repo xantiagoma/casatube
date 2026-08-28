@@ -86,6 +86,21 @@ export class StageFailed extends TaggedError("StageFailed")<{
   exitCode?: number;
 }> {}
 
+/**
+ * A transforming plugin hook threw, and the job cannot be honestly created.
+ *
+ * 🔴 A rejected request rather than a queued job. `url:resolve` runs *before*
+ * the row is written, and a shortener that failed leaves a URL nobody has
+ * resolved — queueing it anyway would download something other than what was
+ * asked for, which is the silent substitution this project keeps paying for.
+ * The plugin is named, because the fix is in the plugin.
+ */
+export class PluginRejected extends TaggedError("PluginRejected")<{
+  plugin: string;
+  at: string;
+  detail: string;
+}> {}
+
 /** The user cancelled, or the process was interrupted. Not a failure. */
 export class Cancelled extends TaggedError("Cancelled")<{ jobId: string }> {}
 

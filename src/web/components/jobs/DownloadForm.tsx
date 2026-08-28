@@ -267,6 +267,16 @@ export function DownloadForm({ className }: { className?: string }) {
   const [edits, setEdits] = useState<Partial<Choices>>({});
   const [toggles, setToggles] = useState<{ sponsorblock?: boolean; embedSubtitles?: boolean }>({});
 
+  /**
+   * Plugins this download opts out of.
+   *
+   * ⚠️ Local to the form and **not** persisted anywhere: it is a departure from
+   * the server-wide default for one download, so remembering it would quietly
+   * turn a one-off into a setting. `submit` sends it, `enqueue` stores it on
+   * the job, and the job carries it through every retry.
+   */
+  const [pluginsOff, setPluginsOff] = useState<string[]>([]);
+
   const base: Preferences = defaults.data?.resolved ?? DEFAULT_PREFERENCES;
 
   // Read before `probe` is declared: the query is keyed by the URL alone, so
@@ -311,6 +321,7 @@ export function DownloadForm({ className }: { className?: string }) {
         ...(info?.thumbnail ? { thumbnail: info.thumbnail } : {}),
         ...(info?.duration ? { duration: info.duration } : {}),
         ...(info?.source ? { source: info.source } : {}),
+        ...(pluginsOff.length > 0 ? { pluginsOff } : {}),
       },
       {
         // 🔴 A queued job is the end of this panel's job: the row is already in
@@ -388,8 +399,12 @@ export function DownloadForm({ className }: { className?: string }) {
               onChange={(event) => {
                 setUrl(event.target.value);
                 // A new URL means a new suggestion; anything chosen for the old
-                // one is not an opinion about this one.
+                // one is not an opinion about this one. The plugin exclusions
+                // go with it: a different URL may not even be claimed by the
+                // plugin that was switched off, and carrying the choice over
+                // would silently apply it to a download nobody chose it for.
                 setEdits({});
+                setPluginsOff([]);
                 enqueue.reset();
               }}
               placeholder="https://…"
@@ -472,6 +487,8 @@ export function DownloadForm({ className }: { className?: string }) {
           onDestination={setDestination}
           priority={priority}
           onPriority={setPriority}
+          pluginsOff={pluginsOff}
+          onPluginsOff={setPluginsOff}
           sponsorblock={sponsorblock}
           onSponsorblock={(next) => setToggles((current) => ({ ...current, sponsorblock: next }))}
           embedSubtitles={embedSubtitles}
@@ -518,6 +535,9 @@ function OptionsPanel(props: {
   onSponsorblock(next: boolean): void;
   embedSubtitles: boolean;
   onEmbedSubtitles(next: boolean): void;
+  /** Plugins this download opts out of — see `PluginNotice`. */
+  pluginsOff: readonly string[];
+  onPluginsOff(next: string[]): void;
   footer: ReactNode;
 }) {
   const { analyzed, choices } = props;
@@ -603,9 +623,9 @@ function OptionsPanel(props: {
           />
         </Step>
 
-        {/* ⚠️ Deliberately outside the numbered steps. A number promises a
-            decision, and there is nothing to decide here until the server can
-            carry a per-download choice — see the header. */}
+        {/* Outside the numbered steps, and still deliberately so: the numbers
+            are the decisions a download *needs*, and every plugin here has a
+            working default. The switch is a departure from it, not a step. */}
         <section className="space-y-3 border-t pt-5">
           <div>
             <h3 className="text-sm font-semibold">Plugins</h3>
@@ -614,7 +634,7 @@ function OptionsPanel(props: {
               this.
             </p>
           </div>
-          <ApplicablePlugins url={props.url} />
+          <ApplicablePlugins url={props.url} off={props.pluginsOff} onOff={props.onPluginsOff} />
         </section>
       </div>
     </AnalysisDrawer>

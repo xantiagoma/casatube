@@ -146,25 +146,31 @@ download window says *"Applies to every download"* for an empty `matches` and
 omitting `matches` because "it doesn't match anything yet" ships a plugin that
 runs on everything.
 
-## The per-download plugin override does not exist on the server (2026-08-27)
+## Plugins loaded, were listed, were configurable — and never ran (2026-08-27)
 
-PLAN §5 promises two controls: a **global default** per plugin, and a
-**per-download override** in the download window. Only the first one is built.
-`POST /api/jobs` takes `url`, `destination`, `preferences`, `priority`, `force`
-and four metadata fields — **nothing about plugins** — there is no per-job
-column for it, and `runtime.run()` dispatches to whatever is enabled
-process-wide at the moment a hook fires.
+Found while building the per-download override PLAN §5 asks for. The override
+needed somewhere to be applied, and following the dispatch path led nowhere:
+**nothing in the pipeline ever called `runtime.run`.** Not one of the six hook
+points. Plugins were discovered, validated, activated, shown on the Settings
+screen with their capabilities and hooks, enabled, disabled, configured — and
+the worker was never handed the runtime at all.
 
-📌 Written down because the natural thing to build from that paragraph of the
-plan is a switch per plugin in the download panel, and it would be the third
-control in this file that moves and changes nothing (`MAX_CONCURRENT_DOWNLOADS`
-and `LOG_LEVEL` are the other two — and the first of those has since been
-wired up). What the panel does instead is show which plugins apply, what each
-would do, whether it is on, and a link to the one screen that can change that.
+Proven rather than argued, because a search proves only that a search found
+nothing: a plugin declaring all six points and logging at each was installed on
+a running server, a job was queued, and it printed nothing.
 
-⚠️ The wiring, when it is wanted, is a per-job field and a dispatch that reads
-it — not a UI change. `applicableTo` is already the right answer to show; only
-the decision has nowhere to live.
+📌 The reason it survived is the reason it is written here. Every visible
+surface said it worked — a plugin list with states, an "applies to this
+download" panel, log lines from `setup()` — and `setup()` running is exactly
+what makes a plugin *look* alive. The only observable difference between "the
+hook fired and did nothing visible" and "the hook never fired" is a plugin
+written to say so.
+
+⚠️ And a design constraint fell out of it that is easy to get wrong in the
+other direction: a per-download override can only turn a plugin **off**. A
+plugin that is off server-wide is never activated, so it registers no hooks and
+there is nothing to dispatch to — offering "on for this one download" would be
+a fourth control that moves and changes nothing.
 
 ## A *value* imported from `core/` into `src/web` breaks the bundle, and `tsc` says nothing (2026-08-27)
 

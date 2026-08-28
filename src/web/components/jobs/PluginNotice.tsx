@@ -9,23 +9,20 @@
  * and asking is safe, which is why it happens on analysis rather than behind a
  * button.
  *
- * ## 🔴 There is no per-download switch here, and that is not an oversight
+ * ## 🔴 The switch turns a plugin off for this download, and only off
  *
  * PLAN §5 wants two things: a **global default** per plugin, and a
- * **per-download override**. The first exists — `POST /api/plugins/:name/enable`
- * and `/disable`, which is what Settings drives. The second does not:
- * `POST /api/jobs` accepts `url`, `destination`, `preferences`, `priority`,
- * `force` and four metadata fields, and **nothing about plugins**. There is no
- * per-job column, and `runtime.run()` dispatches to whatever is enabled process
- * -wide at the moment the hook fires.
+ * **per-download override**. Both exist now — Settings drives the first,
+ * `POST /api/jobs` carries `pluginsOff` for the second, and the worker
+ * dispatches through `runWith(job.pluginsOff, …)`.
  *
- * A switch drawn here would therefore be a control that moves and changes
- * nothing — the exact failure `docs/DISCOVERIES.md` records twice already
- * (`MAX_CONCURRENT_DOWNLOADS`, `LOG_LEVEL`: settings on a screen that no code
- * reads). So this panel shows **what would happen and what state each plugin is
- * in**, and sends the decision to the one place that can carry it out. When the
- * server grows a per-job override, the switch belongs in this component and the
- * link becomes a fallback.
+ * ⚠️ **There is no per-download "on", and the asymmetry is real rather than
+ * unfinished.** A plugin that is off server-wide is never activated: its
+ * `setup()` does not run, so it registers no hooks and there is nothing to
+ * dispatch to. Drawing that switch would be a control that moves and changes
+ * nothing — the failure `docs/DISCOVERIES.md` already records twice
+ * (`MAX_CONCURRENT_DOWNLOADS`, `LOG_LEVEL`). So an off plugin shows as off,
+ * with the link to the one place that can change it.
  *
  * ⚠️ The list mixes plugins that are **on** with plugins that are **off**:
  * `applicableTo` answers "claims this URL", not "will run". Every row says
@@ -35,6 +32,7 @@ import { Link } from "@tanstack/react-router";
 import { Loader2, Plug, Settings2, TriangleAlert } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import type { Capability, HookDeclaration, HookPoint } from "../../../core/plugins";
 import type { PluginStatus } from "../../../core/plugin-runtime";
@@ -104,8 +102,19 @@ const NEEDS: Record<Capability, string> = {
   subprocess: "running programs",
 };
 
-function PluginRow({ plugin }: { plugin: PluginStatus }) {
+function PluginRow({
+  plugin,
+  skipped,
+  onSkip,
+}: {
+  plugin: PluginStatus;
+  /** Opted out of, for this download. Meaningless unless the plugin is on. */
+  skipped: boolean;
+  /** Absent where there is nothing to decide — the queue row, for instance. */
+  onSkip?: (skip: boolean) => void;
+}) {
   const on = plugin.state === "active";
+  const willRun = on && !skipped;
   // ⚠️ Deduplicated, and the composite is also the React key. A manifest may
   // declare the same point twice — `on()` can be called more than once at one
   // moment — and two identical sentences read as two different things
@@ -126,20 +135,39 @@ function PluginRow({ plugin }: { plugin: PluginStatus }) {
     <li
       className={cn(
         "rounded-lg border px-3 py-2.5",
-        on ? "border-primary/40 bg-primary/5" : "bg-muted/30",
+        willRun ? "border-primary/40 bg-primary/5" : "bg-muted/30",
       )}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <span className={cn("text-sm font-medium", !on && "text-muted-foreground")}>{plugin.name}</span>
+        <span className={cn("text-sm font-medium", !willRun && "text-muted-foreground")}>{plugin.name}</span>
         <Badge
           variant="secondary"
           className={cn(
             "px-1.5 py-0 text-[10px] font-medium",
-            on ? "bg-success/12 text-success" : "bg-muted text-muted-foreground",
+            willRun ? "bg-success/12 text-success" : "bg-muted text-muted-foreground",
           )}
         >
-          {on ? "On — it will run" : "Off — it will not run"}
+          {!on
+            ? "Off for every download"
+            : skipped
+              ? "Off for this download"
+              : "On — it will run"}
         </Badge>
+
+        {/* 🔴 Only where there is something to decide. A plugin that is off
+            server-wide has no hooks registered at all, so a switch offering to
+            turn it on for one download would be a switch over nothing — the
+            row says where it *can* be turned on instead. */}
+        {onSkip && on ? (
+          <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Run for this download</span>
+            <Switch
+              checked={!skipped}
+              onCheckedChange={(next) => onSkip(!next)}
+              aria-label={`Run ${plugin.name} for this download`}
+            />
+          </label>
+        ) : null}
       </div>
 
       <p className="mt-0.5 text-xs text-muted-foreground">{plugin.description}</p>
@@ -182,7 +210,7 @@ function PluginRow({ plugin }: { plugin: PluginStatus }) {
           active* and does nothing — the exact silence `PluginStatus` carries
           `missingSettings` to break. It matters most here, where someone is
           about to rely on it. */}
-      {on && missing ? (
+      {willRun && missing ? (
         <p className="mt-1.5 flex items-start gap-1.5 text-xs text-warning">
           <TriangleAlert className="mt-0.5 size-3 shrink-0" aria-hidden />
           <span>
@@ -220,8 +248,24 @@ function SettingsLink({ className }: { className?: string }) {
  * everything else still queues. Analysing is already optional (the worker
  * analyses again anyway); knowing which plugins apply is more optional still.
  */
-export function ApplicablePlugins({ url }: { url: string }) {
+export function ApplicablePlugins({
+  url,
+  off,
+  onOff,
+}: {
+  url: string;
+  /** Plugin names this download has opted out of. */
+  off: readonly string[];
+  onOff: (next: string[]) => void;
+}) {
   const applicable = useApplicablePlugins(url);
+
+  const toggle = (name: string, skip: boolean): void => {
+    const next = new Set(off);
+    if (skip) next.add(name);
+    else next.delete(name);
+    onOff([...next]);
+  };
 
   if (applicable.isPending) {
     return (
@@ -243,6 +287,7 @@ export function ApplicablePlugins({ url }: { url: string }) {
 
   const plugins = applicable.data.plugins;
   const on = plugins.filter((plugin) => plugin.state === "active");
+  const running = on.filter((plugin) => !off.includes(plugin.name));
 
   if (plugins.length === 0) {
     return (
@@ -260,22 +305,29 @@ export function ApplicablePlugins({ url }: { url: string }) {
     <div className="space-y-2.5">
       <ul className="space-y-2">
         {plugins.map((plugin) => (
-          <PluginRow key={plugin.name} plugin={plugin} />
+          <PluginRow
+            key={plugin.name}
+            plugin={plugin}
+            skipped={off.includes(plugin.name)}
+            onSkip={(skip) => toggle(plugin.name, skip)}
+          />
         ))}
       </ul>
 
-      {/* 🔴 The honest version of the per-download switch. See the header. */}
       <div className="rounded-lg border border-dashed p-3">
         <p className="text-xs font-medium">
-          {on.length === 0
-            ? "None of these is switched on, so none of them will run."
-            : on.length === plugins.length
-              ? "All of these are switched on and will run."
-              : `${on.length} of ${plugins.length} ${on.length === 1 ? "is" : "are"} switched on and will run.`}
+          {running.length === 0
+            ? "None of these will run for this download."
+            : running.length === plugins.length
+              ? "All of these will run for this download."
+              : `${running.length} of ${plugins.length} will run for this download.`}
         </p>
+        {/* 🔴 The asymmetry, said plainly rather than left to be discovered by
+            looking for a switch that is not there. */}
         <p className="mt-1 text-xs text-muted-foreground">
-          On or off is a setting for the whole server, not for this download — CasaTube has no per-download override
-          yet, so a switch here would move and change nothing.
+          A switch here turns a plugin off for <em>this</em> download only, and the choice is stored on the job — a
+          retry next week still respects it. Turning one <em>on</em> is a server-wide setting: a plugin that is off
+          was never started, so there are no hooks for one download to reach.
         </p>
         <SettingsLink className="mt-2" />
       </div>

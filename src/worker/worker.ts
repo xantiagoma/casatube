@@ -10,10 +10,12 @@ import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { JobQueue } from "../core/queue";
 import type { ProviderRegistry } from "../providers/registry";
+import type { PluginRuntime } from "../core/plugin-runtime";
 import type { DownloadPlan, FetchResult, Job, ProgressUpdate, StageName } from "../core/types";
 import { buildDownloadPlan, videoCodecNotice } from "../core/selection";
 import { demandsBackoff } from "../core/errors";
 import { Semaphore } from "./semaphore";
+import type { HookArgs } from "../core/plugin-runtime";
 import {
   clearRunning, initialStages, markDone, markFailed, markRunning,
   resumeFrom, statusForStage,
@@ -59,6 +61,19 @@ export interface WorkerOptions {
     completed(job: Job): Promise<void>;
     failed(job: Job, error: string): Promise<void>;
   };
+  /**
+   * The loaded plugins, so their hooks actually fire.
+   *
+   * 🔴 Its absence was a real bug and not a small one: plugins loaded, appeared
+   * on the Settings screen, could be enabled, disabled and configured, the
+   * download window listed which ones "apply" — and **nothing ever called
+   * them**, at any lifecycle point. Verified by a plugin that logged at all six
+   * points and never printed a line.
+   *
+   * Optional for the reason `notifier` is: a worker in a test must stand up
+   * without a plugin directory.
+   */
+  plugins?: PluginRuntime;
 }
 
 const nowIso = (now: () => Date) => now().toISOString();
@@ -73,9 +88,37 @@ export class Worker {
     this.#o = {
       workerId: `slot-1`, leaseMs: 60_000, pollMs: 1_000,
       maxActiveJobs: 4, maxConcurrentDownloads: 3,
-      now: () => new Date(), notifier: undefined as never, ...o,
+      now: () => new Date(), notifier: undefined as never, plugins: undefined as never, ...o,
     };
     this.#downloads = new Semaphore(this.#o.maxConcurrentDownloads);
+  }
+
+  /**
+   * Fire a lifecycle hook for one job, honouring what that job opted out of.
+   *
+   * ⚠️ The two kinds are not treated the same and must not be. An **observer**
+   * that fails is a log line: a media-server refresh that did not happen does
+   * not make a correctly downloaded file wrong, so nothing here can turn one
+   * into a failed job. A **transform** can change the outcome, so its failure
+   * is the job's failure — which is why `probe:complete` is dispatched inline
+   * in the stage that owns the plan rather than through this.
+   */
+  #observe<P extends "job:queued" | "download:complete" | "job:completed" | "job:failed">(
+    job: Job,
+    at: P,
+    ...args: HookArgs[P]
+  ): void {
+    const plugins = this.#o.plugins;
+    if (!plugins) return;
+    void plugins.runWith(job.pluginsOff, at, ...args).then((outcome) => {
+      // Only a transform can produce this, and none is registered at these
+      // points — but a plugin declaring the wrong kind should not be silent.
+      if (Result.isError(outcome)) {
+        void this.#o.queue.update(job.id, {
+          appendLog: [`plugin ${outcome.error.plugin} failed at ${at}: ${outcome.error.detail}`],
+        });
+      }
+    });
   }
 
   /** Cancel a job that is running right now. Queue state is the queue's business. */
@@ -172,8 +215,12 @@ export class Worker {
           }
           await queue.update(job.id, { error: detail });
           const failed = await queue.retry(job.id);
-          if (this.#o.notifier && Result.isOk(failed) && failed.value.status === "failed") {
-            void this.#o.notifier.failed(failed.value, detail);
+          // ⚠️ Only when the job is *finally* failed. `retry` puts a job with
+          // attempts left back on the queue, and telling a plugin "this failed"
+          // for every attempt would make one bad night look like four.
+          if (Result.isOk(failed) && failed.value.status === "failed") {
+            if (this.#o.notifier) void this.#o.notifier.failed(failed.value, detail);
+            this.#observe(job, "job:failed", failed.value, detail);
           }
           return;
         }
@@ -189,8 +236,9 @@ export class Worker {
         status: "done", progress: 100,
         outputFile: downloaded ? await this.#finalPath(job, downloaded.file) : null,
       });
-      if (this.#o.notifier && Result.isOk(finished)) {
-        void this.#o.notifier.completed(finished.value);
+      if (Result.isOk(finished)) {
+        if (this.#o.notifier) void this.#o.notifier.completed(finished.value);
+        this.#observe(job, "job:completed", finished.value);
       }
       await rm(workDir, { recursive: true, force: true });
     } catch (err) {
@@ -241,8 +289,26 @@ export class Worker {
         const info = await provider.value.probe(job.url, ctx.controller.signal);
         if (Result.isError(info)) return info;
 
-        const plan = buildDownloadPlan(job.url, info.value, job.preferences);
-        if (Result.isError(plan)) return plan;
+        const built = buildDownloadPlan(job.url, info.value, job.preferences);
+        if (Result.isError(built)) return built;
+
+        /**
+         * 🔴 A **transforming** hook, so its failure is the job's failure.
+         *
+         * This is the one point where a plugin can change what gets downloaded
+         * — PLAN §5's `probe:complete`. Awaited, in declared order, and a throw
+         * ends the job rather than quietly downloading the plan the plugin was
+         * trying to replace.
+         */
+        const plan = this.#o.plugins
+          ? await this.#o.plugins.runWith(job.pluginsOff, "probe:complete", info.value, built.value)
+          : Result.ok(built.value);
+        if (Result.isError(plan)) {
+          return Result.err({
+            _tag: "PluginHookFailed",
+            detail: `plugin ${plan.error.plugin} failed at probe:complete: ${plan.error.detail}`,
+          });
+        }
 
         // 🔴 Never a silent substitution. The form says this before the job is
         // queued; the job log says it again, because a job created from an API
@@ -277,6 +343,10 @@ export class Worker {
           }),
         );
         if (Result.isError(got)) return got;
+        // The bytes are on disk, in the working directory — not yet in the
+        // library. That is what `download:complete` means and it is why it is
+        // a separate point from `job:completed`.
+        this.#observe(job, "download:complete", job, got.value.file);
         return Result.ok({ downloaded: got.value });
       }
 

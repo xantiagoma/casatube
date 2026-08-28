@@ -1,0 +1,1 @@
+ALTER TABLE `jobs` ADD `plugins_off` text DEFAULT '[]' NOT NULL;

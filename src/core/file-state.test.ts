@@ -78,6 +78,7 @@ function job(fields: {
     source: null,
     plan: null,
     preferences: DEFAULT_PREFERENCES,
+    pluginsOff: [],
     fingerprint: `fp-${counter}`,
     log: [],
     error: null,

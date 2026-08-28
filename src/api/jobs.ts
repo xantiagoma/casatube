@@ -15,7 +15,7 @@ import { jobFileStates } from "../core/file-state";
 import { JOB_BUCKETS } from "../core/job-buckets";
 import { openLibrary } from "../core/library";
 import type { AppContext } from "./context";
-import { InvalidTransition } from "../core/errors";
+import { InvalidTransition, PluginRejected } from "../core/errors";
 import { fail } from "./errors";
 import { safeDestination } from "./destination";
 import { preferencesSchema } from "./schemas";
@@ -47,7 +47,7 @@ function parseStatuses(raw: string | undefined): JobStatus[] | undefined {
 }
 
 export function jobRoutes(ctx: AppContext) {
-  const { queue, registry, config } = ctx;
+  const { queue, registry, config, plugins } = ctx;
   /**
    * The download defaults, read live.
    *
@@ -146,11 +146,40 @@ export function jobRoutes(ctx: AppContext) {
           const destination = safeDestination(body.destination, config.libraryDir);
           if (Result.isError(destination)) return fail(destination.error);
 
-          const provider = registry.resolve(body.url);
+          const pluginsOff = body.pluginsOff ?? [];
+
+          /**
+           * 🔴 `url:resolve` — the first lifecycle point, and the only one that
+           * has to happen *here*.
+           *
+           * It runs before a provider is chosen, which is this line and not the
+           * worker's: the row is about to be written, and rewriting the URL
+           * afterwards would mean the job that survives a restart is not the
+           * one the plugin resolved. A shortener that fails is not a URL we can
+           * queue, so a transform's failure is a rejected request rather than a
+           * job that quietly downloads the wrong thing.
+           */
+          let url = body.url;
+          if (plugins) {
+            const resolved = await plugins.runWith(pluginsOff, "url:resolve", url);
+            if (Result.isError(resolved)) {
+              return fail(
+                new PluginRejected({
+                  plugin: resolved.error.plugin,
+                  at: resolved.error.at,
+                  detail: resolved.error.detail,
+                }),
+              );
+            }
+            url = resolved.value;
+          }
+
+          const provider = registry.resolve(url);
           if (Result.isError(provider)) return fail(provider.error);
 
           const enqueued = await queue.enqueue({
-            url: body.url,
+            url,
+            pluginsOff,
             provider: provider.value.name,
             destination: destination.value,
             // ⚠️ Layered over the stored defaults rather than passed through.
@@ -172,6 +201,13 @@ export function jobRoutes(ctx: AppContext) {
           });
           if (Result.isError(enqueued)) return fail(enqueued.error);
 
+          // 🔴 `job:queued` — "durable and waiting", which is exactly now and
+          // not a moment earlier. An observer, so nothing it does can undo a
+          // row that is already safe (R1).
+          if (plugins && enqueued.value.outcome === "queued") {
+            void plugins.runWith(pluginsOff, "job:queued", enqueued.value.job);
+          }
+
           return enqueued.value;
         },
         {
@@ -187,6 +223,14 @@ export function jobRoutes(ctx: AppContext) {
             thumbnail: t.Optional(t.String()),
             duration: t.Optional(t.Number()),
             source: t.Optional(t.String()),
+            /**
+             * Plugins this one download opts **out** of.
+             *
+             * ⚠️ Only out — see `core/schema.ts`. A plugin that is off
+             * server-wide was never activated and has no hooks to dispatch to,
+             * so there is no "on for this download" to ask for.
+             */
+            pluginsOff: t.Optional(t.Array(t.String({ minLength: 1 }), { maxItems: 100 })),
           }),
         },
       )

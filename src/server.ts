@@ -295,6 +295,9 @@ async function main(): Promise<StartedServer> {
     queue,
     registry,
     notifier,
+    // 🔴 Without this the pipeline fires no hooks at all — plugins loaded,
+    // configured and listed as applicable, and never called once.
+    plugins,
     tempDir: config.tempDir,
     libraryDir: config.libraryDir,
     maxConcurrentDownloads: config.maxConcurrentDownloads,

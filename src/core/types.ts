@@ -166,6 +166,15 @@ export interface EnqueueInput {
    * went wrong with the first copy (PLAN §15).
    */
   force?: boolean;
+  /**
+   * Plugins this one download opts **out** of, by name.
+   *
+   * ⚠️ Only out. A plugin that is off server-wide was never activated, so there
+   * are no hooks to dispatch to — see `schema.ts`. Names that do not exist are
+   * kept rather than rejected: a plugin removed and re-added should find its
+   * old exclusions intact, and a typo excludes nothing.
+   */
+  pluginsOff?: readonly string[];
 }
 
 /**

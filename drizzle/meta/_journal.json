@@ -50,6 +50,13 @@
       "when": 1787813270235,
       "tag": "0006_clumsy_roughhouse",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1787874457924,
+      "tag": "0007_hard_genesis",
+      "breakpoints": true
     }
   ]
 }

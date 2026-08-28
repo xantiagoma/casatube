@@ -377,12 +377,37 @@ building.
 
 ---
 
+## Turning a plugin off for one download
+
+The download panel draws a switch beside every plugin that claims the URL.
+Turning one off sends `pluginsOff: ["name"]` with `POST /api/jobs`, and the
+names are **stored on the job** — a retry next week still respects the choice
+that was made when it was queued.
+
+```jsonc
+POST /api/jobs
+{ "url": "https://…", "destination": "Talks", "pluginsOff": ["jellyfin"] }
+```
+
+⚠️ **Off only.** There is no per-download "on", and the asymmetry is real
+rather than unfinished: a plugin that is off server-wide is never activated, so
+its `setup()` never runs, it registers no hooks, and there is nothing for one
+download to dispatch to. Turning a plugin on is a Settings decision.
+
+The exclusion is applied in one place — the runtime's own eligibility check —
+so it holds at every lifecycle point rather than at whichever ones somebody
+remembered. A name that matches no plugin is ignored rather than refused: a
+plugin can be deleted while a job that opted out of it is still queued.
+
+---
+
 ## The API
 
 | | |
 |---|---|
 | `GET /api/plugins` | Everything found, with manifests, state, and each plugin's recent log. Broken ones included. |
 | `GET /api/plugins/applicable?url=…` | The plugins that would act on this URL. Answered from manifests alone, so asking costs nothing. |
+| `POST /api/jobs` `pluginsOff` | Names this one download opts **out** of. Stored on the job. See above. |
 | `POST /api/plugins/:name/enable` | Turn one on. This is what runs its `setup` for the first time, so it can report a setup failure. |
 | `POST /api/plugins/:name/disable` | Turn one off. Hooks stop being dispatched, providers stop claiming URLs. |
 | `GET /api/plugins/template` | The annotated starter, as a file. |

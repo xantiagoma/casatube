@@ -59,6 +59,7 @@ const JOB: Job = {
   source: "youtube",
   plan: null,
   preferences: DEFAULT_PREFERENCES,
+  pluginsOff: [],
   fingerprint: "fp-1",
   log: [],
   error: null,
