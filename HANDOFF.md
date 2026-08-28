@@ -117,6 +117,14 @@ Before reporting anything complete, audit **call sites**, not words:
 Searching for the string `settings` found plugin settings and reported the
 settings API as wired while five screens did not exist.
 
+🔴 **And the sixth time it was the middle that was missing.** Plugins had an
+API, a Settings screen, a per-URL "these apply" panel and a working loader —
+and no caller anywhere in the pipeline, so not one hook ever fired. Auditing
+call sites at *both* ends would still have missed it: both ends existed. The
+check that found it was a plugin that logged at every point, installed on a
+running server. **If a feature's only evidence is that its parts exist, make it
+say something out loud and go and look.**
+
 **Never use `pkill` or `killall`** — they have killed the running container.
 Kill by exact PID. Bun binds with `SO_REUSEPORT`, so a second server on a busy
 port succeeds and the kernel splits traffic between them; `ss -lptn` is the
