@@ -678,6 +678,60 @@ describe("notBefore", () => {
 
 // --- reads -------------------------------------------------------------------
 
+describe("setPriority", () => {
+  test("🔴 a waiting job can be moved up, and the queue's order follows", async () => {
+    // Priority used to be settable only at enqueue, which made it a guess: you
+    // learn a download matters after it is already behind forty others.
+    const { queue } = await boot();
+    const first = await enqueued(queue, { url: "https://example.test/1" });
+    advance(1);
+    const second = await enqueued(queue, { url: "https://example.test/2" });
+
+    expect((await queue.list()).map((j) => j.id)).toEqual([first.id, second.id]);
+
+    const raised = unwrap(await queue.setPriority(second.id, "high"));
+    expect(raised.priority).toBe("high");
+    // The claim order is the point, not the column.
+    expect((await queue.list()).map((j) => j.id)).toEqual([second.id, first.id]);
+    expect(unwrap(await queue.claimNext("slot-1"))?.id).toBe(second.id);
+  });
+
+  test("🔴 a finished job is refused rather than quietly accepted", async () => {
+    // Priority is an instruction about *when work happens*. A done job has no
+    // "when" left, and storing the intention anyway leaves a column describing
+    // something nothing will ever act on.
+    const { queue } = await boot();
+    const job = await enqueued(queue, { url: "https://example.test/done" });
+    unwrap(await queue.update(job.id, { status: "done" }));
+
+    const refused = await queue.setPriority(job.id, "high");
+    expect(Result.isError(refused)).toBe(true);
+    if (Result.isError(refused)) expect(refused.error._tag).toBe("InvalidTransition");
+    expect(unwrap(await queue.get(job.id)).priority).toBe("normal");
+  });
+
+  test("an unknown job is NotFound, and setting the same value is a no-op", async () => {
+    const { queue } = await boot();
+    const job = await enqueued(queue, { url: "https://example.test/1" });
+
+    const missing = await queue.setPriority("nope", "high");
+    expect(Result.isError(missing) && missing.error._tag).toBe("NotFound");
+
+    const same = unwrap(await queue.setPriority(job.id, "normal"));
+    expect(same.updatedAt).toBe(job.updatedAt); // nothing was written
+  });
+
+  test("a claimed job keeps its worker but carries the new priority into a retry", async () => {
+    const { queue } = await boot();
+    const job = await enqueued(queue, { url: "https://example.test/1" });
+    unwrap(await queue.claimNext("slot-1"));
+
+    const raised = unwrap(await queue.setPriority(job.id, "high"));
+    expect(raised.priority).toBe("high");
+    expect(raised.claimedBy).toBe("slot-1");
+  });
+});
+
 describe("get and list", () => {
   test("get returns NotFound for an unknown id", async () => {
     const { queue } = await boot();

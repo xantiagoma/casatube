@@ -265,7 +265,11 @@ export function DownloadForm({ className }: { className?: string }) {
    * suggestion", and it happens in the input's own handler.
    */
   const [edits, setEdits] = useState<Partial<Choices>>({});
-  const [toggles, setToggles] = useState<{ sponsorblock?: boolean; embedSubtitles?: boolean }>({});
+  const [toggles, setToggles] = useState<{
+    sponsorblock?: boolean;
+    embedSubtitles?: boolean;
+    automaticSubtitles?: boolean;
+  }>({});
 
   /**
    * Plugins this download opts out of.
@@ -299,11 +303,15 @@ export function DownloadForm({ className }: { className?: string }) {
   const choices: Choices = { ...suggested, ...edits };
   const sponsorblock = toggles.sponsorblock ?? base.sponsorblock;
   const embedSubtitles = toggles.embedSubtitles ?? base.embedSubtitles;
+  // ⚠️ `??` against the stored default, never `?? true`: the form must start
+  // from what Settings says, not from the code's opinion of it.
+  const automaticSubtitles = toggles.automaticSubtitles ?? base.automaticSubtitles;
 
   const preferences: Preferences = {
     ...preferencesFrom(base, choices),
     sponsorblock,
     embedSubtitles,
+    automaticSubtitles,
   };
 
   const setChoices = (next: Partial<Choices>) => setEdits((current) => ({ ...current, ...next }));
@@ -493,6 +501,8 @@ export function DownloadForm({ className }: { className?: string }) {
           onSponsorblock={(next) => setToggles((current) => ({ ...current, sponsorblock: next }))}
           embedSubtitles={embedSubtitles}
           onEmbedSubtitles={(next) => setToggles((current) => ({ ...current, embedSubtitles: next }))}
+          automaticSubtitles={automaticSubtitles}
+          onAutomaticSubtitles={(next) => setToggles((current) => ({ ...current, automaticSubtitles: next }))}
           footer={
             <div className="space-y-3">
               {feedback}
@@ -535,6 +545,8 @@ function OptionsPanel(props: {
   onSponsorblock(next: boolean): void;
   embedSubtitles: boolean;
   onEmbedSubtitles(next: boolean): void;
+  automaticSubtitles: boolean;
+  onAutomaticSubtitles(next: boolean): void;
   /** Plugins this download opts out of — see `PluginNotice`. */
   pluginsOff: readonly string[];
   onPluginsOff(next: string[]): void;
@@ -599,8 +611,10 @@ function OptionsPanel(props: {
             options={analyzed.options.subtitles}
             subtitleTags={choices.subtitleTags}
             embedSubtitles={props.embedSubtitles}
+            automaticSubtitles={props.automaticSubtitles}
             onChange={props.onChoices}
             onEmbedSubtitles={props.onEmbedSubtitles}
+            onAutomaticSubtitles={props.onAutomaticSubtitles}
           />
         </Step>
 

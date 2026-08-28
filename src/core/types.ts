@@ -89,6 +89,20 @@ export interface Preferences {
   audioLanguages: string[];
   /** ⚠️ Independent of audio — PLAN R7. Never derive one from the other. */
   subtitleLanguages: string[];
+  /**
+   * Whether machine-generated captions count.
+   *
+   * 🔴 `true` is the default and stays the default: a language that only has
+   * automatic captions is better served by them than by nothing, which is what
+   * `selectSubtitles` has always done. This is for the opposite taste — someone
+   * who would rather have no subtitle than a transcription full of guesses,
+   * because a bad `.srt` beside the file *looks* like a subtitle to every media
+   * server that finds it.
+   *
+   * ⚠️ Read as `undefined` — a job queued before this field existed — it means
+   * `true`, which is what those jobs actually did.
+   */
+  automaticSubtitles: boolean;
   maxResolution: number;
   /**
    * ⚠️ A *preselection*, never an imposition — and never a silent swap. Asking
@@ -113,6 +127,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   originalOnly: true,
   audioLanguages: [],
   subtitleLanguages: ["en"],
+  automaticSubtitles: true,
   maxResolution: 1080,
   videoCodec: "auto",
   sponsorblock: true,

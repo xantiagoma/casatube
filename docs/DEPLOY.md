@@ -205,6 +205,32 @@ a destination that stays down for a week must not quietly fill the data volume.
 | `MAX_CONCURRENT_DOWNLOADS` | `3` | Concurrent downloads. Limits the download stage only (PLAN §17) |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
+### Download defaults
+
+What a job gets when nothing else says otherwise: the form's starting point, a
+watched source, an API call that sends no preferences. Every one of them is also
+on **Settings → Download defaults**, where a saved value beats the variable and
+takes effect immediately — no restart.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `DEFAULT_MAX_RESOLUTION` | `1080` | Ceiling, not a target |
+| `DEFAULT_VIDEO_CODEC` | `auto` | `auto`, `efficient`, or a named codec. A preselection, never a silent swap |
+| `DEFAULT_ORIGINAL_ONLY` | `true` | Exactly one audio track: the one marked original |
+| `DEFAULT_AUDIO_LANGUAGES` | *(empty)* | Comma-separated tags |
+| `DEFAULT_SUBTITLE_LANGUAGES` | `en` | ⚠️ Independent of audio (R7). Never derived from it |
+| `DEFAULT_AUTOMATIC_SUBTITLES` | `true` | Whether machine-generated captions count — see below |
+| `DEFAULT_EMBED_SUBTITLES` | `false` | Off writes sidecars, which every media server reads |
+| `DEFAULT_SPONSORBLOCK` | `true` | Mark or remove sponsor segments where the provider supports it |
+
+⚠️ **`DEFAULT_AUTOMATIC_SUBTITLES=false` removes a language rather than
+downgrading it.** Authored subtitles always win where a language has both; this
+decides what happens where it has *only* machine captions. On, it takes them —
+something is better than nothing. Off, that language gets nothing at all, which
+is the honest answer for anyone who would rather have no subtitle than a
+transcription full of guesses, because a bad `.srt` beside the video looks
+exactly like a real subtitle to every media server that finds it.
+
 ### Credentials at rest
 
 Cookies, logins and API keys are added from **Settings → Credentials**, per

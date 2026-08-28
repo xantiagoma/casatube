@@ -298,7 +298,7 @@ describe("live versus restart", () => {
       "notifications.retentionDays",
       "notifications.maxEntries",
     ]);
-    expect(live).toHaveLength(9);
+    expect(live).toHaveLength(10);
   });
 });
 
@@ -387,6 +387,7 @@ describe("the resolved download defaults", () => {
       originalOnly: false, // user
       audioLanguages: [], // default
       subtitleLanguages: ["en", "es"], // environment, sorted
+      automaticSubtitles: true, // default
       maxResolution: 1080, // default
       videoCodec: "h264", // user
       sponsorblock: true, // default

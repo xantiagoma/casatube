@@ -236,6 +236,17 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     effect: "live",
   },
   {
+    key: "downloads.automaticSubtitles",
+    group: "downloads",
+    label: "Accept auto-generated subtitles",
+    description:
+      "On: a language with only machine captions still gets them. Off: only authored subtitles, and a language that has none gets nothing — a bad transcription looks exactly like a real subtitle to every media server that finds it.",
+    kind: "boolean",
+    envVar: "DEFAULT_AUTOMATIC_SUBTITLES",
+    defaultValue: DEFAULT_PREFERENCES.automaticSubtitles,
+    effect: "live",
+  },
+  {
     key: "downloads.embedSubtitles",
     group: "downloads",
     label: "Embed subtitles",
@@ -553,6 +564,7 @@ const PREFERENCE_FIELD: Readonly<Record<string, keyof Preferences>> = {
   "downloads.originalOnly": "originalOnly",
   "downloads.audioLanguages": "audioLanguages",
   "downloads.subtitleLanguages": "subtitleLanguages",
+  "downloads.automaticSubtitles": "automaticSubtitles",
   "downloads.embedSubtitles": "embedSubtitles",
   "downloads.sponsorblock": "sponsorblock",
 };

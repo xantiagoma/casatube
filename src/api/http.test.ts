@@ -398,6 +398,44 @@ describe("DELETE and retry", () => {
   });
 });
 
+describe("POST /api/jobs/:id/priority", () => {
+  test("moves a waiting job, and the list order follows", async () => {
+    const app = await makeApp();
+    const first = (await (
+      await post(app, "/api/jobs", { url: "https://example.test/1", destination: "" })
+    ).json()) as { job: { id: string } };
+    const second = (await (
+      await post(app, "/api/jobs", { url: "https://example.test/2", destination: "" })
+    ).json()) as { job: { id: string } };
+
+    const response = await post(app, `/api/jobs/${second.job.id}/priority`, { priority: "high" });
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { priority: string }).priority).toBe("high");
+
+    const listed = (await (await get(app, "/api/jobs")).json()) as { jobs: { id: string }[] };
+    expect(listed.jobs[0]?.id).toBe(second.job.id);
+    expect(listed.jobs[1]?.id).toBe(first.job.id);
+  });
+
+  test("🔴 409 on a finished job, rather than a quiet 200", async () => {
+    const app = await makeApp();
+    const created = (await (
+      await post(app, "/api/jobs", { url: "https://example.test/1", destination: "" })
+    ).json()) as { job: { id: string } };
+    await queue.update(created.job.id, { status: "done" });
+
+    const response = await post(app, `/api/jobs/${created.job.id}/priority`, { priority: "high" });
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { tag: string }).tag).toBe("InvalidTransition");
+  });
+
+  test("an unknown priority is refused, and an unknown job is a 404", async () => {
+    const app = await makeApp();
+    expect((await post(app, "/api/jobs/whatever/priority", { priority: "urgent" })).status).toBe(422);
+    expect((await post(app, "/api/jobs/whatever/priority", { priority: "high" })).status).toBe(404);
+  });
+});
+
 describe("POST /api/probe", () => {
   test("returns the provider's media info, the choices it implies, and a suggestion", async () => {
     const app = await makeApp();

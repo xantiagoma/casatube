@@ -245,6 +245,22 @@ export function useResumeJob() {
   });
 }
 
+/**
+ * Move a waiting job up or down the queue — `POST /api/jobs/:id/priority`.
+ *
+ * 🔴 Priority used to be settable only at enqueue, which made it a guess: the
+ * moment you learn a download matters is usually after it has been sitting
+ * behind forty others.
+ */
+export function useSetPriority() {
+  const client = useQueryClient();
+  return useMutation<Job, Error, { id: string; priority: Priority }>({
+    mutationFn: async ({ id, priority }) =>
+      unwrap(await api.api.jobs({ id }).priority.post({ priority })),
+    onSuccess: () => void client.invalidateQueries({ queryKey: JOBS_KEY }),
+  });
+}
+
 // --- Preview ----------------------------------------------------------------
 
 export interface ProbeResult {

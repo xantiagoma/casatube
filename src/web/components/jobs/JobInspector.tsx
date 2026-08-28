@@ -14,10 +14,26 @@ import { CircleHelp, Download, ExternalLink, Pause, Play, RotateCcw, TriangleAle
 
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { Job } from "../../../core/types";
+import type { Job, Priority } from "../../../core/types";
+
+/**
+ * The three, in the order the queue works through them.
+ *
+ * ⚠️ Ordered highest-first because that is what a select of ranks has to be:
+ * alphabetical would read High, Low, Normal, which looks like an ordering and
+ * is not one.
+ */
+const PRIORITIES: readonly Priority[] = ["high", "normal", "low"] as const;
+
+const PRIORITY_LABEL: Record<Priority, string> = {
+  high: "High",
+  normal: "Normal",
+  low: "Low",
+};
 import { formatBytes, formatDateTime, formatDuration, formatSpeed, formatUntil, hostOf } from "../../data/format";
-import { useCancelJob, usePauseJob, useRedownload, useResumeJob, useRetryJob } from "../../data/queries";
+import { useCancelJob, usePauseJob, useRedownload, useResumeJob, useRetryJob, useSetPriority } from "../../data/queries";
 import { PriorityMark, StatusPill } from "../common/Bits";
 import { isTerminal } from "../status";
 import { PausedMark } from "./JobTable";
@@ -69,6 +85,10 @@ export function JobInspector({
   // ⚠️ The same rule as the row's buttons, and it lives in both places on
   // purpose: pause is a *claim* filter, so it is offered where it does what it
   // says. See `JobActions` in `JobTable.tsx`.
+  const priority = useSetPriority();
+  // The same rule the server enforces, so the control is absent rather than
+  // present-and-refused.
+  const canReprioritise = !isTerminal(job.status);
   const canPause = job.status === "queued" && job.paused !== true;
   const canResume = job.paused === true && !isTerminal(job.status);
 
@@ -121,7 +141,36 @@ export function JobInspector({
                   </span>
                 }
               />
-              <Row label="Priority" value={<PriorityMark priority={job.priority} />} />
+              {/* 🔴 Editable while the job can still be reordered, a plain mark
+                  once it cannot. Priority is an instruction about *when work
+                  happens*, and a job that is done, failed or cancelled has no
+                  "when" left — the server refuses it with a 409, so offering
+                  the control there would be a select that errors on use. */}
+              <Row
+                label="Priority"
+                value={
+                  canReprioritise ? (
+                    <Select
+                      value={job.priority}
+                      onValueChange={(next) => priority.mutate({ id: job.id, priority: next as Priority })}
+                      disabled={priority.isPending}
+                    >
+                      <SelectTrigger size="sm" className="h-7 w-[7.5rem]" aria-label="Priority">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PRIORITIES.map((value) => (
+                          <SelectItem key={value} value={value}>
+                            {PRIORITY_LABEL[value]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <PriorityMark priority={job.priority} />
+                  )
+                }
+              />
               <Row label="Format" value={formatLabel(job)} />
               <Row label="Retries" value={`${job.attempts} / ${job.maxAttempts}`} />
               <Row label="Provider" value={job.provider ?? "not resolved yet"} />

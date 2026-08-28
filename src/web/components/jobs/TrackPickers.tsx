@@ -488,18 +488,34 @@ export function SubtitlePicker({
   options,
   subtitleTags,
   embedSubtitles,
+  automaticSubtitles,
   onChange,
   onEmbedSubtitles,
+  onAutomaticSubtitles,
 }: {
   options: SubtitleOption[];
   subtitleTags: string[];
   embedSubtitles: boolean;
+  automaticSubtitles: boolean;
   onChange(next: { subtitleTags: string[] }): void;
   onEmbedSubtitles(next: boolean): void;
+  onAutomaticSubtitles(next: boolean): void;
 }) {
   if (options.length === 0) {
     return <p className="text-sm text-muted-foreground">This source has no subtitles.</p>;
   }
+
+  /**
+   * Languages that would come back empty with machine captions refused.
+   *
+   * 🔴 Named, not counted. "2 languages would get nothing" is a number somebody
+   * has to go and decode; "Spanish and Japanese would get nothing" is the
+   * answer. This is the whole reason the switch is here rather than only in
+   * Settings — the consequence is different for every video.
+   */
+  const onlyAutomatic = options
+    .filter((option) => subtitleTags.includes(option.tag) && option.hasAutomatic && !option.hasManual)
+    .map((option) => languageName(option.language));
 
   return (
     <div className="space-y-3">
@@ -509,6 +525,22 @@ export function SubtitlePicker({
         onToggle={(tag) => onChange({ subtitleTags: toggleTag(subtitleTags, tag) })}
         onClearAll={() => onChange({ subtitleTags: [] })}
       />
+      <div className={cn(subtitleTags.length === 0 && "opacity-60")}>
+        <SwitchRow
+          title="Accept auto-generated captions"
+          hint={
+            subtitleTags.length === 0
+              ? "Nothing selected above, so this changes nothing."
+              : automaticSubtitles
+                ? "On: a language with only machine captions still gets them."
+                : onlyAutomatic.length === 0
+                  ? "Off: only authored subtitles. Everything selected above has one."
+                  : `Off: ${onlyAutomatic.join(", ")} ${onlyAutomatic.length === 1 ? "has" : "have"} only machine captions and will get nothing.`
+          }
+          checked={automaticSubtitles}
+          onChange={onAutomaticSubtitles}
+        />
+      </div>
       <div className={cn(subtitleTags.length === 0 && "opacity-60")}>
         <SwitchRow
           title="Embed the subtitles in the file"

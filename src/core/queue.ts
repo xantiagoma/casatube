@@ -738,6 +738,38 @@ export class JobQueue {
   }
 
   /**
+   * Change where a job sits in the queue.
+   *
+   * 🔴 Priority used to be settable **only at enqueue**, which made it a guess:
+   * the moment you find out a download matters is usually after it has been
+   * sitting behind forty others. `update` could already carry it — including
+   * the mirror write that makes bunqueue agree — so what was missing was a way
+   * to ask.
+   *
+   * ⚠️ Refused on a finished job rather than accepted and ignored. Priority is
+   * an instruction about *when work happens*, and there is no "when" left for a
+   * job that is done, failed or cancelled; accepting it would leave a row whose
+   * priority column describes an intention nothing will ever act on. A retry
+   * sets it again from a job that is queued.
+   *
+   * A job that is already claimed keeps its worker — the ordering question was
+   * settled when it was claimed — but the new priority is what a later retry
+   * will be queued at, which is why this is allowed rather than refused.
+   */
+  async setPriority(id: string, priority: Priority): Promise<Result<Job, QueueError>> {
+    const current = await this.get(id);
+    if (Result.isError(current)) return current;
+    const job = current.value;
+
+    if (isTerminal(job.status)) {
+      return Result.err(new InvalidTransition({ jobId: id, from: job.status, to: `priority:${priority}` }));
+    }
+    if (job.priority === priority) return Result.ok(job);
+
+    return this.update(id, { priority });
+  }
+
+  /**
    * Put a finished-badly job back in the queue, behind its backoff.
    *
    * The delay is `notBefore` on the row: the job reads `queued` and `claimNext`

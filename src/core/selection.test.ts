@@ -306,6 +306,37 @@ describe("selectSubtitles", () => {
     expect(subtitles.map((s) => s.id)).toEqual(["sub-de-auto"]);
   });
 
+  test("🔴 refusing automatic captions drops the language rather than downgrading it", () => {
+    // A machine transcription full of guesses is not a subtitle, and it *looks*
+    // like one to every media server that finds the file beside the video. So
+    // "no German" is the honest answer for someone who asked for authored only.
+    const off = prefs({ subtitleLanguages: ["de"], automaticSubtitles: false });
+    expect(selectSubtitles(SUBTITLES, off)).toEqual([]);
+    // And a language that has an authored track is unaffected.
+    expect(
+      selectSubtitles(SUBTITLES, prefs({ subtitleLanguages: ["en"], automaticSubtitles: false })).map((s) => s.id),
+    ).toEqual(["sub-en"]);
+  });
+
+  test("🔴 the filter runs before the pick, or a machine track shadows the authored one", () => {
+    // Filtering afterwards would let `sub-en-auto` win English on rank and then
+    // be dropped, so a language with *both* kinds would come back empty — the
+    // one case where the bug is invisible in the common path.
+    const both = SUBTITLES.filter((s) => s.language === "en");
+    expect(both.map((s) => s.automatic)).toEqual([false, true]);
+    expect(
+      selectSubtitles(both, prefs({ subtitleLanguages: ["en"], automaticSubtitles: false })).map((s) => s.id),
+    ).toEqual(["sub-en"]);
+  });
+
+  test("🔴 a job queued before this preference existed still takes automatic captions", () => {
+    // `undefined` is what those rows hold, and it is what they actually did.
+    // Reading absence as "no" would change what a retry downloads.
+    const legacy = { ...prefs({ subtitleLanguages: ["de"] }) } as Record<string, unknown>;
+    delete legacy.automaticSubtitles;
+    expect(selectSubtitles(SUBTITLES, legacy as never).map((s) => s.id)).toEqual(["sub-de-auto"]);
+  });
+
   test("🔴 no match means no subtitles — never every language in the source", () => {
     const subtitles = selectSubtitles(SUBTITLES, prefs({ subtitleLanguages: ["ca", "pt"] }));
     expect(subtitles).toEqual([]);

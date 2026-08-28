@@ -517,17 +517,29 @@ export function selectAudioTracks(
  * language in the source, and not a guess at what you meant.
  *
  * Authored subtitles beat machine-generated ones for the same language; a
- * language that only has automatic captions still gets them.
+ * language that only has automatic captions still gets them — **unless**
+ * `automaticSubtitles` is off, in which case that language gets nothing.
+ *
+ * 🔴 The filter is applied *before* the pick, not after. Filtering afterwards
+ * would let an automatic track win its language and then be dropped, so a
+ * language with both kinds would come back empty — the machine track would have
+ * shadowed the authored one it was ranked below.
  */
 export function selectSubtitles(
   subtitles: readonly SubtitleTrack[],
   preferences: Preferences,
 ): SubtitleTrack[] {
+  // ⚠️ `!== false`, not `=== true`: a job queued before this preference existed
+  // has `undefined` here and did take automatic captions. Reading absence as
+  // "no" would silently change what those jobs download on their next retry.
+  const allowAutomatic = preferences.automaticSubtitles !== false;
+  const available = allowAutomatic ? subtitles : subtitles.filter((s) => !s.automatic);
+
   const wanted = wantedTags(preferences.subtitleLanguages);
   const selected: SubtitleTrack[] = [];
   for (const tag of wanted) {
     const best = pickBest(
-      subtitles.filter((s) => toLanguageTag(s.language) === tag),
+      available.filter((s) => toLanguageTag(s.language) === tag),
       compareSubtitle,
     );
     if (best) selected.push(best);

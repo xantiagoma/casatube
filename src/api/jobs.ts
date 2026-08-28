@@ -407,5 +407,32 @@ export function jobRoutes(ctx: AppContext) {
         return resumed.value;
       })
 
+      /**
+       * Move a waiting job up or down the queue.
+       *
+       * 🔴 Priority used to be settable only at enqueue, which made it a guess:
+       * the moment you learn a download matters is usually after it has been
+       * sitting behind forty others.
+       *
+       * ⚠️ 409 on a finished job rather than a quiet 200. Priority is an
+       * instruction about when work happens, and a job that is done has no
+       * "when" left — accepting it would store an intention nothing will act
+       * on.
+       */
+      .post(
+        "/:id/priority",
+        async ({ params, body }) => {
+          const changed = await queue.setPriority(params.id, body.priority);
+          if (Result.isError(changed)) return fail(changed.error);
+          return changed.value;
+        },
+        {
+          params: t.Object({ id: t.String({ minLength: 1 }) }),
+          body: t.Object({
+            priority: t.Union([t.Literal("high"), t.Literal("normal"), t.Literal("low")]),
+          }),
+        },
+      )
+
   );
 }

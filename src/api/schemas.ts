@@ -17,6 +17,8 @@ export const preferencesSchema = t.Partial(
     audioLanguages: t.Array(t.String()),
     /** ⚠️ R7: independent of audio. Never derived from `audioLanguages`. */
     subtitleLanguages: t.Array(t.String()),
+    /** Off means a language with only machine captions gets nothing. */
+    automaticSubtitles: t.Boolean(),
     maxResolution: t.Integer({ minimum: 144, maximum: 4320 }),
     /**
      * ⚠️ `{ default: undefined }` on purpose — `t.UnionEnum` otherwise sets
