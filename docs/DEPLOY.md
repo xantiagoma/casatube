@@ -72,18 +72,57 @@ docker run -d \
 ### CasaOS
 
 CasaOS installs from a Compose file: **App Store → Custom Install → Import**,
-paste `docker-compose.yml`, and adjust the two volume paths and `PUID`/`PGID`.
+paste `docker-compose.yml`, and adjust the volume paths and `PUID`/`PGID`. From
+a shell it is `casaos-cli app-management install -f <compose>`, and an
+`x-casaos:` block in the file supplies the menu entry — title, icon, category,
+`port_map` and `index: /`.
 
-Two things to set so it behaves like the rest of a CasaOS box:
+Three things to set so it behaves like the rest of a CasaOS box:
 
-- **`PUID`/`PGID` must match whatever owns the library.** On a CasaOS install
-  that is usually `1000:1000` — the same values `transmission` and `metube`
-  already use there.
-- **Point `/library` at the same share the media server reads**, not at a
+- **`PUID`/`PGID` must match whatever owns the library** — usually `1000:1000`,
+  the same values `transmission` and `metube` use. ⚠️ Not always the deciding
+  factor: where the library is reached over rclone or SSHFS, the *remote* login
+  owns the files and `UMASK` is what decides whether the media server can read
+  them.
+- **Point the library at the same share the media server reads**, not at a
   private CasaOS volume, or nothing will ever see the downloads.
+- **`pull_policy: missing`**, for an image built on the box. Without it CasaOS
+  tries to pull `casatube:latest`, which exists in no registry, and the install
+  fails on an image that is already there.
 
-The image declares `EXPOSE 8520` and `VOLUME /data /library`, so CasaOS picks up
-the port and both mount points on its own.
+🔴 **Once CasaOS manages the app, stop using `docker run` and `docker compose`
+on it.** Recreating the container by hand leaves CasaOS's record pointing at a
+container that no longer exists, and the menu entry stops matching the thing
+that is running. Redeploy through CasaOS instead:
+
+```bash
+docker build --build-arg YTDLP_VERSION=2026.08.19 -t casatube:latest .
+casaos-cli app-management apply -f <your-compose>
+./scripts/smoke.sh
+```
+
+⚠️ **A library on a FUSE mount: bind the parent, not the mount.** Where the
+library is an rclone or SSHFS mount, mounting *it* into the container captures
+the FUSE handle that existed at start — and the moment rclone remounts, the
+container is looking at a stale one and the library reads as empty. Bind the
+directory **above** it with `propagation: rshared` and point `LIBRARY_DIR`
+inside:
+
+```yaml
+volumes:
+  - type: bind
+    source: /mnt/mailmedia          # the parent, not /mnt/mailmedia/videos
+    target: /mnt/mailmedia
+    bind: { propagation: rshared }
+environment:
+  LIBRARY_DIR: /mnt/mailmedia/videos
+```
+
+📌 The image declares `EXPOSE 8520` and `VOLUME /data`, so CasaOS picks up the
+port and the data mount on its own. **`/library` is deliberately not declared** —
+with `LIBRARY_DIR` pointing somewhere else entirely, as it does above, a
+`VOLUME /library` makes Docker create a fresh anonymous volume on every
+recreate. Six of them accumulated before anybody looked.
 
 ---
 

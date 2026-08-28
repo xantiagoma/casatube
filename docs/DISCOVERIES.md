@@ -2,6 +2,32 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## `VOLUME` for a path nobody mounts is an anonymous volume per recreate (2026-08-28)
+
+The Dockerfile declared `VOLUME ["/data", "/library"]`, which reads as harmless
+documentation and is not. A `VOLUME` line means *"if nothing is mounted here,
+make an anonymous volume"* — so the moment the deployment stopped mounting
+anything at `/library`, every `docker run` left a fresh one behind. Six had
+accumulated on ohana before anybody looked at `docker volume ls -f dangling=true`.
+
+📌 The reason nothing mounts `/library` any more is the second half of this
+entry. `LIBRARY_DIR` points at `/mnt/mailmedia/videos`, and the container binds
+`/mnt/mailmedia` — the **parent**.
+
+⚠️ **A FUSE mount must be bound by its parent, not by itself.** `videos` is an
+rclone mount. Binding it directly captures the FUSE handle that existed when the
+container started, so the first time rclone remounts, the container is holding a
+stale one and the library reads as **empty** — not as an error. Binding the
+directory above it with `propagation: rshared` lets the remount propagate in.
+HomeTube did this, and it is why HomeTube survived remounts.
+
+📌 So the rule for `VOLUME` is narrower than it looks: declare it only where an
+*unmounted* path holds something worth keeping. `/data` qualifies — without the
+declaration the database would live in the container's writable layer and vanish
+on the next recreate, silently. `/library` never did: a library nobody mounted
+is an empty directory nothing will ever read.
+
+
 ## `max-h-*` on a Radix `ScrollArea` gives you neither a max height nor a scroll (2026-08-28)
 
 The notification bell spilled its list out of the popover and could not be

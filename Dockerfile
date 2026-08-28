@@ -136,7 +136,20 @@ ENV NODE_ENV=production \
     YTDLP_AUTO_UPDATE=false \
     CASATUBE_YTDLP_PINNED_VERSION=${YTDLP_VERSION}
 
-VOLUME ["/data", "/library"]
+# ⚠️ `/library` is deliberately NOT declared here.
+#
+# A VOLUME line means "if nothing is mounted here, make an anonymous volume".
+# For /data that is a safety net worth having: the database is the thing this
+# project exists to protect, and without the declaration it would live in the
+# container's writable layer and vanish on the next recreate, silently.
+#
+# For /library it is pure leak. LIBRARY_DIR makes the path configurable, and the
+# real deployment mounts nothing at /library at all — it binds the *parent* of
+# an rclone FUSE mount and points LIBRARY_DIR inside it. So Docker honoured this
+# line and made a fresh anonymous volume on every recreate; six had piled up
+# before anyone noticed. A library nobody mounted is not a library worth
+# preserving — it is an empty directory nothing will ever read.
+VOLUME ["/data"]
 EXPOSE 8520
 
 COPY <<'ENTRYPOINT' /usr/local/bin/casatube-entrypoint

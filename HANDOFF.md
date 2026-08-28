@@ -20,28 +20,44 @@ tab closes — measured: 3 of 3 downloads died mid-way.
 http://ohana.tail9273dc.ts.net:8520
 ```
 
-Container `casatube`, image `casatube:new`, on ohana. Rebuild and redeploy:
+🔴 **It is a CasaOS-managed Compose app now, not a hand-run container.** The
+compose lives in the *other* repo, at
+`/home/santi/Projects/personal-agent/media/casatube/docker-compose.casaos.yml`,
+and CasaOS keeps its own copy under `/var/lib/casaos/apps/casatube/`. Redeploy:
 
 ```bash
 cd /home/santi/Projects/casatube
-docker build --build-arg YTDLP_VERSION=2026.08.19 -t casatube:new .
-docker rm -f casatube
-docker run -d --name casatube -p 8520:8520 \
-  -e PUID=1000 -e PGID=1000 -e UMASK=022 \
-  --env-file /DATA/AppData/casatube/casatube.env \
-  -v /DATA/AppData/casatube/data:/data \
-  -v /DATA/AppData/casatube/library:/library \
-  casatube:new
+docker build --build-arg YTDLP_VERSION=2026.08.19 -t casatube:latest .
+casaos-cli app-management apply \
+  -f /home/santi/Projects/personal-agent/media/casatube/docker-compose.casaos.yml
 ./scripts/smoke.sh          # ⚠️ not optional — see below
 ```
+
+⚠️ **Do not `docker rm -f casatube && docker run ...` any more.** It works, and
+it leaves CasaOS's record pointing at a container that no longer exists — the
+menu entry stops matching the thing that is running. The same class of mistake
+as running `docker compose` by hand against a Dokploy app.
 
 ⚠️ **`curl /api/health` does not tell you the app works.** A client bundle that
 fails to build leaves every route answering 200 while the page is blank. Use
 `scripts/smoke.sh`, which fetches the page and the script it references.
 
-⚠️ The library is a **scratch** directory (`/DATA/AppData/casatube/library`),
-**not** Santi's real Jellyfin library. Pointing it at `/mnt/mailmedia/videos` is
-a decision he has not made yet.
+## The library is the real one now
+
+`LIBRARY_DIR=/mnt/mailmedia/videos` — Santi's actual media root, the same one
+HomeTube used, with `Dramas`, `Web` and `Videos` offered as destinations.
+
+🔴 **The container binds `/mnt/mailmedia`, the *parent*, with
+`propagation: rshared` — never `videos` itself.** `videos` is an rclone FUSE
+mount: mounting it directly captures the FUSE handle that existed at container
+start, so the first time rclone remounts, the container is holding a stale one
+and the library reads as empty. Binding the parent is what let HomeTube survive
+remounts, and it is why nothing is mounted at `/library` any more.
+
+⚠️ **`PUID`/`PGID` do not decide ownership here.** rclone connects to `mail` as
+root, so files land `root:root` on the far side; `UMASK 022` is what makes them
+readable. Changing PUID/PGID to fix a permissions problem on this library will
+do nothing.
 
 ⚠️ `CREDENTIALS_KEY` lives in `~/casatube.env` (mode 600) and in
 `/DATA/AppData/casatube/casatube.env`. Lose it and stored credentials cannot be
@@ -51,7 +67,7 @@ loudly.
 
 ## State
 
-**1060 tests, 0 failures. `tsc` clean.** 47 commits.
+**1120 tests, 0 failures. `tsc` clean.** 51 commits.
 
 Working end to end: paste a URL → the form shows the resolutions, audio tracks
 and subtitles that video actually has → queue → six stages live over SSE → the
@@ -60,11 +76,17 @@ remux on demand, real seeking), downloads, trash with restore. Sources,
 scheduler, storage, analytics, notifications, plugins with an editor **whose
 hooks now actually fire**, credentials, settings editing, transcoding.
 
-✅ **Deployed 2026-08-28.** The container runs `casatube:new`; `casatube:test`
-is the previous image and is the rollback (`docker rm -f casatube` and run it
-again with the same flags). The database was backed up first to
-`/DATA/AppData/casatube/backup-20260828-predeploy/` — 10 jobs, 5 notifications,
-1 setting, all present after the migrations.
+✅ **Deployed 2026-08-28**, and then moved onto the real stack by the
+`personal-agent` session: CasaOS menu entry, `restart: unless-stopped` (it had
+none — it would not have survived the reboot ohana has pending),
+`TZ=America/Bogota`, and the library repointed at `/mnt/mailmedia/videos`.
+Jellyfin is configured with an API key of its own, so it can be revoked without
+touching anything else, and the plugin reports `state: active`,
+`missingSettings: []`. HomeTube and metube are uninstalled.
+
+Rollback images, newest first: `casatube:new`, `casatube:test`. Database backups
+from before each deploy: `/DATA/AppData/casatube/backup-20260828-predeploy/` and
+`-20260828b-predeploy/`.
 
 Verified against YouTube, Odysee and Dailymotion.
 
