@@ -5,6 +5,103 @@ session with none of this context. Newest first.
 
 ---
 
+## 2026-08-28 — The handoff's open list, closed — and a plugin system that never ran
+
+> «ok sigamos con el tier a & b»
+
+Six items off the handoff's *Still open* list. Two of them turned out to be
+much larger than they read, and both for the same reason: the reported symptom
+was the visible edge of something that had never worked at all.
+
+**1060 tests (1003 → 1060), 0 failures. `tsc` clean.** Five commits.
+
+### 🔴 Plugins were never dispatched. Not once, at any hook point
+
+The task was PLAN §5's per-download override. Following the dispatch path to
+find where the override would apply led nowhere: **nothing in the pipeline
+called `runtime.run`**. Plugins were discovered, validated, activated, listed
+on Settings with their capabilities and hooks, enabled, disabled, configured,
+and the download window said which ones "apply" — and the worker was never
+handed the runtime at all.
+
+Proven rather than argued, because a search proves only that a search found
+nothing: a plugin declaring all six points and logging at each was installed on
+a running server, a job was queued, and it printed nothing.
+
+📌 The reason it survived is worth keeping. **Every visible surface said it
+worked** — a plugin list with states, an "applies to this download" panel, log
+lines from `setup()` — and `setup()` running is exactly what makes a plugin
+*look* alive. The only observable difference between "the hook fired and did
+nothing visible" and "the hook never fired" is a plugin written to say so.
+
+So the per-download switch is two changes: the pipeline now dispatches all six
+points, and `jobs.plugins_off` carries the opt-out through the runtime's single
+eligibility check.
+
+⚠️ **Off only, and the asymmetry is real rather than unfinished.** A plugin
+that is off server-wide is never activated, registers no hooks, and has nothing
+to dispatch to — "on for this one download" would be a fourth control in
+`DISCOVERIES.md` that moves and changes nothing. The panel says so instead of
+drawing it.
+
+### 🔴 The live queue stopped showing new work past 200 jobs
+
+Found while giving `GET /api/jobs` a server-side sort. The SSE watcher built
+every frame from `queue.list({ limit })` — the *queue's* order, priority then
+**oldest first**, because that is the order `claimNext` works in. So on a
+server with more than two hundred jobs the live snapshot was the two hundred
+oldest rows, all long finished, and a download started today did not appear in
+the Queue at all.
+
+The snapshot is now everything unfinished plus the newest terminal rows. Two
+queries rather than one ordered by status rank, because `done` (6) ranks above
+`failed` (7) and a long history of successes would push every failed job off
+the end — the rows somebody actually needs.
+
+### The reported item: the screens sorted the page they had been given
+
+`sort`, `order`, `q`, `bucket` and a status list are the database's work now,
+and the answer carries `total` plus counts by status and by bucket. Past two
+hundred jobs "the largest failed download" used to mean "the largest of the
+latest two hundred" with nothing on screen marking the difference; the tiles
+counted the fetched page the same way.
+
+`core/job-buckets.ts` holds the Downloads-tab rule **once**, as a predicate,
+with the SQL beside it in `job-buckets-query.ts` — split because the browser
+imports the predicate, and a schema import in that graph drags `bun:sqlite`
+into the client bundle (a trap this file already records). A test runs one
+corpus through both and asserts they partition it identically.
+
+`sortJobs`, `matchesText` and `matchesStatus` are **deleted**, and their tests
+with them: a suite still passing over unused functions reports coverage of
+behaviour nothing runs.
+
+### The four smaller ones
+
+| | |
+|---|---|
+| **`FFMPEG_BIN` reaches yt-dlp** | As `--ffmpeg-location`, and **resolved** rather than forwarded: yt-dlp answers a location that does not exist by continuing *without* ffmpeg, so a typo would disable the merge `PATH` would have served. A third trap fell out of it — given a file, yt-dlp derives every other program as `dirname/<program>`, so an ffmpeg with no ffprobe beside it takes ffprobe away. The boot log names which of the three cases happened |
+| **`notifications` retention** | Two rules every six hours. Age removes *read* rows; a ceiling is what actually bounds the table, because the age rule spares unread ones and a bell nobody opens defeats it entirely. The ceiling spends read notifications first and says so in the log when it reaches an unread one |
+| **Priority is changeable** | `POST /api/jobs/:id/priority` and a select in the inspector. 409 on a finished job: priority is an instruction about *when work happens* and a done job has no "when" left |
+| **Auto-generated subtitles can be refused** | Off removes the language rather than downgrading it. The filter runs *before* the pick — filtering after would let a machine track win its language on rank and then be dropped, so a language with both kinds would come back empty |
+
+### What was verified, and how
+
+Everything here was driven against a **running server** rather than only in
+tests: 450 seeded jobs through the real screens in a browser (tiles over the
+whole table, "Jobs (200 of 450)", a search finding one row out of 450, a deep
+link to the oldest job opening its inspector); the same URL queued twice from
+the same form with the plugin switch off and on; a retention sweep on a live
+instance removing 12 rows and keeping all 5 unread ones.
+
+⚠️ And one mistake worth recording: a new test called `openDb(path)` instead of
+`openDb({ path })`. `bun test` transpiles without type-checking, so it ran —
+and the string's `.path` was `undefined`, so the fallback opened the
+development database in `./data` and the sweep deleted rows out of it. `openDb`
+now throws on a non-object argument. See `DISCOVERIES.md`.
+
+---
+
 ## 2026-08-27 — Transcoding has a screen, and it says what it costs
 
 > «la transcodificación existe entera en el servidor y no hay ni un botón.»

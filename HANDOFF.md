@@ -51,33 +51,46 @@ loudly.
 
 ## State
 
-**1003 tests, 0 failures. `tsc` clean.** 42 commits.
+**1060 tests, 0 failures. `tsc` clean.** 47 commits.
 
 Working end to end: paste a URL → the form shows the resolutions, audio tracks
 and subtitles that video actually has → queue → six stages live over SSE → the
 file lands correctly language-tagged. Library with thumbnails, playback (HLS
 remux on demand, real seeking), downloads, trash with restore. Sources,
-scheduler, storage, analytics, notifications, plugins with an editor,
-credentials, settings editing, transcoding.
+scheduler, storage, analytics, notifications, plugins with an editor **whose
+hooks now actually fire**, credentials, settings editing, transcoding.
+
+⚠️ **The image running on ohana predates all of this.** The last five commits
+are not deployed — rebuild and redeploy with the commands above, and note that
+`drizzle/0007` adds `jobs.plugins_off` (additive, defaulted, applied at boot).
 
 Verified against YouTube, Odysee and Dailymotion.
 
 ## Still open
 
-- **No per-job plugin override.** `POST /api/jobs` accepts nothing about
-  plugins, so the download window shows which apply and states that on/off is
-  server-wide. Santi asked for a per-download switch; it needs a column and
-  dispatch changes first.
-- **`GET /api/jobs` has no `sort`, `order` or `q`** — the screens sort the 200
-  already fetched. Past 200 jobs "the largest failed download" quietly becomes
-  "the largest of the latest two hundred".
-- **No priority-change endpoint.** Priority is set at enqueue only.
-- **`Preferences` cannot refuse auto-generated subtitles.**
-- **`notifications` grows until purged** — no automatic retention.
-- **`FFMPEG_BIN` never reaches yt-dlp**, which finds ffmpeg on `PATH` only.
 - **`arm64` was never built.** The Dockerfile selects the right yt-dlp, only
   amd64 was exercised.
+- **No paging control on the job screens.** The server sorts, searches and
+  counts now, and the table says "200 of 3,412" — but the rest is reachable
+  only by narrowing the search, not by turning a page.
+- **A plugin cannot be switched *on* for one download.** Off works; on cannot,
+  because a plugin that is off server-wide is never activated and registers no
+  hooks. Doing it properly means activating every valid plugin and gating
+  dispatch on `enabled` — a change to the runtime's model, not a UI change.
 - `react-doctor` sits around 60/100, dominated by vendored Dice UI.
+
+### Closed on 2026-08-28 (see `WORKLOG.md`)
+
+Six items, and two of them were much bigger than they read:
+
+- 🔴 **Plugins never ran.** No hook was dispatched at any point — the worker
+  was never handed the runtime. Everything visible said otherwise.
+- 🔴 **The live queue stopped showing new work past 200 jobs**, because the SSE
+  snapshot was the *oldest* 200.
+- `GET /api/jobs` takes `sort`, `order`, `q`, `bucket` and answers with `total`
+  and counts; per-download plugin opt-out; `POST /api/jobs/:id/priority`;
+  `automaticSubtitles`; automatic `notifications` retention; `FFMPEG_BIN`
+  reaching yt-dlp.
 
 ## Santi's standing instructions
 
