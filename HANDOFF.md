@@ -20,18 +20,18 @@ tab closes — measured: 3 of 3 downloads died mid-way.
 http://ohana.tail9273dc.ts.net:8520
 ```
 
-Container `casatube`, image `casatube:test`, on ohana. Rebuild and redeploy:
+Container `casatube`, image `casatube:new`, on ohana. Rebuild and redeploy:
 
 ```bash
 cd /home/santi/Projects/casatube
-docker build --build-arg YTDLP_VERSION=2026.08.19 -t casatube:test .
+docker build --build-arg YTDLP_VERSION=2026.08.19 -t casatube:new .
 docker rm -f casatube
 docker run -d --name casatube -p 8520:8520 \
   -e PUID=1000 -e PGID=1000 -e UMASK=022 \
   --env-file /DATA/AppData/casatube/casatube.env \
   -v /DATA/AppData/casatube/data:/data \
   -v /DATA/AppData/casatube/library:/library \
-  casatube:test
+  casatube:new
 ./scripts/smoke.sh          # ⚠️ not optional — see below
 ```
 
@@ -60,9 +60,11 @@ remux on demand, real seeking), downloads, trash with restore. Sources,
 scheduler, storage, analytics, notifications, plugins with an editor **whose
 hooks now actually fire**, credentials, settings editing, transcoding.
 
-⚠️ **The image running on ohana predates all of this.** The last five commits
-are not deployed — rebuild and redeploy with the commands above, and note that
-`drizzle/0007` adds `jobs.plugins_off` (additive, defaulted, applied at boot).
+✅ **Deployed 2026-08-28.** The container runs `casatube:new`; `casatube:test`
+is the previous image and is the rollback (`docker rm -f casatube` and run it
+again with the same flags). The database was backed up first to
+`/DATA/AppData/casatube/backup-20260828-predeploy/` — 10 jobs, 5 notifications,
+1 setting, all present after the migrations.
 
 Verified against YouTube, Odysee and Dailymotion.
 
