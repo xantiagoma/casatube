@@ -28,10 +28,18 @@ and CasaOS keeps its own copy under `/var/lib/casaos/apps/casatube/`. Redeploy:
 ```bash
 cd /home/santi/Projects/casatube
 docker build --build-arg YTDLP_VERSION=2026.08.19 -t casatube:latest .
-casaos-cli app-management apply \
+casaos-cli app-management apply casatube \
   -f /home/santi/Projects/personal-agent/media/casatube/docker-compose.casaos.yml
 ./scripts/smoke.sh          # ⚠️ not optional — see below
 ```
+
+⚠️ **`casatube` there is the appid and it is positional.** Written as
+`apply -f <file>` the command prints its usage to stderr, exits 1 and applies
+**nothing** — with stdout empty, so a redirected log shows a clean step that did
+not happen. `casaos-cli app-management list apps` prints the appids.
+
+⚠️ **`apply` is asynchronous.** Looking at the container immediately afterwards
+shows the old one. Wait for the recreate, then let `smoke.sh` decide.
 
 ⚠️ **Do not `docker rm -f casatube && docker run ...` any more.** It works, and
 it leaves CasaOS's record pointing at a container that no longer exists — the
@@ -67,7 +75,7 @@ loudly.
 
 ## State
 
-**1120 tests, 0 failures. `tsc` clean.** 51 commits.
+**1120 tests, 0 failures. `tsc` clean.** 53 commits.
 
 Working end to end: paste a URL → the form shows the resolutions, audio tracks
 and subtitles that video actually has → queue → six stages live over SSE → the

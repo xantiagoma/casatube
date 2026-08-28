@@ -97,9 +97,29 @@ that is running. Redeploy through CasaOS instead:
 
 ```bash
 docker build --build-arg YTDLP_VERSION=2026.08.19 -t casatube:latest .
-casaos-cli app-management apply -f <your-compose>
+casaos-cli app-management apply casatube -f <your-compose>   # appid, then -f
 ./scripts/smoke.sh
 ```
+
+⚠️ **The appid is a positional argument, and getting it wrong applies nothing.**
+`apply -f <file>` — the shape everyone writes first — prints its usage and stops:
+
+```
+$ casaos-cli app-management apply -f docker-compose.casaos.yml
+Error: accepts 1 arg(s), received 0
+$ echo $?
+1
+```
+
+It does exit non-zero, so `set -e` or a `||` catches it. What it does **not** do
+is put anything on stdout: the usage goes to stderr. A script that redirects
+stdout to a log and does not check the status therefore records a clean, empty,
+successful-looking step that changed nothing. `casaos-cli app-management list
+apps` prints the appids.
+
+📌 **`apply` is asynchronous.** Inspecting the container straight afterwards
+shows the *old* one; wait for the recreate before believing anything, and let
+`scripts/smoke.sh` be the thing that decides.
 
 ⚠️ **A library on a FUSE mount: bind the parent, not the mount.** Where the
 library is an rclone or SSHFS mount, mounting *it* into the container captures

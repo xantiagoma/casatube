@@ -2,6 +2,49 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## Two ways a deploy tool lies, both found on the same afternoon (2026-08-28)
+
+Neither of these is a CasaTube bug. Both nearly changed what got deployed.
+
+### `casaos-cli app-management apply -f <file>` applies nothing
+
+The appid is a **positional** argument — `apply <appid> -f <file>` — and the
+obvious shape is silently wrong:
+
+```
+$ casaos-cli app-management apply -f docker-compose.casaos.yml
+Error: accepts 1 arg(s), received 0     # ← stderr
+$ echo $?
+1
+```
+
+⚠️ It is honest in the exit code and silent on **stdout**: the usage text goes to
+stderr, so a script that redirects stdout to a log and does not check `$?`
+records an empty, clean-looking step that did nothing at all. `list apps` prints
+the appids. And `apply` is asynchronous — inspecting the container immediately
+after shows the old one, which is its own way of answering a question you did
+not ask.
+
+### An image's `Created` is not when that tag was built
+
+```
+casatube:wip     aa218434192f  2026-08-28 05:23:20 UTC
+casatube:latest  21eb9bf995c4  2026-08-28 05:23:20 UTC
+```
+
+Two different images, same timestamp to the second — built eight minutes apart
+from different source. `Created` describes layers, not history, so comparing it
+against a commit date "proves" things that are not true. Here it produced a
+confident, wrong conclusion that a migration had not shipped, and the correction
+came from asking the thing itself: `__drizzle_migrations` had nine rows and the
+columns existed.
+
+📌 The shape both share is the one this file keeps re-learning. **A tool that
+answered is not a tool that answered the question you asked.** `docker inspect`
+gave *an* answer, so `docker images` — one command away, and the one that showed
+the collision — was never run.
+
+
 ## `VOLUME` for a path nobody mounts is an anonymous volume per recreate (2026-08-28)
 
 The Dockerfile declared `VOLUME ["/data", "/library"]`, which reads as harmless
