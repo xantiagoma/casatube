@@ -75,7 +75,7 @@ loudly.
 
 ## State
 
-**1174 tests, 0 failures. `tsc` clean.** 62 commits.
+**1190 tests, 0 failures. `tsc` clean.** 64 commits.
 
 Working end to end: paste a URL → the form shows the resolutions, audio tracks
 and subtitles that video actually has → queue → six stages live over SSE → the
@@ -99,6 +99,34 @@ from before each deploy: `/DATA/AppData/casatube/backup-20260828-predeploy/` and
 
 Verified against YouTube, Odysee and Dailymotion — and against a **private
 Telegram channel**, which is a provider of its own (see below).
+
+## Two providers of our own, ahead of yt-dlp
+
+`register` inserts in front of the yt-dlp catch-all, which is what PLAN §5 means
+by *"a custom extractor for a site yt-dlp covers badly"*. Both claim narrowly, and
+both leave the fallback reachable for everything they do not claim.
+
+### Google Drive — `providers/drive.ts`
+
+🔴 yt-dlp's Drive extractor asks `googleapis.com/drive/v3` for metadata with an
+API key **compiled into yt-dlp and shared by every one of its users**. When that
+key is refused the extractor aborts *at extraction* and writes nothing — measured
+here as 429 for yt-dlp and 403 for the same key from curl. It is a download that
+cannot happen for a reason nobody downstream can influence.
+
+So this skips the key: ask `drive.usercontent.google.com`, follow Drive's
+virus-scan form when a large file gets one, stream the answer, and **verify the
+bytes written against the stated total** — a reset connection ends a stream and
+everything looks finished otherwise.
+
+⚠️ It is scraping and will need maintenance the Telegram provider does not.
+`confirmTarget` parses every hidden input rather than looking for `confirm=t`, so
+a renamed token survives. **Public files only** — a private one is reported as
+`AuthRequired` naming a cookies credential for `drive.google.com`, and that path
+is untested.
+
+📌 Files, never folders: a folder is a listing, and claiming it would fail on
+something a person could reasonably paste.
 
 ## Telegram
 
@@ -152,6 +180,8 @@ the credential here does not revoke it; only Telegram → Settings → Devices d
 
 ### Closed on 2026-09-19 (see `WORKLOG.md`)
 
+- **Google Drive**, as a provider of our own, because yt-dlp's path depends on a
+  shared API key that is being refused.
 - **Telegram**, end to end: the provider, the credential plumbing that made a
   `custom` credential reachable at all, and the sign-in dialog.
 - 🔴 **Resolution was the height**, so every portrait video was refused by the

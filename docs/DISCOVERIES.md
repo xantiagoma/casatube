@@ -2,6 +2,45 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## "The source is rate-limiting us" was true, and about the wrong thing (2026-09-19)
+
+A Google Drive link failed in the download form with *"The source is
+rate-limiting us."* The classifier was right — yt-dlp really did report
+`HTTP Error 429` — and the attribution was wrong in three different ways before
+the cause turned up. Each guess fit the symptom:
+
+| guess | why it was wrong |
+|---|---|
+| the video is above the ceiling | unrelated; that was a *different* bug the same day |
+| the file hit its download quota | Drive says *"too many users have viewed…"* for that, and it did not |
+| our IP is throttled | the file's page answered **200**, and so did the download endpoint |
+
+What settled it was asking the three things separately from the same host:
+
+```
+drive.google.com/file/d/<id>/view              200
+drive.usercontent.google.com/download?id=<id>  200
+googleapis.com/drive/v3/files/<id>?key=<yt-dlp's key>  403
+```
+
+🔴 **yt-dlp's Drive extractor asks for metadata with an API key compiled into
+yt-dlp and shared by every one of its users.** When that key is being refused,
+the extractor aborts — and it aborts *at extraction*, so nothing is downloaded
+and nothing is written. Verified: `ls` after a full `yt-dlp` run showed an empty
+directory. "Queue it anyway, the worker analyses again" is not a path around it.
+
+📌 The lesson is about attribution rather than about Drive. **A 429 says who
+refused, not whose fault it is.** yt-dlp was honest — it was rate-limited — but
+the thing being rate-limited was a key shared with the whole world, not our
+connection and not the file. When a tool blames "the source", ask the source
+directly; it takes one `curl` per suspect and it is the only thing that separates
+three explanations that all fit.
+
+⚠️ And the way out was already visible in the failure: the *download* endpoint
+answered 200 all along, with `Accept-Ranges`. `providers/drive.ts` takes that
+path and never touches a key.
+
+
 ## Resolution was the height, so every portrait video was refused (2026-09-19)
 
 Two Telegram downloads failed with `FormatUnavailable` against the default 1080

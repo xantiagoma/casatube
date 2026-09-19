@@ -94,6 +94,34 @@ a no-op for landscape, and exactly why none of them caught it.
 side inside it would have been a field that lies, which is the version of this bug
 that comes back.
 
+### And Google Drive, for a reason that took three wrong guesses
+
+> «que me recomiendas? es esto un impedimento para descargar o solo obtener la
+> metadata?»
+
+A Drive link failed with *"the source is rate-limiting us."* The classifier was
+right — a literal `HTTP Error 429` — and the attribution was wrong three times
+over: the ceiling, the file's download quota, our IP. Each fit the symptom.
+
+Asking the three suspects separately settled it: the file's page answered 200, so
+did the download endpoint, and `googleapis.com/drive/v3` answered **403** for the
+API key **compiled into yt-dlp and shared by all of its users**. yt-dlp was
+honest about being rate-limited; the thing being limited was a key shared with the
+world.
+
+📌 And it answered his question: **not a metadata inconvenience.** The extractor
+aborts at extraction — a full run left an empty directory — so "queue it anyway,
+the worker analyses again" was not a path around it.
+
+`providers/drive.ts` takes the path that worked all along and never touches a key.
+The download is verified against the stated total, because a reset connection ends
+a stream and everything looks finished. The fixture HTML is real, captured while
+diagnosing this, on the grounds that a hand-written page would test the parser
+against my idea of Drive rather than against Drive.
+
+⚠️ Scraping, and accepted as such: the alternative was scraping *plus* a dead
+shared key.
+
 ### Verified against the real thing
 
 A private channel, his account: probe returned the caption as the title, 491 s,
@@ -102,6 +130,11 @@ extension from the real MIME type; and the sign-in dialog replaced the
 script-made credential with `Telegram — @xantiagoma`, after which `last_used_at`
 moved from `never` to a timestamp — which is the store recording that the *new*
 session was the one that worked.
+
+Drive, against the file that started it: the probe titled it from
+`content-disposition` with no key involved, and the download landed **586131454
+bytes in 14.9 s** — matching the stated total exactly, which is the truncation
+guard passing its good case rather than only its bad one.
 
 ---
 
