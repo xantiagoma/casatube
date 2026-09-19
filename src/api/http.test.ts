@@ -296,6 +296,40 @@ describe("POST /api/jobs", () => {
 
 // --- Plugins on the enqueue path (2026-08-27) -------------------------------
 
+describe("POST /api/probe and url:resolve", () => {
+  test("🔴 a rewritten URL is analysed, not refused", async () => {
+    // The bug this covers: `url:resolve` ran on the enqueue path only, so a link
+    // a plugin rewrites answered UnsupportedUrl when analysed and downloaded fine
+    // when queued. The form telling somebody a link does not work while the queue
+    // proves otherwise is worse than either answer on its own.
+    const pluginDir = join(dir, "plugins");
+    mkdirSync(pluginDir, { recursive: true });
+    writeFileSync(
+      join(pluginDir, "rewriter.ts"),
+      `export default {
+  name: "rewriter", version: "1.0.0", description: "rewrites", capabilities: [], matches: ["*"],
+  hooks: [{ at: "url:resolve", kind: "transform" }],
+  setup({ on }) { on("url:resolve", (url) => url.replace("share.test", "media.test")); },
+};
+`,
+    );
+    const runtime = createPluginRuntime({ dir: pluginDir, registry: createRegistry({ fallback: null }) });
+    await runtime.load();
+
+    // The fake provider only claims what the rewrite produces, so a probe that
+    // skipped the hook could not possibly succeed.
+    const app = await makeApp(
+      fakeProvider({ supports: (url) => url.includes("media.test") }),
+      {},
+      runtime,
+    );
+
+    const response = await post(app, "/api/probe", { url: "https://share.test/v/abc" });
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { provider: string }).provider).toBe("test-provider");
+  });
+});
+
 describe("POST /api/jobs and plugins", () => {
   /** A real runtime over a plugin file this test writes. */
   async function runtimeWith(source: string, name: string): Promise<PluginRuntime> {

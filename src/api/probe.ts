@@ -25,6 +25,7 @@ import { Result } from "better-result";
 
 import { resolvePreferences } from "../core/queue";
 import type { AppContext } from "./context";
+import { PluginRejected } from "../core/errors";
 import { fail } from "./errors";
 import { toOutputName, videoCodecNotice } from "../core/selection";
 import { mediaOptions, suggestFor } from "./options";
@@ -38,15 +39,45 @@ import { preferencesSchema } from "./schemas";
 const PROBE_TIMEOUT_MS = 45_000;
 
 export function probeRoutes(ctx: AppContext) {
-  const { registry } = ctx;
+  const { registry, plugins } = ctx;
 
   return new Elysia().post(
     "/probe",
     async ({ body }) => {
-      const provider = registry.resolve(body.url);
+      /**
+       * 🔴 `url:resolve` runs here too, and leaving it out was a bug found by
+       * checking rather than by reasoning.
+       *
+       * The hook's contract is *"before a provider is chosen"*, and this route
+       * chooses one. With it only on the enqueue path, a link a plugin rewrites
+       * — a Vidarro share page becoming an HLS manifest — answered
+       * `UnsupportedUrl` when analysed and then downloaded fine when queued.
+       * The form would have been telling people a link does not work while the
+       * queue proved otherwise, which is worse than either answer alone.
+       *
+       * ⚠️ No exclusions are passed: `pluginsOff` belongs to a *job*, and there
+       * is no job yet. A preview therefore shows what the server-wide
+       * configuration would do, which is the only thing it can honestly claim.
+       */
+      let url = body.url;
+      if (plugins) {
+        const resolved = await plugins.run("url:resolve", url);
+        if (Result.isError(resolved)) {
+          return fail(
+            new PluginRejected({
+              plugin: resolved.error.plugin,
+              at: resolved.error.at,
+              detail: resolved.error.detail,
+            }),
+          );
+        }
+        url = resolved.value;
+      }
+
+      const provider = registry.resolve(url);
       if (Result.isError(provider)) return fail(provider.error);
 
-      const info = await provider.value.probe(body.url, AbortSignal.timeout(PROBE_TIMEOUT_MS));
+      const info = await provider.value.probe(url, AbortSignal.timeout(PROBE_TIMEOUT_MS));
       if (Result.isError(info)) return fail(info.error);
 
       // The caller's current settings, so the suggestion honours a ceiling the
