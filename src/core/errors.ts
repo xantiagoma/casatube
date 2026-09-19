@@ -47,6 +47,16 @@ export class RateLimited extends TaggedError("RateLimited")<{
 /** Needs a logged-in session: age-gated, members-only, or a bot challenge. */
 export class AuthRequired extends TaggedError("AuthRequired")<{
   url: string;
+  /**
+   * What is actually missing, when the generic sentence would mislead.
+   *
+   * 🔴 The default message names a cookies file or a username and password,
+   * because that is what every provider needed until one did not. Telegram takes
+   * neither — it takes an `apiId`, an `apiHash` and a session string — so a
+   * provider that can say something more useful says it here, and `api/errors.ts`
+   * prefers it. Absent, nothing changes for anybody.
+   */
+  detail?: string;
 }> {}
 
 export class FormatUnavailable extends TaggedError("FormatUnavailable")<{

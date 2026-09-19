@@ -32,6 +32,7 @@ import { NotificationRetention, policyFromSettings } from "./core/notification-r
 import { SourceManager, registryDiscoverer } from "./core/sources";
 import { createDefaultRegistry } from "./providers/registry";
 import { describeFfmpegLocation, resolveFfmpegLocation } from "./providers/ytdlp";
+import { createTelegramProvider } from "./providers/telegram";
 import { loadConfig, type ServerConfig } from "./api/config";
 import type { AppContext } from "./api/context";
 import { credentialRoutes } from "./api/credentials";
@@ -213,6 +214,21 @@ async function main(): Promise<StartedServer> {
     credentials,
     ffmpegLocation: ffmpegLocation?.path,
   });
+
+  /**
+   * Telegram, ahead of the fallback.
+   *
+   * 🔴 The one source yt-dlp genuinely cannot reach: a private channel's video
+   * is never an HTTP URL, it is MTProto chunks. `register` inserts in front of
+   * the yt-dlp catch-all, which is exactly what PLAN §5 means by "a custom
+   * extractor for a site yt-dlp covers badly".
+   *
+   * ⚠️ It claims **private** links only, and only when there is a credential
+   * store to authenticate against. Public `t.me` links keep going to yt-dlp's
+   * `telegram:embed` — claiming a URL this cannot serve would take it away from
+   * a fallback that might manage it.
+   */
+  registry.register(createTelegramProvider({ credentials }));
   /**
    * The plugins that ship with CasaTube, put into the data directory.
    *

@@ -105,7 +105,14 @@ function describe(error: Taggedish): string {
       return `The source refused the request: ${String(error.detail ?? "unknown reason")}`;
     case "RateLimited":
       return "The source is rate-limiting us. Waiting before trying again.";
+    /**
+     * ⚠️ The provider's own sentence wins when it has one. The default below
+     * names a cookies file or a username and password, and for a source that
+     * takes neither — Telegram wants an apiId, an apiHash and a session string —
+     * it is worse than no advice: it sends someone looking for the wrong thing.
+     */
     case "AuthRequired":
+      if (typeof error.detail === "string" && error.detail !== "") return error.detail;
       return (
         "This needs a signed-in session. Add a credential for this site under " +
         "Settings — a Netscape cookies.txt for YouTube, or a username and password " +
