@@ -65,6 +65,12 @@ const STATUS_BY_TAG: Record<string, number> = {
   // A plugin refused the request. 422: it was understood, and a *plugin* — not
   // the server and not the source — decided it could not go ahead.
   PluginRejected: 422,
+  // Telegram refused a login step. 422: the request was understood and the
+  // *credential* or the code is what is wrong. A flood wait is the exception and
+  // is retryable — see RETRYABLE_TAGS.
+  TelegramLoginFailed: 422,
+  // 503: the route is right and a runtime component is missing.
+  TelegramLoginUnavailable: 503,
   // Worker
   StageFailed: 500,
   Cancelled: 409,
@@ -83,6 +89,9 @@ const RETRYABLE_TAGS = new Set([
   "MountUnavailable",
   "Timeout",
   "StageFailed",
+  // ⚠️ Retryable, but not immediately: a flood wait carries the seconds, and the
+  // client is expected to honour them rather than hammer the endpoint.
+  "TelegramLoginFailed",
 ]);
 
 type Taggedish = { _tag: string; message?: string } & Record<string, unknown>;
@@ -139,6 +148,21 @@ function describe(error: Taggedish): string {
       return `A job that is ${String(error.from ?? "in this state")} cannot become ${String(error.to ?? "that")}.`;
     case "LeaseLost":
       return "Another worker took this job.";
+    case "TelegramLoginUnavailable":
+      return `This build has no Telegram sign-in flow. ${String(error.detail ?? "")}`.trim();
+    case "TelegramLoginFailed": {
+      const seconds = Number(error.retryAfterSeconds ?? 0);
+      if (seconds > 0) {
+        return `Telegram is rate-limiting this login. Wait ${seconds} second${seconds === 1 ? "" : "s"} and try again.`;
+      }
+      const code = String(error.code ?? "UNKNOWN");
+      if (code === "PHONE_CODE_INVALID") return "That code is not right. Check it and try again — the same code request is still valid.";
+      if (code === "PHONE_CODE_EXPIRED") return "That code has expired. Start the login again to get a new one.";
+      if (code === "PASSWORD_HASH_INVALID") return "That two-step password is not right.";
+      if (code === "PHONE_NUMBER_INVALID") return "Telegram does not recognise that phone number.";
+      if (code === "API_ID_INVALID") return "That api_id and api_hash pair is not valid — check both at my.telegram.org.";
+      return `Telegram refused: ${String(error.detail ?? code)}`;
+    }
     case "UnsupportedSubtitle":
       return (
         `${String(error.format ?? "That format").toUpperCase()} subtitles cannot be shown in a browser — ` +

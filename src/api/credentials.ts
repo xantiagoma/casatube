@@ -46,7 +46,9 @@ import {
   type CredentialSecret,
   type CredentialStore,
 } from "../core/credentials";
-import { InvalidCredential } from "../core/errors";
+import { InvalidCredential, TelegramLoginUnavailable } from "../core/errors";
+import type { TelegramLoginManager, TelegramLoginStep } from "../core/telegram-login";
+import { TELEGRAM_SCOPE } from "../providers/telegram";
 import { fail } from "./errors";
 
 /** Roughly two hundred times the largest cookie jar anyone has ever exported. */
@@ -142,6 +144,14 @@ function secretFrom(body: CreateBody): Result<CredentialSecret, InvalidCredentia
 /** Only what these routes touch — the same narrowing the other route modules use. */
 export interface CredentialRoutesContext {
   credentials: CredentialStore;
+  /**
+   * The Telegram sign-in flow, when the process has one.
+   *
+   * Optional for the reason `plugins` is: `createApp` has to stand up in a test
+   * without it, and the three routes below simply answer 503 when it is absent
+   * rather than pretending a login could be started.
+   */
+  telegramLogin?: TelegramLoginManager;
 }
 
 /**
@@ -165,6 +175,36 @@ function encryptionState(store: CredentialStore) {
       : `${CREDENTIALS_KEY_ENV} is not set, so secrets are stored in plain text in the ` +
         "database. Set it to a long random string and save each credential again to encrypt it.",
   };
+}
+
+/**
+ * The last step of a Telegram login: seal the session, answer with metadata.
+ *
+ * 🔴 The `done` step carries the session string, and this is where it stops. The
+ * browser gets an account name and a credential id — never the secret it would
+ * have no use for and every reason not to hold (PLAN §12).
+ *
+ * The earlier steps carry nothing secret, so they pass straight through.
+ */
+async function finishTelegram(
+  store: CredentialStore,
+  stepped: Awaited<ReturnType<TelegramLoginManager["code"]>>,
+) {
+  if (Result.isError(stepped)) return fail(stepped.error);
+  const step: TelegramLoginStep = stepped.value;
+  if (step.state !== "done") return step;
+
+  const created = await store.create({
+    scope: TELEGRAM_SCOPE,
+    label: `Telegram — ${step.account}`,
+    secret: {
+      type: "custom",
+      data: { apiId: String(step.apiId), apiHash: step.apiHash, session: step.session },
+    },
+  });
+  if (Result.isError(created)) return fail(created.error);
+
+  return { state: "done" as const, account: step.account, credential: created.value };
 }
 
 export function credentialRoutes(ctx: CredentialRoutesContext) {
@@ -215,6 +255,98 @@ export function credentialRoutes(ctx: CredentialRoutesContext) {
         },
         { body: createBody },
       )
+
+      /**
+       * Signing in to Telegram, in the two round trips it genuinely takes.
+       *
+       * 🔴 **The session string never comes back to the browser.** The manager
+       * hands it over on the last step and *this* route consumes it — sealing it
+       * into the store and answering with the credential's metadata. PLAN §12 is
+       * flat about secrets not travelling back through the API, and a session
+       * string is the most valuable one there is: it is the whole account.
+       *
+       * ⚠️ A pending login lives in memory and does not survive a restart. The
+       * 404 below says that in words, because "unknown login" to someone who
+       * typed the code correctly three seconds ago is a bug report waiting to
+       * happen.
+       */
+      .post(
+        "/credentials/telegram/start",
+        async ({ body }) => {
+          if (ctx.telegramLogin === undefined) return fail(
+            new TelegramLoginUnavailable({
+              detail: "scripts/telegram-session.ts does the same job from a terminal.",
+            }),
+          );
+          /**
+           * 🔴 Through `finishTelegram` like the other two, even though `start`
+           * can only ever answer `code-needed`.
+           *
+           * Returning the step directly type-checks and is a hole waiting for a
+           * refactor: the manager's `done` variant carries the session string,
+           * so a future change that let `start` complete a login would serialise
+           * an account into an HTTP response, silently. One exit for all three
+           * steps means the session has exactly one path out of the manager —
+           * into the store. Eden's derived client type is what pointed this out.
+           */
+          return finishTelegram(
+            store,
+            await ctx.telegramLogin.start({ apiId: body.apiId, apiHash: body.apiHash }, body.phone),
+          );
+        },
+        {
+          body: t.Object({
+            apiId: t.Integer({ minimum: 1 }),
+            /** ⚠️ Exactly 32 hex characters. A pasted RSA key is refused here. */
+            apiHash: t.String({ pattern: "^[0-9a-fA-F]{32}$" }),
+            phone: t.String({ minLength: 5, maxLength: 32 }),
+          }),
+        },
+      )
+
+      .post(
+        "/credentials/telegram/code",
+        async ({ body }) => {
+          if (ctx.telegramLogin === undefined) return fail(
+            new TelegramLoginUnavailable({
+              detail: "scripts/telegram-session.ts does the same job from a terminal.",
+            }),
+          );
+          const stepped = await ctx.telegramLogin.code(body.loginId, body.code);
+          return finishTelegram(store, stepped);
+        },
+        {
+          body: t.Object({
+            loginId: t.String({ minLength: 1 }),
+            code: t.String({ minLength: 3, maxLength: 16 }),
+          }),
+        },
+      )
+
+      .post(
+        "/credentials/telegram/password",
+        async ({ body }) => {
+          if (ctx.telegramLogin === undefined) return fail(
+            new TelegramLoginUnavailable({
+              detail: "scripts/telegram-session.ts does the same job from a terminal.",
+            }),
+          );
+          const stepped = await ctx.telegramLogin.password(body.loginId, body.password);
+          return finishTelegram(store, stepped);
+        },
+        {
+          body: t.Object({
+            loginId: t.String({ minLength: 1 }),
+            password: t.String({ minLength: 1, maxLength: 512 }),
+          }),
+        },
+      )
+
+      /** Give up, and close the connection rather than waiting for it to expire. */
+      .delete("/credentials/telegram/:loginId", async ({ params }) => {
+        await ctx.telegramLogin?.cancel(params.loginId);
+        return { cancelled: true };
+      })
 
       .delete("/credentials/:id", async ({ params }) => {
         const removed = await store.delete(params.id);

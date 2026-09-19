@@ -14,6 +14,7 @@ import type { TranscodeQueue } from "../core/transcode";
 import type { SourceScheduler } from "../core/scheduler";
 import type { SourceManager } from "../core/sources";
 import type { ProviderRegistry } from "../providers/registry";
+import type { TelegramLoginManager } from "../core/telegram-login";
 import type { AppSettingsStore } from "../core/app-settings";
 import type { ServerConfig } from "./config";
 import type { QueueWatcher } from "./watcher";
@@ -40,6 +41,17 @@ export interface AppContext {
    * them would show up as "saved fine, never applies".
    */
   credentials: CredentialStore;
+  /**
+   * The Telegram sign-in flow, when the process has one.
+   *
+   * ⚠️ **The only component here that holds state between requests**, and
+   * deliberately the only one: a half-finished login is a live MTProto
+   * connection, because Telegram's `phoneCodeHash` dies with the connection that
+   * asked for the code. Optional for the reason `plugins` is — `createApp` has
+   * to stand up in a test without one, and the routes answer 503 rather than
+   * pretending a login could start.
+   */
+  telegramLogin?: TelegramLoginManager;
   /** Subscriptions, and the timer that services them — PLAN §11, phase 4. */
   sources: SourceManager;
   scheduler: SourceScheduler;

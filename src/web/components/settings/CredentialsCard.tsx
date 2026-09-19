@@ -40,6 +40,7 @@ import {
   Lock,
   LockOpen,
   Plus,
+  Send,
   Stethoscope,
   Trash2,
   TriangleAlert,
@@ -64,6 +65,7 @@ import { useCredentials, useDeleteCredential, useTestCredential } from "../../da
 import { formatDateTime, formatRelative } from "../../data/format";
 import { EmptyState, ErrorState } from "../common/Bits";
 import { CredentialDialog } from "./CredentialDialog";
+import { TelegramLoginDialog } from "./TelegramLoginDialog";
 import {
   TYPE_LABEL,
   cookieExpiry,
@@ -325,6 +327,7 @@ function DeleteDialog({
 export function CredentialsCard() {
   const listing = useCredentials();
   const [adding, setAdding] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
   const [deleting, setDeleting] = useState<CredentialMetadata | null>(null);
 
   const credentials = listing.data?.credentials ?? [];
@@ -342,7 +345,23 @@ export function CredentialsCard() {
           you’re not a bot” — and it is stored one-way: what is pasted here goes to yt-dlp and comes back out
           nowhere.
         </p>
-        <CardAction>
+        <CardAction className="flex items-center gap-1.5">
+          {/* 🔴 A button of its own rather than a type in the Add form. Telegram
+              is the one credential nobody can *paste*: signing in takes a code
+              Telegram sends while the server holds the connection open, so it is
+              a conversation and not a field. Hiding that behind "Add → custom"
+              would leave somebody looking for three values they have no way to
+              produce. */}
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            disabled={listing.isPending || listing.isError}
+            onClick={() => setSigningIn(true)}
+          >
+            <Send className="size-3.5" aria-hidden />
+            Telegram
+          </Button>
           <Button
             size="sm"
             variant="outline"
@@ -419,6 +438,12 @@ export function CredentialsCard() {
               open={adding}
               onOpenChange={setAdding}
               notice={listing.data.notice}
+              encryption={listing.data.encryption}
+            />
+
+            <TelegramLoginDialog
+              open={signingIn}
+              onOpenChange={setSigningIn}
               encryption={listing.data.encryption}
             />
           </>

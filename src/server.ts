@@ -33,6 +33,7 @@ import { SourceManager, registryDiscoverer } from "./core/sources";
 import { createDefaultRegistry } from "./providers/registry";
 import { describeFfmpegLocation, resolveFfmpegLocation } from "./providers/ytdlp";
 import { createTelegramProvider } from "./providers/telegram";
+import { connectForLogin, TelegramLoginManager } from "./core/telegram-login";
 import { loadConfig, type ServerConfig } from "./api/config";
 import type { AppContext } from "./api/context";
 import { credentialRoutes } from "./api/credentials";
@@ -229,6 +230,18 @@ async function main(): Promise<StartedServer> {
    * a fallback that might manage it.
    */
   registry.register(createTelegramProvider({ credentials }));
+
+  /**
+   * The Telegram sign-in flow.
+   *
+   * ⚠️ **The only thing in this process that holds state between requests.** A
+   * half-finished login is a live MTProto connection, because Telegram's
+   * `phoneCodeHash` dies with the connection that asked for the code — there is
+   * no stateless version. It expires, it is capped, and it does not survive a
+   * restart, which is acceptable here and would not be for a *job*: nothing is
+   * written until the last step, so a lost login is a login to start again.
+   */
+  const telegramLogin = new TelegramLoginManager({ connect: connectForLogin });
   /**
    * The plugins that ship with CasaTube, put into the data directory.
    *
@@ -279,7 +292,7 @@ async function main(): Promise<StartedServer> {
 
   const ctx: AppContext = {
     db, queue, registry, watcher, config, sources, scheduler, plugins, hls, credentials, transcodes,
-    settings: settingsStore,
+    settings: settingsStore, telegramLogin,
   };
 
   const bundle = await buildClient({ dev: config.dev });
@@ -351,6 +364,9 @@ async function main(): Promise<StartedServer> {
     await transcodes.stop();
     await scheduler.drain();
     await notificationRetention.drain();
+    // Every half-finished login is a socket. Closing them is the difference
+    // between a clean shutdown and connections Telegram has to time out.
+    await telegramLogin.stop();
     watcher.stop();
     await app.stop();
     queue.close();

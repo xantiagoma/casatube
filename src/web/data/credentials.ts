@@ -110,6 +110,64 @@ export function useDeleteCredential() {
   });
 }
 
+// --- Signing in to Telegram ---------------------------------------------------
+
+/**
+ * What a login step answers with.
+ *
+ * 🔴 There is no `session` here, and there never will be. The server seals it
+ * and answers with the credential's metadata — a session string is the whole
+ * account, and the browser has no use for one (PLAN §12).
+ */
+export type TelegramLoginStep =
+  | { state: "code-needed"; loginId: string; expiresAt: string }
+  | { state: "password-needed"; loginId: string; expiresAt: string }
+  | { state: "done"; account: string; credential: CredentialMetadata };
+
+export interface TelegramStartBody {
+  apiId: number;
+  apiHash: string;
+  phone: string;
+}
+
+/**
+ * Ask Telegram to send a code.
+ *
+ * ⚠️ Each of these three is a *step*, not a form submission that can be retried
+ * blindly: the server is holding a live MTProto connection between them, keyed
+ * by `loginId`, because Telegram's code belongs to the connection that asked for
+ * it. Starting again means a new code and a new `loginId`.
+ */
+export function useTelegramStart() {
+  return useMutation<TelegramLoginStep, Error, TelegramStartBody>({
+    mutationFn: async (body) => unwrap(await api.api.credentials.telegram.start.post(body)),
+  });
+}
+
+export function useTelegramCode() {
+  const client = useQueryClient();
+  return useMutation<TelegramLoginStep, Error, { loginId: string; code: string }>({
+    mutationFn: async (body) => unwrap(await api.api.credentials.telegram.code.post(body)),
+    // A finished login wrote a credential; the list is stale either way.
+    onSuccess: () => void client.invalidateQueries({ queryKey: keys.credentials }),
+  });
+}
+
+export function useTelegramPassword() {
+  const client = useQueryClient();
+  return useMutation<TelegramLoginStep, Error, { loginId: string; password: string }>({
+    mutationFn: async (body) => unwrap(await api.api.credentials.telegram.password.post(body)),
+    onSuccess: () => void client.invalidateQueries({ queryKey: keys.credentials }),
+  });
+}
+
+/** Give up, so the server closes the connection instead of waiting it out. */
+export function useTelegramCancel() {
+  return useMutation<{ cancelled: boolean }, Error, string>({
+    mutationFn: async (loginId) => unwrap(await api.api.credentials.telegram({ loginId }).delete()),
+  });
+}
+
 /**
  * Check one, offline.
  *

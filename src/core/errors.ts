@@ -112,6 +112,35 @@ export class PluginRejected extends TaggedError("PluginRejected")<{
 }> {}
 
 /**
+ * This build has no Telegram sign-in flow to talk to.
+ *
+ * 503 rather than 404: the route exists, and what is missing is a *runtime*
+ * component — an app assembled without one, which is what every API test does.
+ * A 404 would read as "wrong URL" and send someone looking at their request.
+ */
+export class TelegramLoginUnavailable extends TaggedError("TelegramLoginUnavailable")<{
+  /** What to do instead. There is a terminal path that does the same job. */
+  detail: string;
+}> {}
+
+/**
+ * Telegram refused a login step, and said why.
+ *
+ * 🔴 `code` is kept because callers act on it rather than on prose.
+ * `PHONE_CODE_INVALID` means try again with the same code request;
+ * `FLOOD_WAIT_42` means wait 42 seconds and means it — and the number lives
+ * nowhere but inside that string, so losing it turns "wait 42 seconds" into "it
+ * failed", after which the person retries immediately and extends the wait.
+ */
+export class TelegramLoginFailed extends TaggedError("TelegramLoginFailed")<{
+  /** Telegram's own code where there is one, `UNKNOWN` otherwise. */
+  code: string;
+  detail: string;
+  /** Seconds to wait, when the refusal was a flood wait. */
+  retryAfterSeconds?: number;
+}> {}
+
+/**
  * A subtitle format a browser cannot be given.
  *
  * ⚠️ 415 rather than a best-effort conversion. `.ass` and `.ssa` carry
