@@ -8,9 +8,9 @@
  *
  * Telegram's login needs a code sent to the phone *and submitted inside the same
  * MTProto connection* — the `phoneCodeHash` belongs to that connection and
- * expires with it. So a code cannot be a form field that a server uses later,
- * and this is the dialogue that gets past it. Everything it produces is one
- * line, which a form takes without complaint.
+ * expires with it. So a code cannot be a form field a server uses later, and
+ * this is the dialogue that gets past it. Everything it prints is one line,
+ * which a form takes without complaint.
  *
  * ```
  * CASATUBE_TG_API_ID=… CASATUBE_TG_API_HASH=… bun scripts/telegram-session.ts
@@ -24,51 +24,28 @@
  * | `apiHash` | the api_hash |
  * | `session` | what this prints |
  *
+ * ## ⚠️ Everything you type here is visible, deliberately
+ *
+ * An earlier version hid the api_hash and the two-step password. It **hung**: a
+ * hidden prompt needs raw mode, raw mode needs its own reader, and `readline`
+ * already holds stdin — so the bytes went to readline and the Enter key did
+ * nothing. Two attempts at fixing that produced one prompt that hung and one
+ * that swallowed two answers at once.
+ *
+ * So there is one reader and nothing is hidden. A prompt that works beats a
+ * prompt that hides, and this runs on the server's own terminal for a few
+ * seconds. If the scrollback matters where you are, pass the two copied values
+ * as environment variables — then only the phone, the code and the two-step
+ * password are typed, and none of those is worth anything after this exits.
+ *
  * 📌 The RSA public key `my.telegram.org` shows is **not** an input: `teleproto`
- * carries Telegram's own server keys (`crypto/RSA.js`), which is what the
- * handshake uses.
+ * carries Telegram's own server keys (`crypto/RSA.js`, two of them), which is
+ * what the handshake uses. It is also public and identical for every account.
  *
  * ⚠️ A session string is **the account**, not a per-channel token. Telegram lists
- * it as an active session and it can be revoked from any client under
- * Settings → Devices.
+ * it as an active session; revoke it from any client under Settings → Devices.
  */
 import { createInterface } from "node:readline/promises";
-
-const ETX = "";
-const DEL = "";
-const BACKSPACE = "\b";
-
-/**
- * Read one line without echoing it.
- *
- * Ctrl-C is handled explicitly: raw mode swallows the default handler, and a
- * hidden prompt you cannot escape from is a trap.
- */
-async function secret(question: string): Promise<string> {
-  process.stdout.write(question);
-  process.stdin.setRawMode?.(true);
-  process.stdin.resume();
-  let value = "";
-  for await (const chunk of process.stdin) {
-    for (const character of chunk.toString("utf8")) {
-      if (character === "\r" || character === "\n") {
-        process.stdin.setRawMode?.(false);
-        process.stdin.pause();
-        process.stdout.write("\n");
-        return value;
-      }
-      if (character === ETX) {
-        process.stdin.setRawMode?.(false);
-        process.stdout.write("\n");
-        process.exit(130);
-      }
-      if (character === DEL || character === BACKSPACE) value = value.slice(0, -1);
-      else value += character;
-    }
-  }
-  process.stdin.setRawMode?.(false);
-  return value;
-}
 
 /** The first line, trimmed. A paste with more in it loses the rest here, not later. */
 function oneLine(value: string): string {
@@ -78,8 +55,9 @@ function oneLine(value: string): string {
 /**
  * What arrived, said without repeating it.
  *
- * ⚠️ Never echoes the value: this reports on an api_hash, and a message that
- * helpfully prints the secret back is one that puts it in a scrollback.
+ * ⚠️ Never echoes the value. A "that is wrong" message that helpfully prints the
+ * secret back is one that puts it somewhere it was not going to be otherwise —
+ * and unlike the prompt above, an error line is what gets pasted into a chat.
  */
 function describe(value: string): string {
   const notes = [`${value.length} character${value.length === 1 ? "" : "s"}`];
@@ -89,28 +67,29 @@ function describe(value: string): string {
 }
 
 async function main(): Promise<void> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+
   /**
    * 🔴 The two copied values come from the **environment** first.
    *
-   * They are copied off a web page that shows them inside a block containing a
-   * multi-line RSA key, so pasting into a prompt is the one input that cannot be
-   * trusted: a newline ends the prompt early and the remainder is read by
-   * whatever asks next — which looks like this script malfunctioning rather than
-   * like a paste going wrong.
+   * They are copied off a page that shows them beside a multi-line RSA key, and
+   * pasting that into a prompt is the one input nothing can save: a newline ends
+   * the prompt early and the remainder is read as the *next* answer, so the
+   * phone number arrives pre-filled with a fragment of a key and the script
+   * looks broken rather than mis-fed.
    */
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
   const fromEnvId = process.env.CASATUBE_TG_API_ID?.trim();
   const fromEnvHash = process.env.CASATUBE_TG_API_HASH?.trim();
 
   if (fromEnvId === undefined || fromEnvHash === undefined) {
     console.log("From https://my.telegram.org → API development tools.");
-    console.log("⚠️  Only these two. Never the RSA public key — it is not an input.\n");
-    console.log("   Easier: pass them as environment variables and skip the pasting —");
+    console.log("⚠️  Only the api_id and the api_hash. Never the RSA public key — not an input.\n");
+    console.log("   Less typing, and no paste to go wrong:");
     console.log("   CASATUBE_TG_API_ID=… CASATUBE_TG_API_HASH=… bun scripts/telegram-session.ts\n");
   }
 
   const apiId = fromEnvId ?? oneLine(await rl.question("api_id   (digits):       "));
-  const apiHash = fromEnvHash ?? oneLine(await secret("api_hash (32 hex chars): "));
+  const apiHash = fromEnvHash ?? oneLine(await rl.question("api_hash (32 hex chars): "));
 
   if (!/^\d+$/.test(apiId)) {
     console.error(`\nThat is not an api_id — it is a number, usually six or seven digits. Got ${describe(apiId)}.`);
@@ -133,16 +112,11 @@ async function main(): Promise<void> {
   });
 
   console.log("\nTelegram will send a code to the account you sign in with.");
+  console.log("(What you type is visible — see the note at the top of this file.)");
   await client.start({
-    phoneNumber: async () => oneLine(await rl.question("phone (+57…): ")),
-    phoneCode: async () => oneLine(await rl.question("code: ")),
-    password: async () => {
-      // readline holds stdin; it has to let go before raw mode can read.
-      rl.pause();
-      const value = await secret("two-step password: ");
-      rl.resume();
-      return value;
-    },
+    phoneNumber: async () => oneLine(await rl.question("phone (+57…):      ")),
+    phoneCode: async () => oneLine(await rl.question("code:              ")),
+    password: async () => oneLine(await rl.question("two-step password: ")),
     onError: (error: unknown) => {
       console.error(`\nTelegram refused: ${error instanceof Error ? error.message : String(error)}`);
     },
