@@ -106,7 +106,7 @@ function preferencesFrom(base: Preferences, choices: Choices): Preferences {
  * into the browser.
  */
 function outcomeFor(analyzed: ProbeResult, choices: Choices): CodecOutcome | undefined {
-  return analyzed.options.resolutions.find((option) => option.height === choices.maxResolution)
+  return analyzed.options.resolutions.find((option) => option.resolution === choices.maxResolution)
     ?.byCodec[choices.videoCodec];
 }
 
@@ -117,7 +117,7 @@ function summaryOf(analyzed: ProbeResult, choices: Choices): string {
 
   if (analyzed.options.resolutions.length === 0) parts.push("Audio only");
   else if (chosen) {
-    parts.push(`${chosen.height ?? "?"}p`);
+    parts.push(`${chosen.resolution ?? "?"}p`);
     if (chosen.codecFamily !== "unknown") parts.push(chosen.codecFamily.toUpperCase());
     if (chosen.approxBytes) parts.push(`${chosen.bytesEstimated ? "≈ " : ""}${formatBytes(chosen.approxBytes)}`);
   }

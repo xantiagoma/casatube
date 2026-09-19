@@ -245,17 +245,43 @@ function pickBest<T>(items: readonly T[], compare: (a: T, b: T) => number): T | 
 }
 
 /**
+ * What "1080p" means for one format: **the shorter side**.
+ *
+ * 🔴 Not the height, and the difference is not academic. A phone video is
+ * 720×1280 — 720p by any reading a person would recognise — and judging it by
+ * height calls it *1280p* and refuses it under a 1080 ceiling. That is what
+ * happened: two Telegram downloads failed with `FormatUnavailable` against a
+ * default ceiling, and the first plausible explanation ("the video is 4K") was
+ * wrong. A portrait YouTube Short at 1080×1920 would have failed the same way.
+ *
+ * For landscape video the shorter side *is* the height, so this changes nothing
+ * for the overwhelming majority — which is exactly why the bug survived: every
+ * format anybody tested was wider than it was tall.
+ *
+ * ⚠️ `null` when neither side is known, and it stays distinct from `0`: a format
+ * whose dimensions the provider never reported is a last resort, not a 0p video.
+ * Width alone is enough to judge a portrait video, and height alone is enough
+ * for a landscape one, so either is better than nothing.
+ */
+export function resolutionOf(format: VideoFormat): number | null {
+  const width = typeof format.width === "number" ? format.width : null;
+  const height = typeof format.height === "number" ? format.height : null;
+  if (width !== null && height !== null) return Math.min(width, height);
+  return height ?? width;
+}
+
+/**
  * Lower is better.
  *
- * ⚠️ Height comes before codec, always. The codec preference breaks ties *at a
+ * ⚠️ Resolution comes before codec, always. The codec preference breaks ties *at a
  * resolution*; it never buys a better codec by giving up pixels. Dropping
  * resolution to honour a named codec is a separate, deliberate step in
  * {@link selectVideoFormat}, because that one has to be announced.
  */
 function compareVideo(a: VideoFormat, b: VideoFormat, order: readonly VideoCodec[]): number {
-  const heightA = a.height ?? 0;
-  const heightB = b.height ?? 0;
-  if (heightA !== heightB) return heightB - heightA;
+  const resolutionA = resolutionOf(a) ?? 0;
+  const resolutionB = resolutionOf(b) ?? 0;
+  if (resolutionA !== resolutionB) return resolutionB - resolutionA;
   const codecA = codecRank(a.codec, order);
   const codecB = codecRank(b.codec, order);
   if (codecA !== codecB) return codecA - codecB;
@@ -327,11 +353,9 @@ function bestUnderCeiling(
   maxResolution: number,
   order: readonly VideoCodec[],
 ): VideoFormat | undefined {
-  const withKnownHeight = formats.filter((f) => typeof f.height === "number");
-  const withinCeiling = withKnownHeight.filter((f) => (f.height ?? 0) <= maxResolution);
-  const pool = withinCeiling.length > 0
-    ? withinCeiling
-    : formats.filter((f) => typeof f.height !== "number");
+  const known = formats.filter((f) => resolutionOf(f) !== null);
+  const withinCeiling = known.filter((f) => (resolutionOf(f) ?? 0) <= maxResolution);
+  const pool = withinCeiling.length > 0 ? withinCeiling : formats.filter((f) => resolutionOf(f) === null);
   return pickBest(pool, (a, b) => compareVideo(a, b, order));
 }
 

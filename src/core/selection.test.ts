@@ -17,6 +17,7 @@ import {
   FALLBACK_OUTPUT_NAME,
   selectAudioTracks,
   freeStem,
+  resolutionOf,
   selectSubtitles,
   stemIsTaken,
   suffixStem,
@@ -853,5 +854,62 @@ describe("buildDownloadPlan: a name typed by a person", () => {
       const plan = buildDownloadPlan(URL, INFO, prefs({}), empty);
       expect(Result.isOk(plan) && plan.value.outputName).toBe(fromTitle.value.outputName);
     }
+  });
+});
+
+
+// --- Portrait video is not tall, it is narrow (2026-09-19) -------------------
+
+describe("resolutionOf", () => {
+  test("🔴 the shorter side, so a phone video is 720p and not 1280p", () => {
+    // What this cost: two Telegram downloads failed with FormatUnavailable
+    // against a default 1080 ceiling, and the first plausible explanation — "the
+    // video is 4K" — was wrong. They were 720×1280.
+    expect(resolutionOf({ id: "a", width: 720, height: 1280 })).toBe(720);
+    expect(resolutionOf({ id: "b", width: 1080, height: 1920 })).toBe(1080);
+  });
+
+  test("landscape is unchanged, which is why the bug survived this long", () => {
+    // Every format anybody tested was wider than it was tall, so height and the
+    // shorter side were the same number.
+    expect(resolutionOf({ id: "a", width: 1920, height: 1080 })).toBe(1080);
+    expect(resolutionOf({ id: "b", width: 3840, height: 2160 })).toBe(2160);
+  });
+
+  test("one side is better than none, and none is null rather than zero", () => {
+    // A format with no dimensions is a last resort, not a 0p video — and
+    // collapsing the two would make it win every ceiling comparison.
+    expect(resolutionOf({ id: "a", height: 1080 })).toBe(1080);
+    expect(resolutionOf({ id: "b", width: 720 })).toBe(720);
+    expect(resolutionOf({ id: "c" })).toBeNull();
+  });
+
+  test("a square video is its own resolution", () => {
+    expect(resolutionOf({ id: "a", width: 1080, height: 1080 })).toBe(1080);
+  });
+});
+
+describe("selectVideoFormat with portrait video", () => {
+  test("🔴 a 720×1280 file passes a 1080 ceiling", () => {
+    const portrait = [{ id: "v", width: 720, height: 1280 }];
+    expect(selectVideoFormat(portrait, 1080, "auto")?.id).toBe("v");
+    expect(selectVideoFormat(portrait, 720, "auto")?.id).toBe("v");
+  });
+
+  test("and it is still refused by a ceiling that really is below it", () => {
+    // The ceiling has to keep meaning something: 720p is above 480p either way.
+    const portrait = [{ id: "v", width: 720, height: 1280 }];
+    expect(selectVideoFormat(portrait, 480, "auto")).toBeUndefined();
+  });
+
+  test("portrait and landscape rank against each other by the same measure", () => {
+    const formats = [
+      { id: "tall", width: 720, height: 1280 }, // 720p
+      { id: "wide", width: 1920, height: 1080 }, // 1080p
+    ];
+    // 1080 beats 720 — not "1080 beats 1280", which is what height would say.
+    expect(selectVideoFormat(formats, 2160, "auto")?.id).toBe("wide");
+    // And under a 720 ceiling only the portrait one qualifies.
+    expect(selectVideoFormat(formats, 720, "auto")?.id).toBe("tall");
   });
 });

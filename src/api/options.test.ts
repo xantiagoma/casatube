@@ -38,7 +38,7 @@ describe("resolutions", () => {
     ).resolutions;
 
     // 🔴 The complaint that started this: no 4K on a 720p video.
-    expect(options.map((option) => option.height)).toEqual([720, 360]);
+    expect(options.map((option) => option.resolution)).toEqual([720, 360]);
     // At equal height, the codec the selector prefers — H.264 over AV1.
     expect(options[0]?.formatId).toBe("a");
     expect(options[0]?.codecFamily).toBe("h264");
@@ -72,7 +72,7 @@ describe("resolutions", () => {
     const options = mediaOptions(
       media({ videoFormats: [{ id: "a", height: 480 }, { id: "b" }] }),
     );
-    expect(options.resolutions.map((option) => option.height)).toEqual([480]);
+    expect(options.resolutions.map((option) => option.resolution)).toEqual([480]);
     expect(options.formatsWithoutHeight).toBe(1);
   });
 
@@ -94,7 +94,7 @@ describe("codecs", () => {
   });
 
   test("🔴 one resolution, several codecs, and the sizes that differ", () => {
-    const hd = mediaOptions(info).resolutions.find((option) => option.height === 1080)!;
+    const hd = mediaOptions(info).resolutions.find((option) => option.resolution === 1080)!;
 
     // The thing a single row per height could not show: 1080p is two offers.
     expect(hd.variants.map((variant) => variant.codecFamily)).toEqual(["h264", "av1"]);
@@ -104,13 +104,13 @@ describe("codecs", () => {
     expect(av1!.approxBytes).toBeLessThan(h264!.approxBytes!);
     // Preselected by `auto`, which is H.264 — and the row's own line says so.
     expect(hd.formatId).toBe("137");
-    expect(hd.byCodec.auto).toMatchObject({ formatId: "137", height: 1080, exact: true });
-    expect(hd.byCodec.av1).toMatchObject({ formatId: "399", height: 1080, exact: true });
+    expect(hd.byCodec.auto).toMatchObject({ formatId: "137", resolution: 1080, exact: true });
+    expect(hd.byCodec.av1).toMatchObject({ formatId: "399", resolution: 1080, exact: true });
   });
 
   test("the preselection follows videoCodec", () => {
     const hd = mediaOptions(info, prefs({ videoCodec: "efficient" })).resolutions.find(
-      (option) => option.height === 1080,
+      (option) => option.resolution === 1080,
     )!;
     expect(hd.formatId).toBe("399");
     expect(hd.codecFamily).toBe("av1");
@@ -141,25 +141,25 @@ describe("codecs", () => {
 
     // 2160p is still on the list: the resolution exists, the *combination* does
     // not, and dropping the row would hide the choice instead of explaining it.
-    expect(resolutions.map((option) => option.height)).toEqual([2160, 1080]);
+    expect(resolutions.map((option) => option.resolution)).toEqual([2160, 1080]);
     const uhd = resolutions[0]!;
     expect(uhd.variants.map((variant) => variant.codecFamily)).toEqual(["vp9", "av1"]);
 
     // 🔴 Picking 2160p with H.264 is answered, not silently reinterpreted: what
     // arrives is 1080p H.264, and `exact: false` is the flag that says so.
     expect(uhd.byCodec.h264).toMatchObject({
-      height: 1080,
+      resolution: 1080,
       formatId: "137",
       codecFamily: "h264",
       exact: false,
     });
     // The same row, asked with no codec opinion, is exactly 2160p.
-    expect(uhd.byCodec.auto).toMatchObject({ height: 2160, exact: true });
+    expect(uhd.byCodec.auto).toMatchObject({ resolution: 2160, exact: true });
     // And a codec the video does not carry at all: the stand-in is named.
-    expect(uhd.byCodec.hevc).toMatchObject({ height: 2160, codecFamily: "vp9", exact: false });
+    expect(uhd.byCodec.hevc).toMatchObject({ resolution: 2160, codecFamily: "vp9", exact: false });
 
     const hd = resolutions[1]!;
-    expect(hd.byCodec.h264).toMatchObject({ height: 1080, formatId: "137", exact: true });
+    expect(hd.byCodec.h264).toMatchObject({ resolution: 1080, formatId: "137", exact: true });
     expect(hd.formatId).toBe("137");
   });
 

@@ -113,7 +113,7 @@ function ResolutionList({
     );
   }
 
-  const known = options.some((option) => option.height === value);
+  const known = options.some((option) => option.resolution === value);
 
   return (
     <div role="radiogroup" aria-label="Maximum resolution" className="space-y-1">
@@ -123,18 +123,18 @@ function ResolutionList({
         </p>
       )}
       {options.map((option) => {
-        const selected = option.height === value;
+        const selected = option.resolution === value;
         // 🔴 What this row would really download with the codec now chosen —
         // computed on the server by the selector itself, one entry per choice,
         // so moving the codec radio never needs a second probe.
         const outcome = option.byCodec[videoCodec];
         return (
           <button
-            key={option.height}
+            key={option.resolution}
             type="button"
             role="radio"
             aria-checked={selected}
-            onClick={() => onChange(option.height)}
+            onClick={() => onChange(option.resolution)}
             className={cn(
               "flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors",
               selected ? "border-primary/50 bg-primary/5" : "hover:bg-accent/40",
@@ -150,7 +150,7 @@ function ResolutionList({
             </span>
             <span className="min-w-0 flex-1">
               <span className="flex flex-wrap items-center gap-1.5">
-                <span className="text-sm font-medium">{option.height}p</span>
+                <span className="text-sm font-medium">{option.resolution}p</span>
                 {/* 🔴 The combination that does not exist, said on the row that
                     offers it — rather than by quietly dropping the row. */}
                 {!outcome.exact && (
@@ -196,7 +196,7 @@ function ResolutionList({
                 : "—"}
               {!outcome.exact ? (
                 <span className="block text-warning">
-                  → {outcome.height}p {outcome.codecFamily === "unknown" ? "" : outcome.codecFamily.toUpperCase()}
+                  → {outcome.resolution}p {outcome.codecFamily === "unknown" ? "" : outcome.codecFamily.toUpperCase()}
                 </span>
               ) : null}
             </span>
@@ -219,7 +219,7 @@ export function codecWarning(options: MediaOptions, choices: Choices): string | 
   const codec = options.codecs.find((option) => option.value === choices.videoCodec);
   if (!codec?.caveat) return null;
   if (!codec.available) return codec.caveat;
-  const row = options.resolutions.find((option) => option.height === choices.maxResolution);
+  const row = options.resolutions.find((option) => option.resolution === choices.maxResolution);
   return row && !row.byCodec[choices.videoCodec].exact ? codec.caveat : null;
 }
 

@@ -519,7 +519,7 @@ describe("POST /api/probe", () => {
     const body = (await response.json()) as {
       provider: string;
       info: MediaInfo;
-      options: { resolutions: { height: number }[]; audio: { tag: string; isOriginal: boolean }[] };
+      options: { resolutions: { resolution: number }[]; audio: { tag: string; isOriginal: boolean }[] };
       suggested: { maxResolution: number; audioLanguages: string[] };
     };
     expect(body.provider).toBe("test-provider");
@@ -527,7 +527,7 @@ describe("POST /api/probe", () => {
 
     // What the form draws instead of a fixed list: this video has one height,
     // one audio language, and the original is identifiable.
-    expect(body.options.resolutions.map((option) => option.height)).toEqual([1080]);
+    expect(body.options.resolutions.map((option) => option.resolution)).toEqual([1080]);
     expect(body.options.audio).toEqual([expect.objectContaining({ tag: "eng", isOriginal: true })]);
     expect(body.suggested.maxResolution).toBe(1080);
     expect(body.suggested.audioLanguages).toEqual(["eng"]);

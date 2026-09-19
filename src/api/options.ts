@@ -32,6 +32,7 @@ import {
   requestedCodec,
   selectAudioTracks,
   selectSubtitles,
+  resolutionOf,
   selectVideoFormat,
   toLanguageTag,
   UNKNOWN_LANGUAGE,
@@ -86,7 +87,8 @@ export interface CodecOutcome {
   formatId: string;
   codec?: string;
   codecFamily: string;
-  height: number | null;
+  /** The **shorter side** of what would be picked — see `resolutionOf`. */
+  resolution: number | null;
   fps?: number;
   approxBytes?: number;
   bytesEstimated?: boolean;
@@ -99,8 +101,14 @@ export interface CodecOutcome {
 }
 
 export interface ResolutionOption {
-  height: number;
-  /** The format that would be picked with this height as the ceiling. */
+  /**
+   * The row's resolution: the **shorter side**, not the height.
+   *
+   * 🔴 A 720×1280 phone video is a 720p row. Labelling it by height called it
+   * 1280p, and the ceiling that row set then refused the file it came from.
+   */
+  resolution: number;
+  /** The format that would be picked with this resolution as the ceiling. */
   formatId: string;
   /** As the provider stated it: `avc1.640028`, `vp09.00.40.08`… */
   codec?: string;
@@ -264,9 +272,17 @@ function resolutionOptions(
   duration: number | undefined,
   videoCodec: VideoCodecPreference,
 ): ResolutionOption[] {
-  const heights = new Set<number>();
+  /**
+   * 🔴 Grouped by **resolution** — the shorter side — not by height.
+   *
+   * A 720×1280 phone video is a 720p row. Grouping by height labelled it 1280p,
+   * and the ceiling that row sets then refused the very file it came from. See
+   * `resolutionOf` in `core/selection.ts` for what that cost.
+   */
+  const resolutions = new Set<number>();
   for (const format of formats) {
-    if (typeof format.height === "number" && format.height > 0) heights.add(format.height);
+    const resolution = resolutionOf(format);
+    if (resolution !== null && resolution > 0) resolutions.add(resolution);
   }
 
   const order = codecOrder(videoCodec);
@@ -276,12 +292,12 @@ function resolutionOptions(
   };
 
   const options: ResolutionOption[] = [];
-  for (const height of [...heights].sort((a, b) => b - a)) {
+  for (const resolution of [...resolutions].sort((a, b) => b - a)) {
     // One variant per codec family, each described by its best stream — the one
     // the selector would take if that codec were the one asked for.
     const byFamily = new Map<string, VideoFormat>();
     for (const format of formats) {
-      if (format.height !== height) continue;
+      if (resolutionOf(format) !== resolution) continue;
       const family = videoCodecFamily(format.codec);
       const best = byFamily.get(family);
       if (!best || (format.bitrate ?? 0) > (best.bitrate ?? 0)) byFamily.set(family, format);
@@ -296,15 +312,15 @@ function resolutionOptions(
     // codec it can answer with a *lower* height, and that answer is the file.
     const byCodec = Object.fromEntries(
       VIDEO_CODEC_PREFERENCES.map((preference) => {
-        const actual = selectVideoFormat(formats, height, preference)!;
+        const actual = selectVideoFormat(formats, resolution, preference)!;
         const wanted = requestedCodec(preference);
         return [
           preference,
           {
             ...describe(actual, duration),
-            height: actual.height ?? null,
+            resolution: resolutionOf(actual),
             exact:
-              actual.height === height &&
+              resolutionOf(actual) === resolution &&
               (wanted === undefined || videoCodecFamily(actual.codec) === wanted),
           },
         ];
@@ -313,8 +329,8 @@ function resolutionOptions(
 
     // The row's own line describes the preselection — what the preferences this
     // probe carried would take at this height.
-    const { height: _h, exact: _e, ...lead } = byCodec[videoCodec] ?? byCodec.auto;
-    options.push({ height, ...lead, variants, byCodec });
+    const { resolution: _r, exact: _e, ...lead } = byCodec[videoCodec] ?? byCodec.auto;
+    options.push({ resolution, ...lead, variants, byCodec });
   }
   return options;
 }
@@ -331,11 +347,10 @@ function codecOptions(
   formats: readonly VideoFormat[],
   preferences: Preferences,
 ): CodecOption[] {
-  const overallMax = formats.reduce<number | null>(
-    (best, format) =>
-      typeof format.height === "number" && (best === null || format.height > best) ? format.height : best,
-    null,
-  );
+  const overallMax = formats.reduce<number | null>((best, format) => {
+    const resolution = resolutionOf(format);
+    return resolution !== null && (best === null || resolution > best) ? resolution : best;
+  }, null);
 
   return VIDEO_CODEC_PREFERENCES.map((value): CodecOption => {
     const named = (VIDEO_CODECS as readonly string[]).includes(value) ? (value as VideoCodec) : undefined;
@@ -449,7 +464,7 @@ export function mediaOptions(info: MediaInfo, preferences: Preferences = DEFAULT
     codecs: codecOptions(info.videoFormats, preferences),
     audio: audioOptions(info.audioTracks),
     subtitles: subtitleOptions(info.subtitles),
-    formatsWithoutHeight: info.videoFormats.filter((format) => typeof format.height !== "number").length,
+    formatsWithoutHeight: info.videoFormats.filter((format) => resolutionOf(format) === null).length,
   };
 }
 
@@ -465,7 +480,9 @@ export function suggestFor(info: MediaInfo, preferences: Preferences): Suggestio
 
   return {
     originalOnly: preferences.originalOnly,
-    maxResolution: video?.height ?? preferences.maxResolution,
+    // ⚠️ The chosen format's *resolution*, so a portrait file suggests 720 rather
+    // than the 1280 that would then refuse it.
+    maxResolution: (video === undefined ? null : resolutionOf(video)) ?? preferences.maxResolution,
     videoCodec: preferences.videoCodec ?? "auto",
     videoCodecFamily: videoCodecFamily(video?.codec),
     audioLanguages: requestableTags(selectAudioTracks(info.audioTracks, preferences)),
