@@ -33,6 +33,7 @@ import { SourceManager, registryDiscoverer } from "./core/sources";
 import { createDefaultRegistry } from "./providers/registry";
 import { describeFfmpegLocation, resolveFfmpegLocation } from "./providers/ytdlp";
 import { createTelegramProvider } from "./providers/telegram";
+import { createDriveProvider } from "./providers/drive";
 import { connectForLogin, TelegramLoginManager } from "./core/telegram-login";
 import { loadConfig, type ServerConfig } from "./api/config";
 import type { AppContext } from "./api/context";
@@ -230,6 +231,23 @@ async function main(): Promise<StartedServer> {
    * a fallback that might manage it.
    */
   registry.register(createTelegramProvider({ credentials }));
+
+  /**
+   * Google Drive, also ahead of the fallback.
+   *
+   * 🔴 yt-dlp's Drive extractor asks `googleapis.com/drive/v3` for metadata with
+   * an API key compiled into yt-dlp and shared by every one of its users. When
+   * that key is refused — measured on this box: 429 for yt-dlp, 403 for the same
+   * key from curl — the extractor aborts before touching a byte and writes
+   * nothing. It is a download that cannot happen for a reason nobody downstream
+   * can influence, while the file itself is served perfectly.
+   *
+   * ⚠️ So this claims Drive *files* unconditionally rather than waiting for
+   * yt-dlp to fail: our path has strictly fewer moving parts (no key at all) and
+   * the broken part is not ours to fix. Folders are left alone — they are a
+   * listing, not a file.
+   */
+  registry.register(createDriveProvider());
 
   /**
    * The Telegram sign-in flow.
