@@ -75,7 +75,7 @@ loudly.
 
 ## State
 
-**1190 tests, 0 failures. `tsc` clean.** 64 commits.
+**1201 tests, 0 failures. `tsc` clean.** 67 commits.
 
 Working end to end: paste a URL → the form shows the resolutions, audio tracks
 and subtitles that video actually has → queue → six stages live over SSE → the
@@ -127,6 +127,23 @@ is untested.
 
 📌 Files, never folders: a folder is a listing, and claiming it would fail on
 something a person could reasonably paste.
+
+### Vidarro — a plugin, not a provider
+
+📌 The instructive one. yt-dlp has no Vidarro extractor and its generic fallback
+finds the Voomly embed and answers `Unsupported URL` — but handed the HLS manifest
+directly it is entirely at home, ladder and all. So what was missing was
+**extraction, not download**, and `url:resolve` is the hook for exactly that:
+`src/plugins/builtin/vidarro.ts` turns the share page into the manifest and yt-dlp
+does the rest.
+
+🔴 It returns the **master** manifest, never `file720p.m3u8`. A per-quality URL
+works while hard-coding the resolution, which would leave the ceiling in
+Preferences with nothing to decide — and nothing about that looks like a failure.
+
+⚠️ The title comes out as `file`, because that is what the manifest calls it. The
+*Save as* field is where to fix that per download; reading the real title would
+need a `probe:complete` hook, since a `url:resolve` can only return a URL.
 
 ## Telegram
 
@@ -182,6 +199,9 @@ the credential here does not revoke it; only Telegram → Settings → Devices d
 
 - **Google Drive**, as a provider of our own, because yt-dlp's path depends on a
   shared API key that is being refused.
+- **Vidarro**, as a bundled `url:resolve` plugin — and the gap it exposed:
+  `url:resolve` ran on the enqueue path only, so *Analyze* refused a link the
+  queue downloaded happily.
 - **Telegram**, end to end: the provider, the credential plumbing that made a
   `custom` credential reachable at all, and the sign-in dialog.
 - 🔴 **Resolution was the height**, so every portrait video was refused by the

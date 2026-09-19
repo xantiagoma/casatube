@@ -2,6 +2,35 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## A transform wired into one path makes the preview contradict the queue (2026-09-19)
+
+`url:resolve` was dispatched from `POST /api/jobs` and not from `POST /api/probe`.
+Both choose a provider; only one ran the hook whose contract is *"before a
+provider is chosen"*.
+
+The symptom, on a link the new Vidarro plugin rewrites:
+
+| | |
+|---|---|
+| **Analyze** | `UnsupportedUrl` — "No provider recognises this URL" |
+| **Queue it anyway** | downloads fine |
+
+🔴 That is the worst shape a bug can take in a form: the screen tells somebody a
+link does not work while the queue proves otherwise, so the honest response is to
+stop trying. A plain failure would have been better — at least it agrees with
+itself.
+
+📌 Found by **using the feature after deploying it**, not by reasoning about it.
+The plugin's own tests passed, the enqueue path's tests passed, and nothing was
+looking at whether the two paths agreed. The general shape is worth remembering:
+**a hook wired into one of two code paths that do the same job is a hook whose
+absence only shows up as disagreement**, and disagreement is what nobody has a
+test for.
+
+⚠️ The test that covers it now uses a fake provider claiming *only* what the
+rewrite produces, so a probe that skips the hook cannot pass by accident.
+
+
 ## "The source is rate-limiting us" was true, and about the wrong thing (2026-09-19)
 
 A Google Drive link failed in the download form with *"The source is

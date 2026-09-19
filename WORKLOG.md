@@ -122,6 +122,35 @@ against my idea of Drive rather than against Drive.
 ⚠️ Scraping, and accepted as such: the alternative was scraping *plus* a dead
 shared key.
 
+### Vidarro, and a hook that was only wired into half the app
+
+> «tenemos algo para bajar de vidarro?»
+
+No — and the useful part was working out what "something" needed to be. yt-dlp has
+no extractor for it; its generic fallback finds a **Voomly** embed and gives up.
+But the share page carries the HLS manifest, and handed that directly yt-dlp
+listed the whole ladder, 240p to 720p. So the gap was extraction, not download,
+and a twenty-line `url:resolve` plugin beat a provider that would have
+re-implemented HLS, the ladder and the merge.
+
+🔴 The decision with an edge: the page offers the master manifest *and* one per
+quality. Returning `file720p.m3u8` works and hard-codes the resolution, leaving
+the ceiling in Preferences with nothing to decide — someone asking for 480p would
+silently get 720p. That is the part with tests, because nothing about it looks
+like a failure.
+
+⚠️ And then deploying it found what reasoning had not: `/api/probe` still answered
+`UnsupportedUrl` while the queue downloaded the same link fine, because
+`url:resolve` was dispatched from the enqueue path only. A form that contradicts
+the queue is worse than a form that fails — see `DISCOVERIES.md`. Both paths run
+the hook now, with a test whose fake provider claims only what the rewrite
+produces.
+
+📌 Worth noting what these three sources have in common and how they differ:
+Telegram and Drive are **one file** each, so a resolution ceiling has nothing to
+act on; Vidarro is a real ladder, so the preference means something. Which is also
+why the portrait fix mattered here — those formats are 720×1280.
+
 ### Verified against the real thing
 
 A private channel, his account: probe returned the caption as the title, 491 s,
