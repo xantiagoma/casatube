@@ -2,6 +2,40 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## Resolution was the height, so every portrait video was refused (2026-09-19)
+
+Two Telegram downloads failed with `FormatUnavailable` against the default 1080
+ceiling. The obvious reading — the videos are above it — was wrong:
+
+```
+720x1280   (shorter side: 720)
+```
+
+**Portrait.** `selectVideoFormat` compared `format.height` against the ceiling,
+so a 720p phone video was judged as *1280p* and refused. The form had already
+labelled it "1280p", which is a number that refutes itself the moment anybody
+reads it next to `720x1280`.
+
+📌 **It was never a Telegram problem.** A portrait YouTube Short at 1080×1920 was
+refused by the default ceiling too, and had been for as long as the ceiling
+existed. Telegram only made it common enough to notice, because phone video is
+most of what a channel carries.
+
+🔴 Why it survived: **in landscape the height *is* the shorter side.** Every
+format anybody had tested was wider than it was tall, so the two numbers agreed
+and nothing looked wrong. All 94 selection tests passed unchanged after the fix —
+which is the evidence that it is a no-op for landscape, and is also exactly why
+none of them caught it.
+
+⚠️ `resolutionOf` returns `null`, never `0`, when neither side is known. A format
+with no dimensions is a *last resort*, and `0` would make it win every ceiling
+comparison instead of losing them.
+
+📌 And the field was renamed: `ResolutionOption.height` → `resolution`. Leaving
+the name while putting the shorter side inside it would have been a field that
+lies, which is the version of this bug that comes back.
+
+
 ## Two ways a deploy tool lies, both found on the same afternoon (2026-08-28)
 
 Neither of these is a CasaTube bug. Both nearly changed what got deployed.

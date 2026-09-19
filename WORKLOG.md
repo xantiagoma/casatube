@@ -5,6 +5,106 @@ session with none of this context. Newest first.
 
 ---
 
+## 2026-09-19 — Telegram, and a ceiling that refused every portrait video
+
+> «is casatube capable of downloading videos from a private telegram channel?»
+
+No, and it took a provider of its own to make it one. Along the way it surfaced a
+bug that had nothing to do with Telegram and had been refusing phone video since
+the resolution ceiling existed.
+
+**1174 tests (1120 → 1174), 0 failures. `tsc` clean.** Six commits, deployed and
+pushed.
+
+### Why a provider and not a plugin
+
+yt-dlp has one Telegram extractor and it reads the *public* web preview. A
+private channel has no such page and the video is never an HTTP URL — it arrives
+as encrypted chunks requested with `upload.getFile`. Cookies cannot help, because
+there is nothing to point at.
+
+A plugin could not have done it either, and both reasons are about what a plugin
+can reach: a plugin file is imported by this process, so it can only import what
+the *app* installed — `teleproto` has to be a dependency either way — and the
+session lives in the credential store, which the plugin API does not expose.
+
+⚠️ `gramjs` is archived. The npm registry says so itself, pointing at `teleproto`
+as the maintained fork — confirmed against the registry rather than taken on
+faith, and then confirmed to load and construct under **Bun**, which is what made
+an in-process provider possible instead of a Python subprocess.
+
+### The credential store accepted four types and could deliver two
+
+`acquire()` resolved against `["cookies", "password"]` and returned `null` for
+`apiKey` and `custom`, so a credential the store validated, sealed, stored and
+**listed as present** could never be used by anything.
+
+🔴 That was a deliberate guard, not an oversight — a test asserted *"an API key is
+never handed to yt-dlp"*, because a key has nowhere to go on a command line and
+picking one would shadow a cookie jar that would have worked. So the guard moved
+rather than went: it is the **default argument** now, and a caller that knows what
+to do with another type names it. The promise is kept where it can be proved —
+`withCredentials` copies three fields and cannot pass on what it never reads.
+
+### Three attempts at a login, and the user was right twice
+
+The first version was a script that stored the credential itself. Santi: *"no
+entiendo por que esas cosas no son algo que pongo en el plugin config y ya"* —
+and the answer was that the Credentials screen already stored exactly this, with
+`custom` key/value fields, sealed. Storing needed **no code at all**. The script
+lost everything except the one thing a form cannot do: produce a session string,
+which needs a code submitted inside the same MTProto connection.
+
+Then the hidden prompt hung. A hidden prompt needs raw mode, raw mode needs its
+own reader, and `readline` already held stdin — the bytes went to readline and
+Enter did nothing. `_writeToOutput` is `undefined` in Bun; a swappable output
+stream swallowed two answers at once. 📌 **A prompt that works beats a prompt
+that hides.** Nothing is hidden now, and the error messages still never echo a
+value, because an error line is what gets pasted into a chat.
+
+Finally the UI he asked for: three steps in Settings → Credentials.
+`core/telegram-login.ts` is the only thing in this process that holds state
+between requests, and it has to. It expires, it caps at three, it evicts the
+oldest rather than refusing the newest, and a wrong code deliberately does *not*
+drop the login — Telegram allows retrying the same code request, and closing the
+connection would make a typo cost a new SMS.
+
+⚠️ The session string never reaches the browser. **Eden's derived types caught
+that the `start` route could in principle serialise one**, so all three steps
+share a single exit and the session has exactly one path out of the manager: into
+the store.
+
+### 🔴 And then: resolution was the height
+
+Two downloads failed with `FormatUnavailable` against the default 1080 ceiling.
+My first explanation was that the videos were above it. They were **720×1280** —
+portrait. A 720p phone video judged by its height is "1280p", and the form had
+already been labelling it that: a number that refutes itself the moment anybody
+reads it beside `720x1280`.
+
+📌 Never a Telegram problem. A portrait YouTube Short at 1080×1920 had been
+refused by the default ceiling for as long as the ceiling existed. Telegram only
+made it common enough to notice.
+
+It survived because **in landscape the height *is* the shorter side**. All 94
+selection tests passed unchanged after the fix — which is the evidence that it is
+a no-op for landscape, and exactly why none of them caught it.
+
+`ResolutionOption.height` became `resolution`. Keeping the name with the shorter
+side inside it would have been a field that lies, which is the version of this bug
+that comes back.
+
+### Verified against the real thing
+
+A private channel, his account: probe returned the caption as the title, 491 s,
+1282×720; the download landed 212 MB in ~20 s under a name from the caption and an
+extension from the real MIME type; and the sign-in dialog replaced the
+script-made credential with `Telegram — @xantiagoma`, after which `last_used_at`
+moved from `never` to a timestamp — which is the store recording that the *new*
+session was the one that worked.
+
+---
+
 ## 2026-08-28 — The handoff's open list, closed — and a plugin system that never ran
 
 > «ok sigamos con el tier a & b»

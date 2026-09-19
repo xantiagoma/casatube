@@ -75,11 +75,12 @@ loudly.
 
 ## State
 
-**1120 tests, 0 failures. `tsc` clean.** 53 commits.
+**1174 tests, 0 failures. `tsc` clean.** 62 commits.
 
 Working end to end: paste a URL → the form shows the resolutions, audio tracks
 and subtitles that video actually has → queue → six stages live over SSE → the
-file lands correctly language-tagged. Library with thumbnails, playback (HLS
+file lands correctly language-tagged, under a name you can choose and that never
+overwrites anything. Library with thumbnails, playback (HLS
 remux on demand, real seeking), downloads, trash with restore. Sources,
 scheduler, storage, analytics, notifications, plugins with an editor **whose
 hooks now actually fire**, credentials, settings editing, transcoding.
@@ -96,7 +97,38 @@ Rollback images, newest first: `casatube:new`, `casatube:test`. Database backups
 from before each deploy: `/DATA/AppData/casatube/backup-20260828-predeploy/` and
 `-20260828b-predeploy/`.
 
-Verified against YouTube, Odysee and Dailymotion.
+Verified against YouTube, Odysee and Dailymotion — and against a **private
+Telegram channel**, which is a provider of its own (see below).
+
+## Telegram
+
+🔴 `providers/telegram.ts` is the one source yt-dlp cannot reach: a private
+channel's video is never an HTTP URL, it arrives as MTProto chunks. It claims
+**private links only** (`t.me/c/<channel>/<message>`) — public ones keep going to
+yt-dlp's `telegram:embed`, because claiming a URL it cannot serve would make the
+fallback unreachable.
+
+The session is a `custom` credential scoped to `t.me`, holding `apiId`,
+`apiHash` and `session`, sealed with `CREDENTIALS_KEY`. Two ways to create one:
+
+- **Settings → Credentials → Telegram** — a three-step dialog.
+- `bun scripts/telegram-session.ts` — prints a session string for the headless
+  path. Pass `CASATUBE_TG_API_ID` and `CASATUBE_TG_API_HASH` as environment
+  variables rather than pasting them; that page shows them beside a multi-line
+  RSA key, and a newline in a prompt ends it early.
+
+📌 The RSA public key `my.telegram.org` shows is **not** an input. `teleproto`
+carries Telegram's own server keys.
+
+⚠️ `core/telegram-login.ts` is **the only thing in this process that holds state
+between requests**, and it has to: Telegram's `phoneCodeHash` dies with the
+connection that asked for the code, so the two steps share a live client. It
+expires, it is capped at three, and it does not survive a restart — the dialog
+says so. Nothing is written until the last step, so a lost login is a login to
+start again.
+
+⚠️ A Telegram session is the **whole account**, not a per-channel token. Deleting
+the credential here does not revoke it; only Telegram → Settings → Devices does.
 
 ## Still open
 
@@ -105,11 +137,26 @@ Verified against YouTube, Odysee and Dailymotion.
 - **No paging control on the job screens.** The server sorts, searches and
   counts now, and the table says "200 of 3,412" — but the rest is reachable
   only by narrowing the search, not by turning a page.
+- **Telegram: a single-format source still obeys the resolution ceiling.** A 4K
+  Telegram video under a 1080 ceiling fails with `FormatUnavailable` rather than
+  taking the only file that exists. Coherent with yt-dlp, and friction with no
+  prize for a source that has no ladder. Not changed because it is shared logic.
+- **Public `t.me` links go to yt-dlp, not to the Telegram provider.** Routing
+  them through the session would probably work better, but the regression could
+  not be tested.
 - **A plugin cannot be switched *on* for one download.** Off works; on cannot,
   because a plugin that is off server-wide is never activated and registers no
   hooks. Doing it properly means activating every valid plugin and gating
   dispatch on `enabled` — a change to the runtime's model, not a UI change.
 - `react-doctor` sits around 60/100, dominated by vendored Dice UI.
+
+### Closed on 2026-09-19 (see `WORKLOG.md`)
+
+- **Telegram**, end to end: the provider, the credential plumbing that made a
+  `custom` credential reachable at all, and the sign-in dialog.
+- 🔴 **Resolution was the height**, so every portrait video was refused by the
+  default ceiling — a YouTube Short as much as a Telegram clip. `resolutionOf`
+  is the shorter side now.
 
 ### Closed on 2026-08-28 (see `WORKLOG.md`)
 
