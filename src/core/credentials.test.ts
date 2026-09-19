@@ -484,10 +484,51 @@ describe("acquire", () => {
     expect(warnings.join("\n")).toContain("could not be opened");
   });
 
-  test("an API key is never handed to yt-dlp", async () => {
+  test("an API key lease carries the key, and nothing that looks like a file", async () => {
     const s = store();
     await s.create({ scope: "*", secret: { type: "apiKey", apiKey: "sk-not-for-a-command-line" } });
+
+    // ⚠️ Asked for by name. `acquire(url)` alone still sees only the two types a
+    // yt-dlp command line can carry — that default *is* the old guard.
     expect(await s.acquire("https://youtube.com/watch?v=x")).toBeNull();
+
+    const lease = await s.acquire("https://youtube.com/watch?v=x", ["apiKey"]);
+    expect(lease?.type).toBe("apiKey");
+    expect(lease?.apiKey).toBe("sk-not-for-a-command-line");
+    expect(lease?.cookiesFile).toBeUndefined();
+    expect(lease?.password).toBeUndefined();
+    // Redacted from any log line that manages to echo it.
+    expect(lease?.redact).toEqual(["sk-not-for-a-command-line"]);
+    await lease?.release();
+  });
+
+  test("🔴 a custom credential arrives whole, which is the only way a provider can use one", async () => {
+    // A Telegram session is an api_id, an api_hash and a session string: not a
+    // cookie jar, not a password, and not expressible as either. `custom` is
+    // what the store has for that, and until now `acquire` answered `null` for
+    // it — so it could be saved, listed as present, and never used.
+    const s = store();
+    await s.create({
+      scope: "t.me",
+      secret: {
+        type: "custom",
+        data: { apiId: "123456", apiHash: "0".repeat(32), session: "1BQANOTEwLjU1LjE" },
+      },
+    });
+
+    expect(await s.acquire("https://t.me/c/1234567890/42")).toBeNull();
+
+    const lease = await s.acquire("https://t.me/c/1234567890/42", ["custom"]);
+    expect(lease?.type).toBe("custom");
+    expect(lease?.data).toEqual({
+      apiId: "123456",
+      apiHash: "0".repeat(32),
+      session: "1BQANOTEwLjU1LjE",
+    });
+    // ⚠️ Every value, not the ones that look secret: the store is not in a
+    // position to decide which half of what a provider hid is harmless.
+    expect(lease?.redact.sort()).toEqual(["0".repeat(32), "123456", "1BQANOTEwLjU1LjE"].sort());
+    await lease?.release();
   });
 });
 

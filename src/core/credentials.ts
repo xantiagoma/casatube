@@ -605,6 +605,24 @@ export interface CredentialLease {
    * a future yt-dlp is all it would take.
    */
   redact: string[];
+  /**
+   * `type: "apiKey"` — the key itself.
+   *
+   * Never a command-line argument anywhere: unlike `password`, which yt-dlp
+   * takes as `--password` and therefore leaks into `ps`, an API key is only ever
+   * read in-process by the provider that asked for it.
+   */
+  apiKey?: string;
+  /**
+   * `type: "custom"` — every field, as stored.
+   *
+   * 🔴 This is what a provider with more than one secret needs: a Telegram
+   * session is an `api_id`, an `api_hash` and a session string, and none of
+   * them is a cookie jar or a password. The shape is deliberately open, because
+   * the store cannot know what a provider will want and inventing four named
+   * fields for it would be four fields the next provider does not fit either.
+   */
+  data?: Record<string, string>;
   release(): Promise<void>;
 }
 
@@ -617,8 +635,13 @@ export interface CredentialLease {
  * seam, only the shape does (see the import-cycle entry in DISCOVERIES).
  */
 export interface CredentialResolver {
-  /** The best credential for this URL, materialised, or `null` if there is none. */
-  acquire(url: string): Promise<CredentialLease | null>;
+  /**
+   * The best credential for this URL, materialised, or `null` if there is none.
+   *
+   * `types` defaults to the two a yt-dlp command line can carry. A provider
+   * with its own kind of secret — a Telegram session, an API key — names it.
+   */
+  acquire(url: string, types?: readonly CredentialType[]): Promise<CredentialLease | null>;
 }
 
 // --- The store --------------------------------------------------------------
@@ -875,13 +898,26 @@ export class CredentialStore implements CredentialResolver {
   /**
    * Materialise the best credential for a URL, for one subprocess.
    *
-   * Only the two types yt-dlp can actually use are considered — a stored API
-   * key is not something a yt-dlp command line has anywhere to put, and picking
-   * one here would shadow a cookie jar that *would* have worked. It stays in
-   * the store for a provider that knows what to do with it.
+   * 🔴 **The default is narrow on purpose, and it is a guard rather than a
+   * shortcut.** Only the two types yt-dlp can actually use are considered: a
+   * stored API key has nowhere to go on a command line, and picking one here
+   * would shadow a cookie jar that *would* have worked. A caller that knows
+   * what to do with another type asks for it — `acquire(url, ["custom"])` —
+   * which keeps the promise ("yt-dlp is never handed a key") as a default
+   * instead of as a prohibition that made the other two types unusable by
+   * anything at all.
+   *
+   * ⚠️ Where the promise is really kept is `withCredentials` in
+   * `providers/ytdlp.ts`: it copies exactly `cookiesFile`, `username` and
+   * `password` onto its options, so a field it never reads cannot reach argv.
+   * `credentials.test.ts` asserts that over the built arguments, which is a
+   * claim about the thing that matters rather than about a proxy for it.
    */
-  async acquire(url: string): Promise<CredentialLease | null> {
-    const chosen = await this.resolve(url, ["cookies", "password"]);
+  async acquire(
+    url: string,
+    types: readonly CredentialType[] = ["cookies", "password"],
+  ): Promise<CredentialLease | null> {
+    const chosen = await this.resolve(url, types);
     if (chosen === null) return null;
 
     const rows = await this.db
@@ -930,7 +966,48 @@ export class CredentialStore implements CredentialResolver {
         release: async () => {},
       };
     }
-    return null;
+    /**
+     * 🔴 These two returned `null` until now, and it was a **deliberate guard**,
+     * not an oversight: *"an API key is never handed to yt-dlp"*, enforced by
+     * refusing to materialise one at all.
+     *
+     * The promise is worth keeping and this was the wrong place to keep it. It
+     * is already kept where it can be *proved* — `withCredentials` in
+     * `providers/ytdlp.ts` copies exactly three fields onto its options
+     * (`cookiesFile`, `username`, `password`), so a field it never reads cannot
+     * reach argv. Enforcing it a second time here only meant that a credential
+     * the store validated, sealed, stored and **listed as present** could never
+     * be used by anything — including the `custom` type that `api/credentials.ts`
+     * documents as "whatever a provider expects".
+     *
+     * ⚠️ So the guard moved rather than disappeared: `credentials.test.ts` now
+     * asserts the real invariant — a lease carrying a key produces yt-dlp
+     * arguments that contain none of it — which is a claim about the thing that
+     * matters instead of about a proxy for it.
+     */
+    if (secret.type === "apiKey") {
+      return {
+        id: chosen.id,
+        type: chosen.type,
+        scope: chosen.scope,
+        apiKey: secret.apiKey,
+        redact: [secret.apiKey],
+        release: async () => {},
+      };
+    }
+    return {
+      id: chosen.id,
+      type: chosen.type,
+      scope: chosen.scope,
+      data: { ...secret.data },
+      // ⚠️ Every value, not the ones that look secret. A `custom` credential is
+      // whatever a provider needed to keep out of the database in plaintext, so
+      // the store is not in a position to decide which half of it is harmless.
+      // Short values are skipped by `scrub` itself, which is where that judgement
+      // belongs.
+      redact: Object.values(secret.data),
+      release: async () => {},
+    };
   }
 
   private async markUsed(id: string): Promise<void> {
