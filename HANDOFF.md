@@ -136,15 +136,12 @@ To cut a release: bump `version` in `package.json` (the workflow refuses a tag
 that disagrees with it — `/api/health` reports that version), add a section to
 `CHANGELOG.md`, commit, then `git tag vX.Y.Z && git push --tags`.
 
-⚠️ Arm runners are free on public repositories only. While the repository is
-private, both workflows build amd64 alone; `CI` can be run by hand with `arm64`
-ticked to try anyway.
+📌 arm64 is built and smoke-tested **natively** on `ubuntu-24.04-arm`, in CI and
+in releases — first exercised on 2026-10-26, and it passed: the image builds,
+starts, serves the bundle and runs its yt-dlp.
 
 ## Still open
 
-- **`arm64` has not run yet.** The Dockerfile selects the right yt-dlp and CI
-  builds and smoke-tests arm64 natively — but only once the repository is
-  public, since arm runners are not free on private ones.
 - **No paging control on the job screens.** The server sorts, searches and
   counts now, and the table says "200 of 3,412" — but the rest is reachable
   only by narrowing the search, not by turning a page.

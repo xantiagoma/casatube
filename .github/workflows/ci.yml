@@ -9,8 +9,7 @@
 #   bundle that fails to build leaves every route answering 200 while the page
 #   is blank. The smoke test fetches the page *and* the script it references.
 #
-# arm64 runs natively (no QEMU) on GitHub's arm runners. Those are free on public
-# repositories only, so on a private one arm64 is opt-in from a manual run.
+# arm64 runs natively (no QEMU) on GitHub's arm runners.
 name: CI
 
 on:
@@ -18,11 +17,6 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-    inputs:
-      arm64:
-        description: Also build and smoke-test arm64 (needs arm runners on this repo)
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -51,33 +45,17 @@ jobs:
       - run: bun run typecheck
       - run: bun test
 
-  platforms:
-    name: Pick platforms
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.pick.outputs.matrix }}
-    steps:
-      - id: pick
-        env:
-          PRIVATE: ${{ github.event.repository.private }}
-          FORCE_ARM: ${{ inputs.arm64 }}
-        run: |
-          amd='{"platform":"linux/amd64","runner":"ubuntu-latest"}'
-          arm='{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}'
-          if [ "$PRIVATE" != "true" ] || [ "$FORCE_ARM" = "true" ]; then
-            echo "matrix=[$amd,$arm]" >> "$GITHUB_OUTPUT"
-          else
-            echo "matrix=[$amd]" >> "$GITHUB_OUTPUT"
-          fi
-
   image:
     name: Image (${{ matrix.platform }})
-    needs: platforms
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.platforms.outputs.matrix) }}
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 

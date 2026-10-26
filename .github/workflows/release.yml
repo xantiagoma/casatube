@@ -126,11 +126,7 @@ jobs:
 
           amd='{"platform":"linux/amd64","runner":"ubuntu-latest"}'
           arm='{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}'
-          # Arm runners are free on public repositories only; a private one
-          # publishes amd64 alone rather than queueing forever. Asked of the API
-          # because a scheduled run's event carries no repository at all.
-          private=$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)
-          if [ "$private" = true ]; then matrix="[$amd]"; else matrix="[$amd,$arm]"; fi
+          matrix="[$amd,$arm]"
 
           {
             echo "ref=$ref"

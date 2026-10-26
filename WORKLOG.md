@@ -47,10 +47,18 @@ GitHub release; `main` → `edge`; weekly → the latest release rebuilt with th
 newest yt-dlp under a new immutable tag. That last one is the reason for the
 shape: yt-dlp is the part of this image that rots.
 
-⚠️ Arm runners are free on public repositories only. Both workflows ask the API
-whether the repository is private — a scheduled run's event carries no
-repository object, so `github.event.repository.private` would read as "public"
-and queue arm64 jobs forever.
+**arm64 ran for the first time**, on a native `ubuntu-24.04-arm` runner: the
+image built, started, passed `smoke.sh` and ran its yt-dlp. The workflows were
+first written to skip arm64 on a private repository, on the belief that arm
+runners were public-only; a manual run showed one picking the job up at once,
+so that branch was deleted rather than kept for a case that does not happen.
+
+The first push found three more things only GitHub could show: the smoke test
+ran with no library mounted and `/api/library` answered 503 — correctly; the
+release plan ended a `{ … } >> $GITHUB_STEP_SUMMARY` block with
+`[ "$skip" = true ] && echo`, which makes the block exit 1 under `set -e` with
+no output at all; and the account's artifact quota was full, so the per-arch
+digests now travel through the Actions cache instead.
 
 `/api/health` now reads its version from `package.json`, and `release.yml`
 refuses a tag that disagrees with it.
