@@ -1,0 +1,24 @@
+# Grouped and infrequent on purpose: one maintainer, and a PR per patch release
+# is noise that teaches people to merge without reading.
+#
+# ⚠️ yt-dlp is not here. It is not a package dependency — it is baked into the
+# image at a pinned release, and the weekly run of `release.yml` is what keeps it
+# current.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]

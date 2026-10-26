@@ -1,0 +1,15 @@
+name: Feature request
+description: Something CasaTube should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and where CasaTube gets in the way. The problem matters more than a proposed solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind

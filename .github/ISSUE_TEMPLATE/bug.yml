@@ -1,0 +1,39 @@
+name: Bug
+description: Something does not work the way it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If a download fails for **one site only**, check whether yt-dlp itself can download it —
+        many site breakages are fixed by a newer yt-dlp, which `latest` picks up weekly.
+        For a security problem, use private reporting instead (see SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The URL, if it is public and you are comfortable sharing it, helps most.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`curl http://<host>:8520/api/health` shows the app and yt-dlp versions, or give the image tag."
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Job log or container log
+      description: The failing job's log (Queue → the job → Log), or `docker logs casatube`. Remove anything private.
+      render: text
+  - type: input
+    id: setup
+    attributes:
+      label: How you run it
+      placeholder: Docker Compose on Debian, amd64 / CasaOS on a Raspberry Pi 5 / ...

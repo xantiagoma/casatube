@@ -1,0 +1,111 @@
+# The gate every change goes through.
+#
+# Two halves, and both are needed:
+#
+# - `check` is typecheck + tests. ⚠️ `bun test` does not typecheck, so a test run
+#   that passes says nothing about types — they are separate steps on purpose.
+# - `image` builds the real image, starts it and runs `scripts/smoke.sh` against
+#   it. 🔴 `/api/health` answering 200 is not evidence the app works: a client
+#   bundle that fails to build leaves every route answering 200 while the page
+#   is blank. The smoke test fetches the page *and* the script it references.
+#
+# arm64 runs natively (no QEMU) on GitHub's arm runners. Those are free on public
+# repositories only, so on a private one arm64 is opt-in from a manual run.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      arm64:
+        description: Also build and smoke-test arm64 (needs arm runners on this repo)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+
+  platforms:
+    name: Pick platforms
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        env:
+          PRIVATE: ${{ github.event.repository.private }}
+          FORCE_ARM: ${{ inputs.arm64 }}
+        run: |
+          amd='{"platform":"linux/amd64","runner":"ubuntu-latest"}'
+          arm='{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}'
+          if [ "$PRIVATE" != "true" ] || [ "$FORCE_ARM" = "true" ]; then
+            echo "matrix=[$amd,$arm]" >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix=[$amd]" >> "$GITHUB_OUTPUT"
+          fi
+
+  image:
+    name: Image (${{ matrix.platform }})
+    needs: platforms
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.platforms.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: casatube:ci
+          cache-from: type=gha,scope=ci-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=ci-${{ matrix.platform }}
+
+      # Named `casatube` because smoke.sh reads that container's log for the
+      # "bundle failed" line the HTTP checks cannot see.
+      - name: Start
+        run: |
+          docker run -d --name casatube -p 8520:8520 casatube:ci
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8520/api/health && exit 0
+            sleep 2
+          done
+          docker logs casatube
+          exit 1
+
+      - name: Smoke test
+        run: ./scripts/smoke.sh http://127.0.0.1:8520
+
+      - name: The baked-in yt-dlp runs on this architecture
+        run: docker exec casatube /opt/yt-dlp/yt-dlp --version
+
+      - name: Logs
+        if: always()
+        run: docker logs casatube 2>&1 | tail -100

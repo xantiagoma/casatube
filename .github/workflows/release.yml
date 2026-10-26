@@ -1,0 +1,284 @@
+# Publishes the image to GHCR, for amd64 and arm64, built natively on each.
+#
+# Three ways in, and what each one publishes:
+#
+# | trigger              | source                 | tags                                         |
+# |----------------------|------------------------|----------------------------------------------|
+# | push of tag `vX.Y.Z` | that tag               | X.Y.Z-ytdlp-<date>, X.Y.Z, X.Y, latest        |
+# | push to `main`       | that commit            | edge, sha-<short>                            |
+# | weekly / manual      | the latest release tag | the release tags again, with a newer yt-dlp  |
+#
+# 🔴 **The weekly run is the reason this workflow exists in this shape.** yt-dlp
+# breaks when sites change, so an image is only as good as the yt-dlp inside it.
+# The app version does not rot; yt-dlp does. Once a week the latest release is
+# rebuilt with the newest yt-dlp — under a *new* immutable tag
+# (`X.Y.Z-ytdlp-<new date>`), with `X.Y.Z` and `latest` moving to it. Nothing
+# already published is ever overwritten with different content.
+#
+# ⚠️ If that combination already exists, the run stops early: the schedule is a
+# check, not a rebuild of identical bytes every Monday.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+    branches: [main]
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      ytdlp:
+        description: yt-dlp release to bake in (e.g. 2026.08.19). Empty means the latest.
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      ref: ${{ steps.plan.outputs.ref }}
+      app: ${{ steps.plan.outputs.app }}
+      ytdlp: ${{ steps.plan.outputs.ytdlp }}
+      tags: ${{ steps.plan.outputs.tags }}
+      skip: ${{ steps.plan.outputs.skip }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_YTDLP: ${{ inputs.ytdlp }}
+        run: |
+          set -euo pipefail
+          pinned=$(sed -n 's/^ARG YTDLP_VERSION=//p' Dockerfile)
+          version_of() { git show "$1:package.json" | jq -r .version; }
+
+          if [ "$EVENT" = push ] && [ "$REF_TYPE" = tag ]; then
+            ref="$REF_NAME"
+            app="${REF_NAME#v}"
+            # 🔴 The tag and package.json must agree, or /api/health reports one
+            # version while the image is tagged with another.
+            declared=$(version_of "$ref")
+            if [ "$declared" != "$app" ]; then
+              echo "::error::tag $REF_NAME but package.json says $declared"
+              exit 1
+            fi
+            ytdlp="$pinned"
+            channel=release
+          elif [ "$EVENT" = push ]; then
+            ref="$GITHUB_SHA"
+            app=$(version_of "$ref")
+            ytdlp="$pinned"
+            channel=edge
+          else
+            ref=$(git tag --list 'v*.*.*' --sort=-v:refname | head -1)
+            if [ -z "$ref" ]; then
+              echo "No release tag yet; nothing to rebuild."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            app="${ref#v}"
+            ytdlp="${INPUT_YTDLP:-$(gh api repos/yt-dlp/yt-dlp/releases/latest --jq .tag_name)}"
+            channel=release
+          fi
+
+          if [ "$channel" = release ]; then
+            minor="${app%.*}"
+            tags="$IMAGE:$app-ytdlp-$ytdlp,$IMAGE:$app,$IMAGE:$minor,$IMAGE:latest"
+          else
+            tags="$IMAGE:edge,$IMAGE:sha-${ref:0:7}"
+          fi
+
+          skip=false
+          if [ "$EVENT" = schedule ] && docker buildx imagetools inspect "$IMAGE:$app-ytdlp-$ytdlp" >/dev/null 2>&1; then
+            echo "$IMAGE:$app-ytdlp-$ytdlp already exists; nothing new to publish."
+            skip=true
+          fi
+
+          amd='{"platform":"linux/amd64","runner":"ubuntu-latest"}'
+          arm='{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}'
+          # Arm runners are free on public repositories only; a private one
+          # publishes amd64 alone rather than queueing forever. Asked of the API
+          # because a scheduled run's event carries no repository at all.
+          private=$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)
+          if [ "$private" = true ]; then matrix="[$amd]"; else matrix="[$amd,$arm]"; fi
+
+          {
+            echo "ref=$ref"
+            echo "app=$app"
+            echo "ytdlp=$ytdlp"
+            echo "tags=$tags"
+            echo "skip=$skip"
+            echo "matrix=$matrix"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### $channel: $app with yt-dlp $ytdlp"
+            echo
+            # shellcheck disable=SC2016 # literal backticks: Markdown code spans
+            echo "$tags" | tr ',' '\n' | sed 's/^/- `/; s/$/`/'
+            [ "$skip" = true ] && echo && echo "Skipped: already published."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: plan
+    if: needs.plan.outputs.skip != 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: slug
+        run: echo "arch=${PLATFORM#linux/}" >> "$GITHUB_OUTPUT"
+        env:
+          PLATFORM: ${{ matrix.platform }}
+
+      # Pushed by digest only. The tags go on in `merge`, once every
+      # architecture exists, so a tag never points at a half-built release.
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          build-args: YTDLP_VERSION=${{ needs.plan.outputs.ytdlp }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.plan.outputs.app }}
+            org.opencontainers.image.revision=${{ needs.plan.outputs.ref }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=release-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=release-${{ matrix.platform }}
+          provenance: false
+
+      - run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ steps.slug.outputs.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  merge:
+    name: Tag
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create the multi-arch tags
+        working-directory: /tmp/digests
+        env:
+          TAGS: ${{ needs.plan.outputs.tags }}
+        run: |
+          set -euo pipefail
+          args=()
+          for tag in ${TAGS//,/ }; do args+=(-t "$tag"); done
+          # Index annotations are what GHCR shows on the package page for a
+          # multi-arch image; per-platform labels are not read there.
+          # shellcheck disable=SC2046 # one argument per digest, split on purpose
+          docker buildx imagetools create "${args[@]}" \
+            --annotation "index:org.opencontainers.image.description=Self-hosted media downloader that does not lose your work" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --annotation "index:org.opencontainers.image.licenses=MIT" \
+            $(printf "$IMAGE@sha256:%s " *)
+
+      - name: Inspect
+        env:
+          TAGS: ${{ needs.plan.outputs.tags }}
+        run: docker buildx imagetools inspect "${TAGS%%,*}"
+
+  github-release:
+    name: GitHub release
+    needs: [plan, merge]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          APP: ${{ needs.plan.outputs.app }}
+          YTDLP: ${{ needs.plan.outputs.ytdlp }}
+        run: |
+          set -euo pipefail
+          # The section of CHANGELOG.md for this version, if there is one.
+          notes=$(awk -v v="$APP" '
+            $0 ~ "^## \\[?"v"\\]?" {on=1; next}
+            on && /^## / {exit}
+            on {print}
+          ' CHANGELOG.md 2>/dev/null || true)
+          {
+            echo "## Image"
+            echo
+            echo '```'
+            echo "docker pull $IMAGE:$APP-ytdlp-$YTDLP"
+            echo '```'
+            echo
+            echo "amd64 and arm64. \`$APP\` and \`latest\` move to newer yt-dlp builds weekly; \`$APP-ytdlp-$YTDLP\` never changes."
+            echo
+            if [ -n "$notes" ]; then echo "$notes"; fi
+          } > /tmp/notes.md
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file /tmp/notes.md
