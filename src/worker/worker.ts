@@ -549,9 +549,16 @@ async function moveFile(from: string, target: string): Promise<void> {
 }
 
 function patchOf(p: ProgressUpdate) {
-  return {
+  const patch = {
     progress: p.percent !== undefined ? Math.round(p.percent) : undefined,
     doneBytes: p.doneBytes, totalBytes: p.totalBytes,
     speed: p.speed, eta: p.eta,
   };
+  // ⚠️ yt-dlp merges and embeds *inside* the download stage, after the bytes
+  // are in. That is processing, and saying "Downloading" at 100% with the last
+  // speed still showing made a job that was busy look stuck.
+  if (p.stage === "postprocess") {
+    return { ...patch, status: statusForStage("postprocess"), speed: null, eta: null };
+  }
+  return patch;
 }

@@ -1131,3 +1131,23 @@ describe("--ffmpeg-location", () => {
     expect(lines[0]).toContain("does not resolve");
   });
 });
+
+test("🔴 a merge after the bytes are in is reported as postprocess, not as more downloading", async () => {
+  // A full bar beside "Downloading" while ffmpeg merged read as a stuck job; the
+  // worker can only say "processing" if the provider says which stage this is.
+  const dir = await mkdtemp(join(tmpdir(), "casatube-"));
+  try {
+    const file = join(dir, "A Video.mkv");
+    await writeFile(file, "x");
+    const { spawn } = fakeSpawner({
+      stdout: [`CT-FILE|${file}`],
+      stderr: ["CT-PP|started|Merger"],
+    });
+    const ctx = fakeContext(dir);
+    await createYtdlpProvider({ spawn }).fetch(plan(), ctx);
+    const merging = ctx.updates.find((update) => update.stage === "postprocess");
+    expect(merging?.percent).toBe(100);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

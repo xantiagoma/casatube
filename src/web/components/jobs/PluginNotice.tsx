@@ -339,20 +339,23 @@ export function ApplicablePlugins({
  * The same fact in one line, for the analyzed row on the card.
  *
  * It exists so the panel is not the only place this is discoverable: the row is
- * what someone sees without opening anything, and "2 plugins apply" is the
- * prompt to go and look.
+ * what someone sees without opening anything, and "2 plugins run on this
+ * download" is the prompt to go and look.
  */
 export function ApplicablePluginsBadge({ url }: { url: string }) {
   const applicable = useApplicablePlugins(url);
   const plugins = applicable.data?.plugins ?? [];
-  if (plugins.length === 0) return null;
+  // ⚠️ Only the ones that will *do* something. A fresh install ships Jellyfin and
+  // a webhook enabled but unconfigured, and counting those made every plain
+  // YouTube link say "2 plugins apply" about two plugins that do nothing. The
+  // panel still lists every one, with why it is idle.
+  const working = plugins.filter((plugin) => plugin.state === "active" && plugin.missingSettings.length === 0);
+  if (working.length === 0) return null;
 
-  const on = plugins.filter((plugin) => plugin.state === "active").length;
   return (
     <span className="mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
       <Plug className="size-3 shrink-0" aria-hidden />
-      {plugins.length === 1 ? "1 plugin applies to this download" : `${plugins.length} plugins apply to this download`}
-      {on === plugins.length ? "" : ` · ${on} switched on`}
+      {working.length === 1 ? `${working[0]!.name} runs on this download` : `${working.length} plugins run on this download`}
     </span>
   );
 }

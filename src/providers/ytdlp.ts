@@ -1224,7 +1224,9 @@ export function createYtdlpProvider(options: YtdlpOptions = {}): Provider {
         // The whole reason stderr is read at all: without this, the minutes
         // ffmpeg spends merging look like a dead process.
         ctx.log(`postprocess ${post.postprocessor ?? "?"}: ${post.status}`);
-        ctx.onProgress({ ...progress.snapshot(), percent: 100 });
+        // `stage` is what tells the worker this is merging, not downloading: a
+        // full bar with "Downloading" beside it read as a stuck job.
+        ctx.onProgress({ ...progress.snapshot(), percent: 100, stage: "postprocess" });
         return;
       }
       const printed = parseFilePathLine(line);
