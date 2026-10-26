@@ -26,7 +26,7 @@ every deploy, and CI runs it against every image it builds.
 
 ## State
 
-**1202 tests, 0 failures. `tsc` clean.**
+**1219 tests, 0 failures. `tsc` clean.**
 
 Working end to end: paste a URL → the form shows the resolutions, audio tracks
 and subtitles that video actually has → queue → six stages live over SSE → the
@@ -148,9 +148,6 @@ starts, serves the bundle and runs its yt-dlp.
 
 ## Still open
 
-- **No paging control on the job screens.** The server sorts, searches and
-  counts now, and the table says "200 of 3,412" — but the rest is reachable
-  only by narrowing the search, not by turning a page.
 - **Telegram: a single-format source still obeys the resolution ceiling.** A 4K
   Telegram video under a 1080 ceiling fails with `FormatUnavailable` rather than
   taking the only file that exists. Coherent with yt-dlp, and friction with no
@@ -161,31 +158,22 @@ starts, serves the bundle and runs its yt-dlp.
 - **A plugin cannot be switched *on* for one download.** Off works; on cannot,
   because a plugin that is off server-wide is never activated and registers no
   hooks. Doing it properly means activating every valid plugin and gating
-  dispatch on `enabled` — a change to the runtime's model, not a UI change.
+  dispatch on `enabled` — a change to the runtime's model, not a UI change,
+  and one that would run the `setup` of plugins someone switched off, so "off"
+  would stop meaning off. Left alone deliberately on 2026-10-26.
 - `react-doctor` sits around 60/100, dominated by vendored Dice UI.
 
-- **Resolution labels are the shorter side**, so a 1920×800 film reads as
-  "800p" and a 2048×858 one as "858p". Coherent with the ceiling (which is why
-  portrait video works) and odd to read. YouTube's own label is in yt-dlp's
-  `format_note` and would be the better thing to show; the ceiling logic should
-  not change with it.
-- **`/settings?section=…` is validated by the router and read by nothing**, so
-  a deep link always opens at the top.
-- **"2 plugins apply to this download"** counts plugins that are loaded but
-  unconfigured ("doing nothing"), so every plain YouTube URL claims two.
-- **A job at 100% still says "Downloading"** while it post-processes.
-- **On a phone the job table is wider than the screen**: it scrolls sideways,
-  titles cut mid-word and Status/Progress start off-screen. A card layout below
-  `sm` is the fix.
-- A job still analysing shows on the dashboard as its raw URL with a blank
-  thumbnail.
-- **A cancelled job is counted under the Failed tab**, while the Failures stat
-  and the Queue's Failed tile say 0. Cancelling is not failing.
-- **A failed Analyze shows yt-dlp's raw error** — `HTTPSConnection`,
-  `Errno -2` and the rest — where a sentence ("could not reach youtube.com")
-  belongs. The mapping in `src/api/errors.ts` is where that would go.
-
 ### Closed on 2026-10-26 (see `WORKLOG.md`)
+
+Before going public, everything a first-time user would trip over: resolution
+labels by the class a person calls them (1920×800 is 1080p), yt-dlp's raw errors
+turned into sentences with the original one click away, job lists that fit a
+phone, failed-or-cancelled named "Stopped" and counted the same everywhere, a
+merging job that says "processing" instead of sitting at 100% "Downloading", a
+plugin badge that counts plugins that will actually run, `?section=` in
+Settings that scrolls there, and real paging on the job screens.
+`docs/SECURING.md` covers putting it behind Tailscale, Cloudflare Access or an
+authenticating proxy, instead of a login of its own.
 
 Preparing the repository to go public: no secrets in 68 commits of history
 (gitleaks, plus the real `CREDENTIALS_KEY` searched for directly); host-specific

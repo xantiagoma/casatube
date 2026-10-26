@@ -348,7 +348,7 @@ docker compose up -d</pre>
     <div class="wrap">
       <div class="callout">
         <h3>Put it behind something</h3>
-        <p>CasaTube has no login of its own. It is built for a private network, and anyone who can reach the port can use it — including the plugin editor, which runs code on the server by design. Reach it over a VPN such as Tailscale or WireGuard, or behind a reverse proxy that authenticates.</p>
+        <p>CasaTube has no login of its own. It is built for a private network, and anyone who can reach the port can use it — including the plugin editor, which runs code on the server by design. Reach it over Tailscale, through Cloudflare Access, or behind a reverse proxy that authenticates — <a href="https://github.com/xantiagoma/casatube/blob/main/docs/SECURING.md">docs/SECURING.md</a> has the configurations.</p>
         <p>Set <code>CREDENTIALS_KEY</code> before storing a cookie, a password or a Telegram session; without it they are kept in plain text, and the app says so.</p>
       </div>
     </div>

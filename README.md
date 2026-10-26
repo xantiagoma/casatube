@@ -147,9 +147,10 @@ rather update on purpose.
 CasaTube has **no login of its own.** It is built for one household on a
 private network, and anyone who can reach the port can use it — including the
 plugin editor, which **runs code on the server by design**. Do not expose it to
-the internet directly. Reach it over a VPN such as Tailscale or WireGuard, or
-put it behind a reverse proxy that authenticates (Authelia, Authentik, Caddy or
-nginx with basic auth, Cloudflare Access).
+the internet directly. **[docs/SECURING.md](docs/SECURING.md)** walks through
+the options, with configurations: Tailscale (recommended), Cloudflare Tunnel with
+Access, or a reverse proxy that authenticates (Caddy, nginx, Authelia,
+Authentik).
 
 **Set `CREDENTIALS_KEY`** before storing a cookie, a password or a Telegram
 session. Without it they are stored in plain text — the app says so at every

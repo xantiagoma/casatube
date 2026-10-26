@@ -562,8 +562,17 @@ function AuthCard() {
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
           <span>
             <strong>Anyone who can reach this port can enqueue downloads, browse the library and edit plugins.</strong>{" "}
-            CasaTube has no login of its own yet. That is fine on a private network or a VPN; anywhere else, put it
-            behind a reverse proxy that authenticates. This section is shown, and disabled, so that stays visible.
+            CasaTube has no login of its own. That is fine on a private network or a VPN; anywhere else, put
+            something in front of it —{" "}
+            <a
+              href="https://github.com/xantiagoma/casatube/blob/main/docs/SECURING.md"
+              target="_blank"
+              rel="noreferrer noopener"
+              className="underline underline-offset-2"
+            >
+              Tailscale, Cloudflare Access or an authenticating proxy
+            </a>
+            . This section is shown, and disabled, so that stays visible.
           </span>
         </p>
 

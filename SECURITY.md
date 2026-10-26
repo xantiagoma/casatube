@@ -16,8 +16,8 @@ follows is a deliberate decision rather than an oversight, and reports that
 amount to "this is how it is documented to work" are not vulnerabilities:
 
 - **There is no authentication.** Anyone who can reach the port can use every
-  feature. Put it behind a VPN or an authenticating reverse proxy; see the
-  README.
+  feature. Put it behind a VPN or an authenticating reverse proxy;
+  [docs/SECURING.md](docs/SECURING.md) has the configurations.
 - **Plugins run in-process with the server's full privileges.** The plugin
   editor is, by design, a way to run code on the server. A plugin's declared
   capabilities are a contract shown in the UI, not a sandbox.

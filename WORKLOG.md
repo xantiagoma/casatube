@@ -9,7 +9,7 @@ session with none of this context. Newest first.
 
 > «tenemos que preparar todo pa hacer pronto el repo public y ofrecer los build y todo el cuento»
 
-**1202 tests, 0 failures. `tsc` clean.** Nothing flipped to public yet: that,
+**1219 tests, 0 failures. `tsc` clean.** Nothing flipped to public yet: that,
 and the first release tag, are the maintainer's to do.
 
 ### History first, because it cannot be taken back
@@ -73,6 +73,23 @@ clipped a tab and pushed the job list below the fold, an MP4 timecode track
 listed as a stream, and `Caminandes 3- Llamigos.mkv`. All fixed. The ones that
 were not — resolution labels, the unread settings deep link, the plugin-count
 badge, the status that lags the stage — are in `HANDOFF.md`.
+
+### Everything a stranger would trip over
+
+> «arregla lo que haya que arreglar»
+
+The rest of the demo review, fixed rather than listed: resolution is the class a
+person calls a video by (1920×800 is 1080p — the shorter side had fixed
+portrait video and broken cinema); network failures read as sentences, with
+yt-dlp's text under "Technical detail"; the job screens page, fit a phone, and
+call failed-or-cancelled "Stopped" with one count; a merging job says
+"processing"; the plugin badge counts plugins that will run; `?section=` works.
+
+Not done, on purpose: switching a plugin *on* for one download. It would mean
+running the setup of plugins someone switched off, and "off" would stop meaning
+off. And no login: `docs/SECURING.md` puts CasaTube behind Tailscale, Cloudflare
+Access or an authenticating proxy instead — each of them a better lock than a
+password form written into a downloader.
 
 ### Red is the brand, not the meaning
 

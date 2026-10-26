@@ -13,6 +13,7 @@ and CasaOS.
 - [Health](#health)
 - [What is inside](#what-is-inside)
 - [Troubleshooting](#troubleshooting)
+- Securing it: [SECURING.md](SECURING.md) — there is no login; put it behind Tailscale, Cloudflare Access or an authenticating proxy
 
 ---
 
