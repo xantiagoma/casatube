@@ -44,7 +44,9 @@ import { DOWNLOAD_TABS, type DownloadTab, type DownloadsSearch } from "../search
 const TAB_LABEL: Record<DownloadTab, string> = {
   active: "Active",
   completed: "Completed",
-  failed: "Failed",
+  // "Stopped", not "Failed": the bucket holds cancelled jobs too, and
+  // cancelling something is not a failure (core/job-buckets.ts).
+  failed: "Stopped",
   scheduled: "Scheduled",
 };
 

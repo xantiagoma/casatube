@@ -127,7 +127,10 @@ export function Queue() {
     waiting: sumOf(byStatus, WAITING),
     running: sumOf(byStatus, RUNNING),
     done: byStatus?.done ?? 0,
-    failed: byStatus?.failed ?? 0,
+    // The same set the "Failed or cancelled" filter lists — a tile that counted
+    // one status while its filter showed two disagreed with itself.
+    stopped: sumOf(byStatus, STATUSES_FOR.failed!),
+    failedOnly: byStatus?.failed ?? 0,
   };
 
   const select = (id: string): void => patch({ job: search.job === id ? undefined : id });
@@ -159,7 +162,11 @@ export function Queue() {
             <StatTile label="Waiting" value={formatCount(counts.waiting)} hint="Jobs the worker has not claimed" />
             <StatTile label="Running" value={formatCount(counts.running)} hint="Claimed and moving" />
             <StatTile label="Completed" value={formatCount(counts.done)} hint="Every finished job on the server" />
-            <StatTile label="Failed" value={formatCount(counts.failed)} hint="Needs attention" />
+            <StatTile
+              label="Stopped"
+              value={formatCount(counts.stopped)}
+              hint={counts.failedOnly > 0 ? `${formatCount(counts.failedOnly)} failed — needs attention` : "Failed or cancelled"}
+            />
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
