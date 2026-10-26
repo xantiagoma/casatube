@@ -27,6 +27,11 @@ on:
 permissions:
   contents: read
 
+# The build record build-push-action uploads by default counts against the
+# Actions artifact quota, and on this account that quota is already full.
+env:
+  DOCKER_BUILD_RECORD_UPLOAD: false
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -90,9 +95,16 @@ jobs:
 
       # Named `casatube` because smoke.sh reads that container's log for the
       # "bundle failed" line the HTTP checks cannot see.
+      # A library is mounted because without one the library routes answer
+      # 503 — on purpose: an unmounted /library would otherwise swallow
+      # downloads into the container's writable layer.
       - name: Start
         run: |
-          docker run -d --name casatube -p 8520:8520 casatube:ci
+          mkdir -p "$RUNNER_TEMP/data" "$RUNNER_TEMP/library"
+          chmod 777 "$RUNNER_TEMP/data" "$RUNNER_TEMP/library"
+          docker run -d --name casatube -p 8520:8520 \
+            -v "$RUNNER_TEMP/data:/data" -v "$RUNNER_TEMP/library:/library" \
+            casatube:ci
           for _ in $(seq 1 60); do
             curl -fsS http://127.0.0.1:8520/api/health && exit 0
             sleep 2

@@ -41,6 +41,9 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
+  # The build record build-push-action uploads by default counts against the
+  # Actions artifact quota, which is already full on this account.
+  DOCKER_BUILD_RECORD_UPLOAD: false
 
 jobs:
   plan:
@@ -142,7 +145,10 @@ jobs:
             echo
             # shellcheck disable=SC2016 # literal backticks: Markdown code spans
             echo "$tags" | tr ',' '\n' | sed 's/^/- `/; s/$/`/'
-            [ "$skip" = true ] && echo && echo "Skipped: already published."
+            # An `if`, not `[ ] && echo`: as the group's last command a false
+            # test makes the whole block exit 1, and `set -e` ends the step
+            # without a word.
+            if [ "$skip" = true ]; then echo; echo "Skipped: already published."; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   build:
@@ -191,17 +197,19 @@ jobs:
           cache-to: type=gha,mode=max,scope=release-${{ matrix.platform }}
           provenance: false
 
+      # ⚠️ The digests travel through the Actions cache, not artifacts. The
+      # artifact quota is shared across an account's private repositories and
+      # was found full; a release must not depend on it.
       - run: |
           mkdir -p /tmp/digests
           touch "/tmp/digests/${DIGEST#sha256:}"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/cache/save@v4
         with:
-          name: digest-${{ steps.slug.outputs.arch }}
-          path: /tmp/digests/*
-          retention-days: 1
+          path: /tmp/digests
+          key: digests-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.slug.outputs.arch }}
 
   merge:
     name: Tag
@@ -211,11 +219,29 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/cache/restore@v4
         with:
-          pattern: digest-*
           path: /tmp/digests
-          merge-multiple: true
+          key: digests-${{ github.run_id }}-${{ github.run_attempt }}-amd64
+          fail-on-cache-miss: true
+
+      # arm64 only exists when the plan built it, so a miss is not an error
+      # here — but the count below checks that every planned architecture came.
+      - uses: actions/cache/restore@v4
+        with:
+          path: /tmp/digests-arm64
+          key: digests-${{ github.run_id }}-${{ github.run_attempt }}-arm64
+
+      - name: Every planned architecture is here
+        env:
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          [ -d /tmp/digests-arm64 ] && cp /tmp/digests-arm64/* /tmp/digests/
+          planned=$(jq length <<<"$MATRIX")
+          found=$(find /tmp/digests -type f | wc -l)
+          echo "planned $planned, found $found"
+          [ "$planned" = "$found" ]
 
       - uses: docker/setup-buildx-action@v3
 
