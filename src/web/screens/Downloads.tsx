@@ -26,7 +26,7 @@ import { Sparkline } from "../components/charts/Sparkline";
 import { EmptyState, ErrorState, PageNote, StatTile } from "../components/common/Bits";
 import { JobInspector } from "../components/jobs/JobInspector";
 import { FileFilterControl, FileStateBadge, SearchBox, SortControl } from "../components/jobs/JobFilters";
-import { JobTable } from "../components/jobs/JobTable";
+import { JobList, JobTable } from "../components/jobs/JobTable";
 import {
   fileStateOf,
   finishedIds,
@@ -282,12 +282,25 @@ export function Downloads() {
                 </div>
               ) : (
                 <>
-                  <JobTable
-                    jobs={shown}
-                    selectedId={search.job}
-                    onSelect={(id) => patch({ job: search.job === id ? undefined : id })}
-                    badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
-                  />
+                  {/* Stacked rows on a phone, the table from `sm` up: the table
+                      is 52rem wide, and on a phone it cut titles mid-word with
+                      Status and Progress off the edge of the screen. */}
+                  <div className="sm:hidden">
+                    <JobList
+                      jobs={shown}
+                      selectedId={search.job}
+                      onSelect={(id) => patch({ job: search.job === id ? undefined : id })}
+                      badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
+                    />
+                  </div>
+                  <div className="hidden sm:block">
+                    <JobTable
+                      jobs={shown}
+                      selectedId={search.job}
+                      onSelect={(id) => patch({ job: search.job === id ? undefined : id })}
+                      badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
+                    />
+                  </div>
                   <PageNote
                     shown={shown.length}
                     total={total}

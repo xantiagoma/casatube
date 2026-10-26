@@ -26,7 +26,16 @@ export function formatLabel(job: Job): string {
 export function jobTitle(job: Job): string {
   if (job.title && job.title.trim() !== "") return job.title;
   if (job.outputFile) return splitPath(job.outputFile).name;
-  return job.url;
+  return readableUrl(job.url);
+}
+
+/**
+ * A link as a person would say it, for a job that has no title yet — before
+ * analysis there is nothing else to show. `youtube.com/watch?v=R6MlUcmOul8`
+ * rather than `https://www.youtube.com/watch?v=R6MlUcmOul8`.
+ */
+export function readableUrl(url: string): string {
+  return url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
 }
 
 /** The bar's percentage, and whether it is knowable yet. */

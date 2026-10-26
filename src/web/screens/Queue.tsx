@@ -27,7 +27,7 @@ import { EmptyState, ErrorState, PageNote, StatTile } from "../components/common
 import { BatchAdd } from "../components/jobs/BatchAdd";
 import { JobInspector } from "../components/jobs/JobInspector";
 import { FileFilterControl, FileStateBadge, SearchBox, SortControl, StatusFilter } from "../components/jobs/JobFilters";
-import { JobTable } from "../components/jobs/JobTable";
+import { JobList, JobTable } from "../components/jobs/JobTable";
 import { fileStateOf, finishedIds, indexFileStates, matchesFile } from "../components/jobs/job-order";
 import { RUNNING, WAITING } from "../components/jobs/job-view";
 import { PageHeader } from "../components/layout/AppShell";
@@ -231,12 +231,23 @@ export function Queue() {
                 </div>
               ) : (
                 <>
-                  <JobTable
-                    jobs={shown}
-                    selectedId={search.job}
-                    onSelect={select}
-                    badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
-                  />
+                  {/* Stacked on a phone, the table from `sm` up — see Downloads. */}
+                  <div className="sm:hidden">
+                    <JobList
+                      jobs={shown}
+                      selectedId={search.job}
+                      onSelect={select}
+                      badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
+                    />
+                  </div>
+                  <div className="hidden sm:block">
+                    <JobTable
+                      jobs={shown}
+                      selectedId={search.job}
+                      onSelect={select}
+                      badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
+                    />
+                  </div>
                   <PageNote shown={shown.length} total={total} limit={page?.limit ?? 200} noun="jobs" />
                 </>
               )}

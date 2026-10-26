@@ -10,7 +10,7 @@
  * what makes an inspector view shareable and survive a refresh (PLAN §8).
  */
 import type { ReactNode } from "react";
-import { ExternalLink, Pause, Play, RotateCcw, X } from "lucide-react";
+import { ExternalLink, Film, Pause, Play, RotateCcw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -36,7 +36,13 @@ function Thumb({ job }: { job: Job }) {
     <span className="relative block h-18 w-32 shrink-0 overflow-hidden rounded-md bg-muted">
       {job.thumbnail ? (
         <img src={job.thumbnail} alt="" className="size-full object-cover" loading="lazy" />
-      ) : null}
+      ) : (
+        // Before analysis there is no picture yet; an empty grey box read as a
+        // broken image.
+        <span className="grid size-full place-items-center text-muted-foreground">
+          <Film className="size-5" aria-hidden />
+        </span>
+      )}
       {job.duration ? (
         <span className="absolute right-1 bottom-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] leading-tight text-white tabular-nums">
           {formatDuration(job.duration)}
@@ -299,22 +305,45 @@ export function JobTable({
 }
 
 /**
- * The same rows, stacked — what the dashboard and a narrow screen show.
+ * The same rows, stacked — what the dashboard and a phone show.
  *
- * Deliberately **not** selectable: the row already carries its own buttons, and
- * a whole <li> that reacts to a click is a control a keyboard cannot reach. The
- * screens that need selection use `JobTable`, whose rows are focusable.
+ * ⚠️ The <li> itself never reacts to a click: the row already carries its own
+ * buttons, and a whole row that is a click target is a control a keyboard
+ * cannot reach. Where a screen needs selection (Queue and Downloads on a phone,
+ * where the table would be wider than the screen), the **title** becomes the
+ * button — focusable, and the same action as clicking a table row.
  */
-export function JobList({ jobs }: { jobs: Job[] }) {
+export function JobList({
+  jobs,
+  selectedId,
+  onSelect,
+  badge,
+}: {
+  jobs: Job[];
+  selectedId?: string | undefined;
+  onSelect?: ((id: string) => void) | undefined;
+  badge?: ((job: Job) => ReactNode) | undefined;
+}) {
   return (
     <ul className="divide-y">
       {jobs.map((job) => {
         const progress = progressOf(job);
         return (
-          <li key={job.id} className="flex items-center gap-3 px-1 py-2.5">
+          <li key={job.id} className={cn("flex items-center gap-3 px-1 py-2.5", selectedId === job.id && "bg-primary/5")}>
             <Thumb job={job} />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{jobTitle(job)}</p>
+              {onSelect ? (
+                <button
+                  type="button"
+                  onClick={() => onSelect(job.id)}
+                  aria-pressed={selectedId === job.id}
+                  className="block w-full truncate rounded-sm text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {jobTitle(job)}
+                </button>
+              ) : (
+                <p className="truncate text-sm font-medium">{jobTitle(job)}</p>
+              )}
               <div className="mt-1 flex items-center gap-2">
                 <ProgressBar
                   percent={progress.percent}
@@ -336,6 +365,7 @@ export function JobList({ jobs }: { jobs: Job[] }) {
             <div className="flex shrink-0 flex-col items-end gap-1.5">
               <StatusPill status={job.status} />
               {job.paused ? <PausedMark /> : null}
+              {badge?.(job)}
               <JobActions job={job} compact />
             </div>
           </li>
