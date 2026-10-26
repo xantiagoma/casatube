@@ -11,71 +11,22 @@ A self-hosted media downloader that **does not lose your work**. It replaces
 HomeTube, which runs its jobs inside the browser session and loses them when the
 tab closes — measured: 3 of 3 downloads died mid-way.
 
-**Repository**: <https://github.com/xantiagoma/casatube> (private)
-**Working copy**: `/home/santi/Projects/casatube` on **ohana**
+**Repository**: <https://github.com/xantiagoma/casatube>
 
-## Running right now
-
-```
-http://ohana.tail9273dc.ts.net:8520
-```
-
-🔴 **It is a CasaOS-managed Compose app now, not a hand-run container.** The
-compose lives in the *other* repo, at
-`/home/santi/Projects/personal-agent/media/casatube/docker-compose.casaos.yml`,
-and CasaOS keeps its own copy under `/var/lib/casaos/apps/casatube/`. Redeploy:
-
-```bash
-cd /home/santi/Projects/casatube
-docker build --build-arg YTDLP_VERSION=2026.08.19 -t casatube:latest .
-casaos-cli app-management apply casatube \
-  -f /home/santi/Projects/personal-agent/media/casatube/docker-compose.casaos.yml
-./scripts/smoke.sh          # ⚠️ not optional — see below
-```
-
-⚠️ **`casatube` there is the appid and it is positional.** Written as
-`apply -f <file>` the command prints its usage to stderr, exits 1 and applies
-**nothing** — with stdout empty, so a redirected log shows a clean step that did
-not happen. `casaos-cli app-management list apps` prints the appids.
-
-⚠️ **`apply` is asynchronous.** Looking at the container immediately afterwards
-shows the old one. Wait for the recreate, then let `smoke.sh` decide.
-
-⚠️ **Do not `docker rm -f casatube && docker run ...` any more.** It works, and
-it leaves CasaOS's record pointing at a container that no longer exists — the
-menu entry stops matching the thing that is running. The same class of mistake
-as running `docker compose` by hand against a Dokploy app.
+📌 **This file is about the code, not about any one server.** The maintainer's
+own deployment — hostnames, the library mount, backups, the CasaOS redeploy —
+lives in a separate infrastructure repository. Generic deployment is
+`docs/DEPLOY.md`; how images are built and published is the
+[Releases](#releases) section below.
 
 ⚠️ **`curl /api/health` does not tell you the app works.** A client bundle that
 fails to build leaves every route answering 200 while the page is blank. Use
-`scripts/smoke.sh`, which fetches the page and the script it references.
-
-## The library is the real one now
-
-`LIBRARY_DIR=/mnt/mailmedia/videos` — Santi's actual media root, the same one
-HomeTube used, with `Dramas`, `Web` and `Videos` offered as destinations.
-
-🔴 **The container binds `/mnt/mailmedia`, the *parent*, with
-`propagation: rshared` — never `videos` itself.** `videos` is an rclone FUSE
-mount: mounting it directly captures the FUSE handle that existed at container
-start, so the first time rclone remounts, the container is holding a stale one
-and the library reads as empty. Binding the parent is what let HomeTube survive
-remounts, and it is why nothing is mounted at `/library` any more.
-
-⚠️ **`PUID`/`PGID` do not decide ownership here.** rclone connects to `mail` as
-root, so files land `root:root` on the far side; `UMASK 022` is what makes them
-readable. Changing PUID/PGID to fix a permissions problem on this library will
-do nothing.
-
-⚠️ `CREDENTIALS_KEY` lives in `~/casatube.env` (mode 600) and in
-`/DATA/AppData/casatube/casatube.env`. Lose it and stored credentials cannot be
-decrypted — each row records which key sealed it and says so. Encryption is
-**optional by Santi's decision**; without a key it stores plain text and says so
-loudly.
+`scripts/smoke.sh`, which fetches the page and the script it references — after
+every deploy, and CI runs it against every image it builds.
 
 ## State
 
-**1201 tests, 0 failures. `tsc` clean.** 67 commits.
+**1201 tests, 0 failures. `tsc` clean.**
 
 Working end to end: paste a URL → the form shows the resolutions, audio tracks
 and subtitles that video actually has → queue → six stages live over SSE → the
@@ -84,18 +35,6 @@ overwrites anything. Library with thumbnails, playback (HLS
 remux on demand, real seeking), downloads, trash with restore. Sources,
 scheduler, storage, analytics, notifications, plugins with an editor **whose
 hooks now actually fire**, credentials, settings editing, transcoding.
-
-✅ **Deployed 2026-08-28**, and then moved onto the real stack by the
-`personal-agent` session: CasaOS menu entry, `restart: unless-stopped` (it had
-none — it would not have survived the reboot ohana has pending),
-`TZ=America/Bogota`, and the library repointed at `/mnt/mailmedia/videos`.
-Jellyfin is configured with an API key of its own, so it can be revoked without
-touching anything else, and the plugin reports `state: active`,
-`missingSettings: []`. HomeTube and metube are uninstalled.
-
-Rollback images, newest first: `casatube:new`, `casatube:test`. Database backups
-from before each deploy: `/DATA/AppData/casatube/backup-20260828-predeploy/` and
-`-20260828b-predeploy/`.
 
 Verified against YouTube, Odysee and Dailymotion — and against a **private
 Telegram channel**, which is a provider of its own (see below).
@@ -175,10 +114,37 @@ start again.
 ⚠️ A Telegram session is the **whole account**, not a per-channel token. Deleting
 the credential here does not revoke it; only Telegram → Settings → Devices does.
 
+## Releases
+
+`.github/workflows/release.yml` publishes `ghcr.io/xantiagoma/casatube` for
+**amd64 and arm64**, each built natively on its own runner and joined into one
+multi-arch tag afterwards.
+
+| trigger | tags |
+|---|---|
+| tag `vX.Y.Z` | `X.Y.Z-ytdlp-<date>`, `X.Y.Z`, `X.Y`, `latest` + a GitHub release |
+| push to `main` | `edge`, `sha-<short>` |
+| weekly, or by hand | the latest release again, with the newest yt-dlp |
+
+🔴 **The weekly rebuild is the point.** yt-dlp rots when sites change; the app
+version does not. So the latest release is rebuilt with the newest yt-dlp under a
+*new* immutable tag, and `X.Y.Z`/`latest` move to it. Nothing published is ever
+overwritten with different bytes, and a combination that exists already is
+skipped.
+
+To cut a release: bump `version` in `package.json` (the workflow refuses a tag
+that disagrees with it — `/api/health` reports that version), add a section to
+`CHANGELOG.md`, commit, then `git tag vX.Y.Z && git push --tags`.
+
+⚠️ Arm runners are free on public repositories only. While the repository is
+private, both workflows build amd64 alone; `CI` can be run by hand with `arm64`
+ticked to try anyway.
+
 ## Still open
 
-- **`arm64` was never built.** The Dockerfile selects the right yt-dlp, only
-  amd64 was exercised.
+- **`arm64` has not run yet.** The Dockerfile selects the right yt-dlp and CI
+  builds and smoke-tests arm64 natively — but only once the repository is
+  public, since arm runners are not free on private ones.
 - **No paging control on the job screens.** The server sorts, searches and
   counts now, and the table says "200 of 3,412" — but the rest is reachable
   only by narrowing the search, not by turning a page.
@@ -221,11 +187,11 @@ Six items, and two of them were much bigger than they read:
   `automaticSubtitles`; automatic `notifications` retention; `FFMPEG_BIN`
   reaching yt-dlp.
 
-## Santi's standing instructions
+## The maintainer's standing instructions
 
 - **Do the work; don't ask for authorisation.** Report what needs review.
 - **Everything in English** — code, comments, docs, UI.
-- **Spanish when talking to him.**
+- **Spanish when talking to Santi.**
 - Encryption, auth and similar are **not** hard requirements for a self-hosted
   tool. Offer them, don't gate on them.
 
@@ -290,11 +256,3 @@ open. My explanation survived precisely because it sounded right.
 | `docs/DISCOVERIES.md` | ~25 traps already paid for — **read it before touching anything** |
 | `docs/mockups/` | The reference designs |
 | `docs/DEPLOY.md` | Environment variables, volumes, updating yt-dlp |
-
-## The other repo
-
-`/home/santi/Projects/personal-agent` is Santi's infrastructure repo — the
-gateway, three servers, the home network, cameras, home automation. Unrelated to
-CasaTube except that CasaTube runs on ohana. Its `START-HERE.md` and
-`./scripts/doctor.sh` are the way in. **The camera monitor there is stopped** at
-his request; open items live in its `plans/backlog.md`.

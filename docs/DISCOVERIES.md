@@ -153,11 +153,11 @@ The Dockerfile declared `VOLUME ["/data", "/library"]`, which reads as harmless
 documentation and is not. A `VOLUME` line means *"if nothing is mounted here,
 make an anonymous volume"* — so the moment the deployment stopped mounting
 anything at `/library`, every `docker run` left a fresh one behind. Six had
-accumulated on ohana before anybody looked at `docker volume ls -f dangling=true`.
+accumulated on the first deployment before anybody looked at `docker volume ls -f dangling=true`.
 
 📌 The reason nothing mounts `/library` any more is the second half of this
-entry. `LIBRARY_DIR` points at `/mnt/mailmedia/videos`, and the container binds
-`/mnt/mailmedia` — the **parent**.
+entry. `LIBRARY_DIR` points at `/mnt/media/videos`, and the container binds
+`/mnt/media` — the **parent**.
 
 ⚠️ **A FUSE mount must be bound by its parent, not by itself.** `videos` is an
 rclone mount. Binding it directly captures the FUSE handle that existed when the

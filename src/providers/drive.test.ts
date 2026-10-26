@@ -29,7 +29,7 @@ import {
   titleFrom,
 } from "./drive";
 
-const ID = "1kYCt9khTzxrNzfGAaWJ29sKLGH82Qfpb";
+const ID = "1AbCdEfGhIjKlMnOpQrStUvWxYz012345";
 
 /** Trimmed from the real page, form intact. */
 const WARNING_PAGE = `<!DOCTYPE html><html><head><title>Google Drive - Virus scan warning</title></head><body>
@@ -118,8 +118,8 @@ describe("confirmTarget", () => {
 
 describe("naming", () => {
   test("the filename comes out of content-disposition, quoted or not", () => {
-    expect(filenameFrom('attachment; filename="Captured by My Rival Backup.mp4"')).toBe(
-      "Captured by My Rival Backup.mp4",
+    expect(filenameFrom('attachment; filename="Example Drive Video.mp4"')).toBe(
+      "Example Drive Video.mp4",
     );
     expect(filenameFrom("attachment; filename=plain.mkv")).toBe("plain.mkv");
     expect(filenameFrom("attachment; filename*=UTF-8''Cap%C3%ADtulo%201.mp4")).toBe("Capítulo 1.mp4");
@@ -127,8 +127,8 @@ describe("naming", () => {
   });
 
   test("the title is the filename without its extension", () => {
-    expect(titleFrom({ id: ID, url: "x", filename: "Captured by My Rival Backup.mp4" })).toBe(
-      "Captured by My Rival Backup",
+    expect(titleFrom({ id: ID, url: "x", filename: "Example Drive Video.mp4" })).toBe(
+      "Example Drive Video",
     );
     // And something recognisable when Drive states no name at all.
     expect(titleFrom({ id: ID, url: "x" })).toBe(`Drive ${ID.slice(0, 8)}`);
@@ -222,7 +222,7 @@ function driveFetch(options: { body?: string; statedTotal?: number; page?: strin
         headers: {
           "content-type": "video/mp4",
           "content-range": `bytes 0-0/${total}`,
-          "content-disposition": 'attachment; filename="Captured by My Rival Backup.mp4"',
+          "content-disposition": 'attachment; filename="Example Drive Video.mp4"',
         },
       });
     }
@@ -243,7 +243,7 @@ describe("probe", () => {
     const info = await provider.probe(plan().url, new AbortController().signal);
     expect(Result.isOk(info)).toBe(true);
     if (!Result.isOk(info)) return;
-    expect(info.value.title).toBe("Captured by My Rival Backup");
+    expect(info.value.title).toBe("Example Drive Video");
     expect(info.value.source).toBe("drive");
     // ⚠️ Two requests and not one byte of video: the page, then one byte.
     expect(seen).toHaveLength(2);
