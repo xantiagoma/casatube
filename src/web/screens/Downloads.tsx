@@ -168,7 +168,10 @@ export function Downloads() {
                 {DOWNLOAD_TABS.map((tab) => (
                   <TabsTrigger key={tab} value={tab} className="gap-1.5">
                     {TAB_LABEL[tab]}
-                    <span className="rounded-full bg-muted px-1.5 text-[10px] font-medium tabular-nums">
+                    {/* Counts only from `sm` up: with them, four tabs are wider
+                        than a phone, and a strip that scrolls gives no hint that
+                        it does. The Active count is on the stat tiles anyway. */}
+                    <span className="hidden rounded-full bg-muted px-1.5 text-[10px] font-medium tabular-nums sm:inline">
                       {counts[tab]}
                     </span>
                   </TabsTrigger>
