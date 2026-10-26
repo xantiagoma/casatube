@@ -56,7 +56,7 @@ mid-download — the job carries on, or goes back to the queue and resumes.
   - **Private Telegram channels**, through your own signed-in session (MTProto).
   - **Google Drive** files, without the shared API key yt-dlp depends on.
   - Anything else yt-dlp supports — YouTube, Vimeo, Odysee, Dailymotion and
-    [a thousand more](https://github.com/yt-dlp/yt-dlp/blob/master/supported-sites.md).
+    [a thousand more](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md).
 - **Plugins** in TypeScript, written in an in-app editor and loaded without a
   restart: rewrite URLs before download, notify a webhook, ask Jellyfin to scan
   when a file lands. Jellyfin, webhook, URL-unshortener and Vidarro plugins ship
