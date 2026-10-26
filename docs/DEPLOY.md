@@ -70,7 +70,8 @@ and `docker compose up -d --build`.
 | `0.1.0-ytdlp-2026.08.19` | **Immutable.** One app version with one yt-dlp release. Never rebuilt. |
 | `0.1.0`, `0.1` | That version with the newest yt-dlp; moves weekly. |
 | `latest` | The newest release with the newest yt-dlp; moves weekly. |
-| `edge` | The tip of `main`. Not a release. |
+| `main` | The tip of the `main` branch. Not a release. |
+| `sha-abc1234` | One commit of `main`. Never changes. |
 
 The weekly rebuild exists because **yt-dlp is the part that rots**: sites
 change and yt-dlp follows them, so an image is only as current as the yt-dlp

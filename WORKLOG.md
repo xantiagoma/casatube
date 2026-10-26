@@ -43,7 +43,7 @@ the only one.
 `ci.yml`: typecheck, tests, then build the real image, start it and run
 `scripts/smoke.sh` against it — on amd64 and arm64, each native.
 `release.yml`: tag → `X.Y.Z-ytdlp-<date>`, `X.Y.Z`, `X.Y`, `latest` and a
-GitHub release; `main` → `edge`; weekly → the latest release rebuilt with the
+GitHub release; `main` → `main` and `sha-<short>` (the same convention as xtandard-image); weekly → the latest release rebuilt with the
 newest yt-dlp under a new immutable tag. That last one is the reason for the
 shape: yt-dlp is the part of this image that rots.
 

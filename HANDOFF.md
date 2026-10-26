@@ -123,7 +123,7 @@ multi-arch tag afterwards.
 | trigger | tags |
 |---|---|
 | tag `vX.Y.Z` | `X.Y.Z-ytdlp-<date>`, `X.Y.Z`, `X.Y`, `latest` + a GitHub release |
-| push to `main` | `edge`, `sha-<short>` |
+| push to `main` | `main`, `sha-<short>` |
 | weekly, or by hand | the latest release again, with the newest yt-dlp |
 
 🔴 **The weekly rebuild is the point.** yt-dlp rots when sites change; the app

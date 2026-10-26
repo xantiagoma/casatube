@@ -5,7 +5,7 @@
 # | trigger              | source                 | tags                                         |
 # |----------------------|------------------------|----------------------------------------------|
 # | push of tag `vX.Y.Z` | that tag               | X.Y.Z-ytdlp-<date>, X.Y.Z, X.Y, latest        |
-# | push to `main`       | that commit            | edge, sha-<short>                            |
+# | push to `main`       | that commit            | main, sha-<short>                            |
 # | weekly / manual      | the latest release tag | the release tags again, with a newer yt-dlp  |
 #
 # 🔴 **The weekly run is the reason this workflow exists in this shape.** yt-dlp
@@ -98,7 +98,7 @@ jobs:
             ref="$GITHUB_SHA"
             app=$(version_of "$ref")
             ytdlp="$pinned"
-            channel=edge
+            channel=main
           else
             ref=$(git tag --list 'v*.*.*' --sort=-v:refname | head -1)
             if [ -z "$ref" ]; then
@@ -115,7 +115,7 @@ jobs:
             minor="${app%.*}"
             tags="$IMAGE:$app-ytdlp-$ytdlp,$IMAGE:$app,$IMAGE:$minor,$IMAGE:latest"
           else
-            tags="$IMAGE:edge,$IMAGE:sha-${ref:0:7}"
+            tags="$IMAGE:main,$IMAGE:sha-${ref:0:7}"
           fi
 
           skip=false

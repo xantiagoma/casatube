@@ -134,7 +134,7 @@ inside; nothing is needed on the host.
 | `latest` | The newest release with the newest yt-dlp. **Rebuilt weekly.** |
 | `0.1.0` | That version with the newest yt-dlp. Rebuilt weekly. |
 | `0.1.0-ytdlp-2026.08.19` | Immutable: exactly that app and that yt-dlp. |
-| `edge` | The tip of `main`. |
+| `main` | The tip of the `main` branch; `sha-<short>` pins one commit of it. Not a release. |
 
 yt-dlp is the part that rots — sites change and it follows them — so the weekly
 rebuild is what keeps a release downloading. Pin the immutable tag if you would
@@ -216,8 +216,9 @@ unsure whether something is allowed where you live, ask someone qualified to ans
   and content whose owner or whose platform's terms permit downloading. Copyright law, private-copy
   exceptions and the terms of service of each site differ by country and by site, and **you** are
   the one who has to comply with them. Many platforms — YouTube among them — forbid downloading
-  in their terms except through features they provide. Do not redistribute what you download
-  unless its licence lets you.
+  in their terms except through features they provide. Restrictions an owner sets on their own
+  content, such as Telegram's "restrict saving content", are not enforced by CasaTube; respecting
+  them is up to you. Do not redistribute what you download unless its licence lets you.
 - **No DRM circumvention.** CasaTube does not decrypt, bypass or remove DRM or any other
   technical protection measure, and will not. Content protected that way is refused. Feature
   requests or pull requests for circumventing such measures will be closed.
@@ -245,10 +246,12 @@ unsure whether something is allowed where you live, ask someone qualified to ans
   the sites you ask it to download from, the services you configure (Telegram, Jellyfin,
   webhooks and anything a plugin you install calls), and GitHub if you turn on yt-dlp
   self-updates. Your browser loads thumbnails straight from the source site while you browse.
-- **Trademarks.** YouTube, Google Drive, Telegram, Vimeo, Vidarro, Voomly, Jellyfin, Plex,
-  CasaOS, Tailscale, Blender and the other names in this repository are trademarks of their
-  respective owners. They appear only to describe compatibility. CasaTube is not affiliated with,
-  endorsed by or sponsored by any of them, nor by the yt-dlp or FFmpeg projects. The films in the
+- **Not affiliated.** CasaTube is not a YouTube product and has no connection to YouTube or
+  Google. YouTube, Google Drive, Dailymotion, Vimeo, Odysee, Telegram, Vidarro, Voomly, Jellyfin,
+  Plex, CasaOS, Tailscale, Blender and the other names in this repository are trademarks of
+  their respective owners. They appear only to describe compatibility. CasaTube is not affiliated
+  with, endorsed by or sponsored by any of them, nor by the yt-dlp or FFmpeg projects, and links
+  to them are not affiliate links. The films in the
   screenshots are [Blender Studio's open movies](https://studio.blender.org/films/), used under
   their Creative Commons licences ([NOTICE](NOTICE)).
 
