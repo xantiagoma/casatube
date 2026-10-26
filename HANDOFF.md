@@ -11,7 +11,10 @@ A self-hosted media downloader that **does not lose your work**. It replaces
 HomeTube, which runs its jobs inside the browser session and loses them when the
 tab closes — measured: 3 of 3 downloads died mid-way.
 
-**Repository**: <https://github.com/xantiagoma/casatube>
+**Repository**: <https://github.com/xantiagoma/casatube> — **public since
+2026-10-26**, with **v0.1.0** released: `ghcr.io/xantiagoma/casatube` (public,
+amd64 + arm64, pulled anonymously and smoke-tested after publishing) and the
+site at <https://me.xantiagoma.com/casatube/>.
 
 📌 **This file is about the code, not about any one server.** The maintainer's
 own deployment — hostnames, the library mount, backups, the CasaOS redeploy —
