@@ -4,6 +4,16 @@
   "private": true,
   "type": "module",
   "description": "Self-hosted media downloader that does not lose your work",
+  "license": "MIT",
+  "author": "Santiago Montoya A.",
+  "homepage": "https://github.com/xantiagoma/casatube",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xantiagoma/casatube.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xantiagoma/casatube/issues"
+  },
   "scripts": {
     "dev": "bun --watch src/server.ts",
     "start": "bun src/server.ts",

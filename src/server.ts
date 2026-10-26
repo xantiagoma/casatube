@@ -18,6 +18,7 @@
  */
 import { Elysia } from "elysia";
 
+import { version } from "../package.json";
 import { CredentialStore, credentialsKeyFromEnv, warnIfUnprotected } from "./core/credentials";
 import { appDbPath, openDb, queueDbPath } from "./core/db";
 import { Worker } from "./worker/worker";
@@ -61,7 +62,10 @@ function apiRoutes(ctx: AppContext) {
       // Useful enough to be worth returning, and none of it is a secret. The
       // cookies file is *not* here: PLAN §12 says credentials are never echoed
       // back through the API, and a path is enough to go looking.
-      version: "0.1.0",
+      // From package.json, so a release tag and what a running server reports
+      // cannot drift apart — the first thing a bug report needs to be true.
+      version,
+      ytdlp: process.env.CASATUBE_YTDLP_PINNED_VERSION ?? null,
       watchers: ctx.watcher.subscribers(),
       providers: ctx.registry.providers().map((provider) => provider.name),
     }))
