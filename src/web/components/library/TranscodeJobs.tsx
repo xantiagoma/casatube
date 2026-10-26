@@ -46,7 +46,7 @@ import {
 
 const TONE_CLASS: Record<Tone, string> = {
   idle: "bg-muted text-muted-foreground ring-border",
-  busy: "bg-primary/10 text-primary ring-primary/25",
+  busy: "bg-info/12 text-info ring-info/25",
   ok: "bg-success/12 text-success ring-success/25",
   warn: "bg-warning/15 text-warning ring-warning/30",
   danger: "bg-destructive/12 text-destructive ring-destructive/25",
@@ -302,7 +302,7 @@ export function FileTranscodes({ rows, jobs }: { rows: TranscodeRow[]; jobs: rea
 export function ConvertingBadge({ count }: { count: number }) {
   if (count === 0) return null;
   return (
-    <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 text-[10px] font-medium text-primary tabular-nums">
+    <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-info/12 px-1.5 text-[10px] font-medium text-info tabular-nums">
       <Loader2 className="size-2.5 animate-spin" aria-hidden />
       {count}
     </span>

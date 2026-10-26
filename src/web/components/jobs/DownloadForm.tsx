@@ -526,6 +526,7 @@ export function DownloadForm({ className }: { className?: string }) {
 
   const queueButton = (
     <Button
+      variant="brand"
       size="lg"
       disabled={url.trim() === "" || enqueue.isPending}
       onClick={() => submit(false)}

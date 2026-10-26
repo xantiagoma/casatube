@@ -87,8 +87,8 @@ function DiskCard({ label, disk, hint }: { label: string; disk: DiskPayload; hin
  * so the state is not decoration, it decides the countdown beside it.
  */
 const SESSION_LOOK: Record<HlsSessionInfo["state"], { label: string; className: string }> = {
-  starting: { label: "Starting", className: "bg-primary/10 text-primary ring-primary/25" },
-  running: { label: "Remuxing", className: "bg-primary/10 text-primary ring-primary/25" },
+  starting: { label: "Starting", className: "bg-info/12 text-info ring-info/25" },
+  running: { label: "Remuxing", className: "bg-info/12 text-info ring-info/25" },
   complete: { label: "Ready", className: "bg-success/12 text-success ring-success/25" },
   failed: { label: "Failed", className: "bg-destructive/12 text-destructive ring-destructive/25" },
 };

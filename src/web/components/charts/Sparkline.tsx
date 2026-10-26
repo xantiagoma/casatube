@@ -57,7 +57,7 @@ interface SparklineProps {
   filled?: boolean;
 }
 
-export function Sparkline({ values, className, tone = "text-primary", filled = true }: SparklineProps) {
+export function Sparkline({ values, className, tone = "text-info", filled = true }: SparklineProps) {
   const id = useId();
   const width = 120;
   const height = 36;
@@ -115,7 +115,7 @@ export interface TrendPoint {
 export function TrendChart({
   points,
   format,
-  tone = "text-primary",
+  tone = "text-info",
   height = 160,
 }: {
   points: TrendPoint[];

@@ -17,7 +17,7 @@ import { formatCount } from "../../data/format";
 
 const TONE_CLASS: Record<Tone, string> = {
   idle: "bg-muted text-muted-foreground ring-border",
-  busy: "bg-primary/10 text-primary ring-primary/25",
+  busy: "bg-info/12 text-info ring-info/25",
   ok: "bg-success/12 text-success ring-success/25",
   warn: "bg-warning/15 text-warning ring-warning/30",
   danger: "bg-destructive/12 text-destructive ring-destructive/25",
@@ -66,16 +66,17 @@ export function PriorityMark({ priority }: { priority: Priority }) {
  */
 export function ProgressBar({
   percent,
-  tone = "primary",
+  tone = "info",
   indeterminate = false,
   className,
 }: {
   percent: number;
-  tone?: "primary" | "success" | "destructive" | "warning";
+  tone?: "info" | "primary" | "success" | "destructive" | "warning";
   indeterminate?: boolean;
   className?: string;
 }) {
   const fill = {
+    info: "bg-info",
     primary: "bg-primary",
     success: "bg-success",
     destructive: "bg-destructive",

@@ -29,7 +29,7 @@ const ICON = {
 } as const;
 
 const TONE = {
-  info: "text-primary",
+  info: "text-info",
   success: "text-success",
   warning: "text-warning",
   error: "text-destructive",

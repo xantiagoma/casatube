@@ -109,7 +109,7 @@ export function ActiveDownloads({ live }: { live: boolean }) {
           aria-label={`${activity.count} download${activity.count === 1 ? "" : "s"} in progress`}
         >
           <span className="relative flex size-5 items-center justify-center">
-            <Loader2 className="size-4.5 animate-spin text-primary" aria-hidden />
+            <Loader2 className="size-4.5 animate-spin text-info" aria-hidden />
           </span>
           <span className="text-sm font-medium tabular-nums">
             {activity.soloPercent !== null ? formatPercent(activity.soloPercent) : activity.count}

@@ -274,7 +274,7 @@ export function JobTable({
                   <ProgressBar
                     percent={progress.percent}
                     indeterminate={progress.indeterminate}
-                    tone={job.status === "failed" ? "destructive" : job.status === "done" ? "success" : "primary"}
+                    tone={job.status === "failed" ? "destructive" : job.status === "done" ? "success" : "info"}
                   />
                   <span className="mt-1 flex justify-between gap-2 text-[11px] whitespace-nowrap text-muted-foreground tabular-nums">
                     <span>{progress.indeterminate ? "working" : formatPercent(progress.percent)}</span>
@@ -319,7 +319,7 @@ export function JobList({ jobs }: { jobs: Job[] }) {
                 <ProgressBar
                   percent={progress.percent}
                   indeterminate={progress.indeterminate}
-                  tone={job.status === "failed" ? "destructive" : job.status === "done" ? "success" : "primary"}
+                  tone={job.status === "failed" ? "destructive" : job.status === "done" ? "success" : "info"}
                   className="flex-1"
                 />
                 <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">

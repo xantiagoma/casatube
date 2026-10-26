@@ -27,7 +27,7 @@ const LABEL: Record<StageName, string> = {
 
 const PIP: Record<StageStatus, string> = {
   pending: "bg-muted-foreground/25",
-  running: "bg-primary animate-pulse",
+  running: "bg-info animate-pulse",
   done: "bg-success",
   failed: "bg-destructive",
   skipped: "bg-muted-foreground/40",
@@ -71,7 +71,7 @@ const ICON: Record<StageStatus, typeof Check> = {
 
 const TEXT: Record<StageStatus, string> = {
   pending: "text-muted-foreground",
-  running: "text-primary",
+  running: "text-info",
   done: "text-success",
   failed: "text-destructive",
   skipped: "text-muted-foreground",
@@ -98,7 +98,7 @@ export function StagePipeline({ stages }: { stages: Stage[] }) {
             <span
               className={cn(
                 "grid size-6 shrink-0 place-items-center rounded-md border text-[11px] font-semibold tabular-nums",
-                status === "running" && "border-primary/40 bg-primary/10 text-primary",
+                status === "running" && "border-info/40 bg-info/10 text-info",
                 status === "done" && "border-success/40 bg-success/10 text-success",
                 status === "failed" && "border-destructive/40 bg-destructive/10 text-destructive",
                 (status === "pending" || status === "skipped") && "text-muted-foreground",
