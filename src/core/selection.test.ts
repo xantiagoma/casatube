@@ -893,6 +893,39 @@ describe("resolutionOf", () => {
   test("a square video is its own resolution", () => {
     expect(resolutionOf({ id: "a", width: 1080, height: 1080 })).toBe(1080);
   });
+
+  test("🔴 cinema is labelled by the screen it fills, not by its shorter side", () => {
+    // Tears of Steel's ladder read "800p, 534p, 356p" under the shorter side —
+    // in the form, and in the README's screenshot of it.
+    expect(resolutionOf({ id: "a", width: 1920, height: 800 })).toBe(1080);
+    expect(resolutionOf({ id: "b", width: 1280, height: 534 })).toBe(720);
+    expect(resolutionOf({ id: "c", width: 854, height: 356 })).toBe(480);
+    expect(resolutionOf({ id: "d", width: 4096, height: 1714 })).toBe(2160);
+    expect(resolutionOf({ id: "e", width: 2048, height: 858 })).toBe(1080);
+  });
+
+  test("4:3 and 16:10 land on the step they are sold as", () => {
+    expect(resolutionOf({ id: "a", width: 1440, height: 1080 })).toBe(1080);
+    expect(resolutionOf({ id: "b", width: 640, height: 480 })).toBe(480);
+    expect(resolutionOf({ id: "c", width: 1280, height: 800 })).toBe(720);
+  });
+
+  test("a size far from every step is reported as computed, not forced onto one", () => {
+    // 1250 is 16% above 1080 and 13% below 1440 — not either of them.
+    expect(resolutionOf({ id: "a", width: 1250, height: 1250 })).toBe(1250);
+  });
+
+  test("one side alone is not snapped — it could be 1920×800 or 1280×800", () => {
+    expect(resolutionOf({ id: "a", height: 800 })).toBe(800);
+  });
+});
+
+describe("selectVideoFormat with cinema aspect ratios", () => {
+  test("a 1920×800 film is what a 1080 ceiling admits, and a 720 ceiling does not", () => {
+    const film = [{ id: "v", width: 1920, height: 800 }];
+    expect(selectVideoFormat(film, 1080, "auto")?.id).toBe("v");
+    expect(selectVideoFormat(film, 720, "auto")).toBeUndefined();
+  });
 });
 
 describe("selectVideoFormat with portrait video", () => {
