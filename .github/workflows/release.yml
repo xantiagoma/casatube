@@ -60,11 +60,11 @@ jobs:
       skip: ${{ steps.plan.outputs.skip }}
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -160,13 +160,13 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.plan.outputs.ref }}
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -180,7 +180,7 @@ jobs:
       # Pushed by digest only. The tags go on in `merge`, once every
       # architecture exists, so a tag never points at a half-built release.
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -202,7 +202,7 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
 
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@v6
         with:
           path: /tmp/digests
           key: digests-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.slug.outputs.arch }}
@@ -219,13 +219,13 @@ jobs:
       # a cache entry's version, so restoring arm64 to another directory was a
       # silent miss ("planned 2, found 1"). Two restores into one directory
       # simply merge.
-      - uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@v6
         with:
           path: /tmp/digests
           key: digests-${{ github.run_id }}-${{ github.run_attempt }}-amd64
           fail-on-cache-miss: true
 
-      - uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@v6
         with:
           path: /tmp/digests
           key: digests-${{ github.run_id }}-${{ github.run_attempt }}-arm64
@@ -241,9 +241,9 @@ jobs:
           echo "planned $planned, found $found"
           [ "$planned" = "$found" ]
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -279,7 +279,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
