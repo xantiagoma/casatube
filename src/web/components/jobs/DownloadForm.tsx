@@ -70,6 +70,8 @@ import {
   type ProbeResult,
 } from "../../data/queries";
 import { MediaPreview } from "../media/MediaPreview";
+import { ApiRequestError } from "../../data/client";
+import { ExplainedError } from "../common/ExplainedError";
 import { AnalysisDrawer } from "./AnalysisDrawer";
 import type { Choices } from "./choices";
 import { DestinationPicker } from "./DestinationPicker";
@@ -592,7 +594,11 @@ export function DownloadForm({ className }: { className?: string }) {
             <p className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
               <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
               <span>
-                {probe.error.message}
+                {probe.error instanceof ApiRequestError && probe.error.failure.detail ? (
+                  <ExplainedError text={probe.error.failure.detail} sentence={probe.error.message} />
+                ) : (
+                  probe.error.message
+                )}
                 <span className="mt-1 block text-xs text-muted-foreground">
                   Looking is optional. You can still queue this URL — the worker analyzes it again anyway.
                 </span>

@@ -38,6 +38,7 @@ import { PriorityMark, StatusPill } from "../common/Bits";
 import { isTerminal } from "../status";
 import { PausedMark } from "./JobTable";
 import { FileStateBadge, unknownReasonText } from "./JobFilters";
+import { ExplainedError } from "../common/ExplainedError";
 import { StagePipeline } from "./StageTrack";
 import type { ResolvedFileState } from "./job-order";
 import { formatLabel, jobTitle } from "./job-view";
@@ -204,7 +205,11 @@ export function JobInspector({
                   <TriangleAlert className="size-3.5" aria-hidden />
                   Last error
                 </p>
-                <p className="mt-1 text-xs break-words text-muted-foreground">{job.error}</p>
+                <ExplainedError
+                  text={job.error}
+                  url={job.url}
+                  className="mt-1 block text-xs break-words text-muted-foreground"
+                />
                 {job.attempts < job.maxAttempts && !isTerminal(job.status) ? (
                   <p className="mt-1 text-xs text-muted-foreground">
                     Retrying ({job.attempts}/{job.maxAttempts}) {job.notBefore ? formatUntil(job.notBefore) : ""}.

@@ -14,6 +14,7 @@
 import { Check, CircleDashed, Loader2, SkipForward, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { explainFailure } from "../../../core/explain";
 import { STAGE_ORDER, type Stage, type StageName, type StageStatus } from "../../../core/types";
 
 const LABEL: Record<StageName, string> = {
@@ -110,7 +111,13 @@ export function StagePipeline({ stages }: { stages: Stage[] }) {
               <p className={cn("truncate text-sm", status === "pending" ? "text-muted-foreground" : "font-medium")}>
                 {LABEL[name]}
               </p>
-              {stage?.error ? <p className="truncate text-xs text-destructive">{stage.error}</p> : null}
+              {/* One line here, so the sentence alone; the raw text is the tooltip
+                  and is in full under "Last error". */}
+              {stage?.error ? (
+                <p className="truncate text-xs text-destructive" title={stage.error}>
+                  {explainFailure(stage.error) ?? stage.error}
+                </p>
+              ) : null}
             </div>
             <span className={cn("flex shrink-0 items-center gap-1.5 text-xs", TEXT[status])}>
               {WORD[status]}

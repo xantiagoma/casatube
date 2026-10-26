@@ -42,6 +42,8 @@ export interface ApiFailure {
   tag: string;
   message: string;
   retryable: boolean;
+  /** The downloader's own text, when `message` is a plain-language version of it. */
+  detail?: string;
 }
 
 /**
@@ -63,6 +65,7 @@ export function normalise<T>(response: { data: T | null; error: unknown }): Acti
           tag: String(failure.tag ?? "Unexpected"),
           message: String(failure.message ?? "Something went wrong."),
           retryable: failure.retryable === true,
+          ...(typeof failure.detail === "string" ? { detail: failure.detail } : {}),
         },
       };
     }

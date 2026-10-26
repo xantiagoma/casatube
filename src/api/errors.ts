@@ -12,6 +12,7 @@
  */
 import { status } from "elysia";
 import type { ElysiaCustomStatusResponse } from "elysia/error";
+import { explainFailure } from "../core/explain";
 
 /** What every failing endpoint answers with. One shape, so the client has one branch. */
 export interface ApiError {
@@ -21,6 +22,12 @@ export interface ApiError {
   message: string;
   /** Whether trying the same request again could plausibly work. */
   retryable: boolean;
+  /**
+   * The downloader's own text, when `message` is a plain-language version of
+   * it. For a bug report and a "Technical detail" disclosure — not for display
+   * first.
+   */
+  detail?: string;
 }
 
 /**
@@ -107,11 +114,11 @@ function describe(error: Taggedish): string {
     case "UnsupportedUrl":
       return "No provider recognises this URL.";
     case "ProbeFailed":
-      return `Could not read this video's details: ${String(error.detail ?? "unknown reason")}`;
+      return explained(error) ?? `Could not read this video's details: ${String(error.detail ?? "unknown reason")}`;
     case "FetchFailed":
-      return `The download failed: ${String(error.detail ?? "unknown reason")}`;
+      return explained(error) ?? `The download failed: ${String(error.detail ?? "unknown reason")}`;
     case "Blocked":
-      return `The source refused the request: ${String(error.detail ?? "unknown reason")}`;
+      return explained(error) ?? `The source refused the request: ${String(error.detail ?? "unknown reason")}`;
     case "RateLimited":
       return "The source is rate-limiting us. Waiting before trying again.";
     /**
@@ -202,11 +209,20 @@ function describe(error: Taggedish): string {
 
 export function toApiError(error: { _tag: string }): ApiError {
   const tagged = error as Taggedish;
-  return {
+  const body: ApiError = {
     tag: tagged._tag,
     message: describe(tagged),
     retryable: RETRYABLE_TAGS.has(tagged._tag),
   };
+  // When the message is a translation, the original rides along.
+  if (explained(tagged) !== null) body.detail = String(tagged.detail);
+  return body;
+}
+
+/** A plain sentence for a downloader's failure text, when there is one. See `core/explain.ts`. */
+function explained(error: Taggedish): string | null {
+  if (typeof error.detail !== "string") return null;
+  return explainFailure(error.detail, typeof error.url === "string" ? error.url : undefined);
 }
 
 /** Every status this boundary can produce. Kept as literals — see `fail`. */
