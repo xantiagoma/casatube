@@ -1210,13 +1210,21 @@ export function createYtdlpProvider(options: YtdlpOptions = {}): Provider {
     const progress = new ProgressAccumulator();
     const stderr: string[] = [];
     let filePath: string | null = null;
+    /** Whether any media file has finished arriving. See the postprocess branch. */
+    let mediaArrived = false;
 
     const handleLine = (line: string, stream: "out" | "err") => {
       const download = parseDownloadLine(line);
       if (download) {
         const update = progress.update(download);
-        if (update) ctx.onProgress(update);
-        else if (download.status === "finished") ctx.log(`sidecar: ${download.filename}`);
+        if (update) {
+          if (download.status === "finished") mediaArrived = true;
+          // Every byte tick says which stage it is, so a job that was briefly
+          // "processing" goes back to "downloading" when bytes flow again.
+          ctx.onProgress({ ...update, stage: "download" });
+        } else if (download.status === "finished") {
+          ctx.log(`sidecar: ${download.filename}`);
+        }
         return;
       }
       const post = parsePostProcessLine(line);
@@ -1224,9 +1232,14 @@ export function createYtdlpProvider(options: YtdlpOptions = {}): Provider {
         // The whole reason stderr is read at all: without this, the minutes
         // ffmpeg spends merging look like a dead process.
         ctx.log(`postprocess ${post.postprocessor ?? "?"}: ${post.status}`);
-        // `stage` is what tells the worker this is merging, not downloading: a
-        // full bar with "Downloading" beside it read as a stuck job.
-        ctx.onProgress({ ...progress.snapshot(), percent: 100, stage: "postprocess" });
+        // `stage` tells the worker this is merging, not downloading: a full bar
+        // with "Downloading" beside it read as a stuck job.
+        //
+        // 🔴 Only once media has arrived. SponsorBlock and ThumbnailsConvertor
+        // are postprocessors too and run *before* the download; treating them
+        // as merging marked every YouTube job "processing" for its whole
+        // download, with a live speed beside it and the bar jumping to 100%.
+        if (mediaArrived) ctx.onProgress({ ...progress.snapshot(), percent: 100, stage: "postprocess" });
         return;
       }
       const printed = parseFilePathLine(line);

@@ -548,7 +548,8 @@ async function moveFile(from: string, target: string): Promise<void> {
   }
 }
 
-function patchOf(p: ProgressUpdate) {
+/** Exported for its test: which status a progress reading implies is the subtle part. */
+export function patchOf(p: ProgressUpdate) {
   const patch = {
     progress: p.percent !== undefined ? Math.round(p.percent) : undefined,
     doneBytes: p.doneBytes, totalBytes: p.totalBytes,
@@ -560,5 +561,8 @@ function patchOf(p: ProgressUpdate) {
   if (p.stage === "postprocess") {
     return { ...patch, status: statusForStage("postprocess"), speed: null, eta: null };
   }
+  // Bytes are flowing: whatever a postprocessor said a moment ago, this is
+  // downloading again.
+  if (p.stage === "download") return { ...patch, status: statusForStage("download") };
   return patch;
 }

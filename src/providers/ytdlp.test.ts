@@ -1140,13 +1140,42 @@ test("🔴 a merge after the bytes are in is reported as postprocess, not as mor
     const file = join(dir, "A Video.mkv");
     await writeFile(file, "x");
     const { spawn } = fakeSpawner({
-      stdout: [`CT-FILE|${file}`],
-      stderr: ["CT-PP|started|Merger"],
+      stdout: [
+        "CT-DL|downloading|500|1000|NA|100|5|137|v.mp4",
+        "CT-DL|finished|1000|1000|NA|NA|NA|137|v.mp4",
+        "CT-PP|started|Merger",
+        `CT-FILE|${file}`,
+      ],
     });
     const ctx = fakeContext(dir);
     await createYtdlpProvider({ spawn }).fetch(plan(), ctx);
-    const merging = ctx.updates.find((update) => update.stage === "postprocess");
-    expect(merging?.percent).toBe(100);
+    expect(ctx.updates.filter((u) => u.percent !== undefined && u.percent < 100).every((u) => u.stage === "download")).toBe(true);
+    expect(ctx.updates.at(-1)).toMatchObject({ stage: "postprocess", percent: 100 });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("🔴 postprocessors that run before the download are not the merge", async () => {
+  // SponsorBlock and ThumbnailsConvertor run first. Treating them as merging
+  // marked every YouTube job "processing" for its whole download, with a live
+  // speed beside it and the bar jumping to 100% and back.
+  const dir = await mkdtemp(join(tmpdir(), "casatube-"));
+  try {
+    const file = join(dir, "A Video.mkv");
+    await writeFile(file, "x");
+    const { spawn } = fakeSpawner({
+      stdout: [
+        "CT-PP|started|SponsorBlock",
+        "CT-PP|finished|ThumbnailsConvertor",
+        "CT-DL|downloading|500|1000|NA|100|5|137|v.mp4",
+        `CT-FILE|${file}`,
+      ],
+    });
+    const ctx = fakeContext(dir);
+    await createYtdlpProvider({ spawn }).fetch(plan(), ctx);
+    expect(ctx.updates.some((u) => u.stage === "postprocess")).toBe(false);
+    expect(ctx.updates.some((u) => u.percent === 100)).toBe(false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

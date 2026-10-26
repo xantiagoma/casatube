@@ -7,7 +7,7 @@
  * is proven the only way that means anything: by actually stopping everything,
  * closing the database files, and starting again.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile, mkdir, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +15,7 @@ import { Result } from "better-result";
 import { openDb, closeDb } from "../core/db";
 import { openJobQueue, shutdownEmbeddedQueue, type EnqueueInput, type JobQueue } from "../core/queue";
 import { createRegistry } from "../providers/registry";
-import { Worker } from "./worker";
+import { Worker, patchOf } from "./worker";
 import { createPluginRuntime, type PluginRuntime } from "../core/plugin-runtime";
 import { DEFAULT_PREFERENCES } from "../core/types";
 import type { Job, Provider } from "../core/types";
@@ -569,4 +569,17 @@ test("suffix is the default, because guessing 'replace' wrong destroys a file", 
 
   await queue.close();
   closeDb(db);
+});
+
+describe("patchOf", () => {
+  test("🔴 a byte tick after a postprocessor puts the job back to downloading", () => {
+    // Without this, one early postprocessor left a job "processing" for the
+    // whole download, with a live speed beside it.
+    expect(patchOf({ stage: "postprocess", percent: 100 })).toMatchObject({ status: "processing", speed: null });
+    expect(patchOf({ stage: "download", percent: 40, speed: 1_000 })).toMatchObject({ status: "downloading", speed: 1_000 });
+  });
+
+  test("a reading that names no stage does not touch the status", () => {
+    expect(patchOf({ percent: 40 })).not.toHaveProperty("status");
+  });
 });
