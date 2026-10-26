@@ -23,7 +23,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDockedPanels } from "@/hooks/use-media-query";
 import { useSetSearch } from "@/hooks/use-set-search";
-import { EmptyState, ErrorState, PageNote, StatTile } from "../components/common/Bits";
+import { EmptyState, ErrorState, Pager, StatTile } from "../components/common/Bits";
 import { BatchAdd } from "../components/jobs/BatchAdd";
 import { JobInspector } from "../components/jobs/JobInspector";
 import { FileFilterControl, FileStateBadge, SearchBox, SortControl, StatusFilter } from "../components/jobs/JobFilters";
@@ -34,7 +34,7 @@ import { PageHeader } from "../components/layout/AppShell";
 import { formatCount } from "../data/format";
 import { useJob, useJobFileStates, useJobList } from "../data/queries";
 import { useJobStream } from "../data/stream";
-import type { QueueFilter, QueueSearch } from "../search-params";
+import { JOB_PAGE_SIZE, resetsPage, type QueueFilter, type QueueSearch } from "../search-params";
 import type { JobStatus } from "../../core/types";
 
 /**
@@ -68,6 +68,8 @@ export function Queue() {
       q: search.q,
       sort: search.sort,
       order: search.order,
+      limit: JOB_PAGE_SIZE,
+      offset: ((search.page ?? 1) - 1) * JOB_PAGE_SIZE,
     },
     stream.connection === "live",
   );
@@ -82,7 +84,8 @@ export function Queue() {
    * alias — has no implicit index signature.
    */
   const setSearch = useSetSearch<QueueSearch & Record<string, unknown>>();
-  const patch = (fields: Partial<QueueSearch>): void => setSearch((current) => ({ ...current, ...fields }));
+  const patch = (fields: Partial<QueueSearch>): void =>
+    setSearch((current) => ({ ...current, ...fields, ...(resetsPage(fields) ? { page: undefined } : {}) }));
 
   const page = jobs.data;
   const all = page?.jobs ?? [];
@@ -248,7 +251,14 @@ export function Queue() {
                       badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
                     />
                   </div>
-                  <PageNote shown={shown.length} total={total} limit={page?.limit ?? 200} noun="jobs" />
+                  <Pager
+                    shown={shown.length}
+                    total={total}
+                    limit={JOB_PAGE_SIZE}
+                    page={search.page ?? 1}
+                    noun="jobs"
+                    onPage={(next) => patch({ page: next > 1 ? next : undefined })}
+                  />
                 </>
               )}
             </CardContent>

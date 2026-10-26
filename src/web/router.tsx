@@ -39,6 +39,7 @@ import {
   SOURCE_KINDS,
   oneOf,
   optionalOneOf,
+  pageNumber,
   text,
   type DashboardSearch,
   type DownloadsSearch,
@@ -73,6 +74,7 @@ const downloadsRoute = createRoute({
     file: oneOf(search.file, FILE_FILTERS, "any"),
     ...(text(search.q) !== undefined ? { q: text(search.q)! } : {}),
     ...(text(search.job) !== undefined ? { job: text(search.job)! } : {}),
+    ...(pageNumber(search.page) !== undefined ? { page: pageNumber(search.page)! } : {}),
   }),
   component: Downloads,
 });
@@ -88,6 +90,7 @@ const queueRoute = createRoute({
     file: oneOf(search.file, FILE_FILTERS, "any"),
     ...(text(search.q) !== undefined ? { q: text(search.q)! } : {}),
     ...(text(search.job) !== undefined ? { job: text(search.job)! } : {}),
+    ...(pageNumber(search.page) !== undefined ? { page: pageNumber(search.page)! } : {}),
   }),
   component: Queue,
 });

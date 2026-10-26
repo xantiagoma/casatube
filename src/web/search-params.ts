@@ -30,6 +30,26 @@ export function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
+/** A 1-based page number past the first, or absent: page 1 is the default and stays out of the URL. */
+export function pageNumber(value: unknown): number | undefined {
+  const n = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+  return Number.isInteger(n) && n > 1 ? n : undefined;
+}
+
+/** Rows per page on the job screens. */
+export const JOB_PAGE_SIZE = 100;
+
+/**
+ * The fields that do *not* change which rows are listed — picking a job, or a
+ * tab of its inspector. Changing anything else starts again at page 1.
+ */
+export const KEEPS_PAGE = new Set(["job", "panel", "page"]);
+
+/** Whether a change to the search moves the list, so the page must go back to 1. */
+export function resetsPage(fields: object): boolean {
+  return Object.keys(fields).some((key) => !KEEPS_PAGE.has(key));
+}
+
 export const RANGES = ["24h", "7d", "30d"] as const satisfies readonly StatsRange[];
 
 export interface DashboardSearch {
@@ -46,6 +66,8 @@ export type DownloadTab = (typeof DOWNLOAD_TABS)[number];
 export interface DownloadsSearch {
   tab: DownloadTab;
   q?: string;
+  /** 1-based; absent is page 1. */
+  page?: number;
   job?: string;
   sort: JobSort;
   order: SortOrder;
@@ -69,6 +91,8 @@ export type QueueFilter = (typeof QUEUE_FILTERS)[number];
 export interface QueueSearch {
   status: QueueFilter;
   q?: string;
+  /** 1-based; absent is page 1. */
+  page?: number;
   sort: JobSort;
   order: SortOrder;
   /**

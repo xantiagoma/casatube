@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/button";
 import { useDockedPanels } from "@/hooks/use-media-query";
 import { useSetSearch } from "@/hooks/use-set-search";
 import { Sparkline } from "../components/charts/Sparkline";
-import { EmptyState, ErrorState, PageNote, StatTile } from "../components/common/Bits";
+import { EmptyState, ErrorState, Pager, StatTile } from "../components/common/Bits";
 import { JobInspector } from "../components/jobs/JobInspector";
 import { FileFilterControl, FileStateBadge, SearchBox, SortControl } from "../components/jobs/JobFilters";
 import { JobList, JobTable } from "../components/jobs/JobTable";
@@ -39,7 +39,7 @@ import { formatBytes, formatCount, formatSpeed } from "../data/format";
 import { useJob, useJobFileStates, useJobList, useJobs } from "../data/queries";
 import { useAnalytics } from "../data/stats";
 import { useJobStream } from "../data/stream";
-import { DOWNLOAD_TABS, type DownloadTab, type DownloadsSearch } from "../search-params";
+import { DOWNLOAD_TABS, JOB_PAGE_SIZE, resetsPage, type DownloadTab, type DownloadsSearch } from "../search-params";
 
 const TAB_LABEL: Record<DownloadTab, string> = {
   active: "Active",
@@ -58,7 +58,14 @@ export function Downloads() {
   // this request and the badge on a row cannot disagree about what "scheduled"
   // means.
   const jobs = useJobList(
-    { bucket: search.tab, q: search.q, sort: search.sort, order: search.order },
+    {
+      bucket: search.tab,
+      q: search.q,
+      sort: search.sort,
+      order: search.order,
+      limit: JOB_PAGE_SIZE,
+      offset: ((search.page ?? 1) - 1) * JOB_PAGE_SIZE,
+    },
     stream.connection === "live",
   );
   // The live queue, for the "right now" numbers. One entry, pushed by the
@@ -97,7 +104,7 @@ export function Downloads() {
   // not satisfy it. Same workaround as `screens/Library.tsx`.
   const setSearch = useSetSearch<DownloadsSearch & Record<string, unknown>>();
   const patch = (fields: Partial<DownloadsSearch>): void =>
-    setSearch((current) => ({ ...current, ...fields }));
+    setSearch((current) => ({ ...current, ...fields, ...(resetsPage(fields) ? { page: undefined } : {}) }));
 
   /**
    * ⚠️ The only filtering left here, and it has to be: what became of the file
@@ -301,11 +308,13 @@ export function Downloads() {
                       badge={(job) => <FileStateBadge state={fileStateOf(job, fileIndex)} />}
                     />
                   </div>
-                  <PageNote
+                  <Pager
                     shown={shown.length}
                     total={total}
-                    limit={page?.limit ?? 200}
+                    limit={JOB_PAGE_SIZE}
+                    page={search.page ?? 1}
                     noun="downloads"
+                    onPage={(next) => patch({ page: next > 1 ? next : undefined })}
                   />
                 </>
               )}

@@ -7,8 +7,9 @@
  * is the bug this file exists to make impossible.
  */
 import type { ReactNode } from "react";
-import { AlertTriangle, ArrowDown, ArrowUp, Inbox, Minus } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Inbox, Minus } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { JobStatus, Priority } from "../../../core/types";
@@ -181,11 +182,20 @@ export function ErrorState({ error, retry, what }: { error: Error | null; retry?
  * genuinely the top — what remains is that the *rest* is not reachable by
  * scrolling, and that has to be said rather than left to be discovered.
  */
-export function PageNote({
+/**
+ * Which slice of the list this is, and the way to the next one.
+ *
+ * 🔴 It used to be a note: "showing 200 of 3,412 — narrow the search to reach
+ * the rest". The server always took `offset`; nothing on screen sent one, so
+ * row 201 was reachable only by already knowing what to search for.
+ */
+export function Pager({
   shown,
   total,
   limit,
+  page,
   noun,
+  onPage,
 }: {
   /** Rows actually on screen, after any filter the browser applies. */
   shown: number;
@@ -193,14 +203,35 @@ export function PageNote({
   total: number;
   /** The page size that was asked for. */
   limit: number;
+  /** 1-based. */
+  page: number;
   noun: string;
+  onPage(page: number): void;
 }) {
-  if (total <= limit) return null;
+  const pages = Math.max(1, Math.ceil(total / limit));
+  if (pages <= 1 && page <= 1) return null;
+  const first = (page - 1) * limit + 1;
+  const last = Math.min(total, page * limit);
   return (
-    <p className="px-4 pt-1 text-xs text-muted-foreground">
-      Showing {formatCount(shown)} of {formatCount(total)} {noun}. The list is sorted and searched by the
-      server, so the top of it is the real top — narrow the search to reach the rest.
-    </p>
+    <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 text-xs text-muted-foreground">
+      <span className="tabular-nums">
+        {first > total ? `Nothing on page ${page}` : `${formatCount(first)}–${formatCount(last)} of ${formatCount(total)} ${noun}`}
+        {shown < Math.max(0, last - first + 1) ? ` · ${formatCount(shown)} shown after the file filter` : ""}
+      </span>
+      <span className="flex items-center gap-2">
+        <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>
+          <ChevronLeft className="size-3.5" aria-hidden />
+          Previous
+        </Button>
+        <span className="tabular-nums">
+          {page} / {pages}
+        </span>
+        <Button variant="outline" size="sm" disabled={page >= pages} onClick={() => onPage(page + 1)}>
+          Next
+          <ChevronRight className="size-3.5" aria-hidden />
+        </Button>
+      </span>
+    </div>
   );
 }
 
