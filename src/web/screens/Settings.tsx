@@ -33,7 +33,8 @@
  * browse the library, and that stops being acceptable the moment CasaTube is
  * exposed beyond it. Hiding the section would hide the decision.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearch } from "@tanstack/react-router";
 import {
   BookOpen,
   CircleAlert,
@@ -73,6 +74,7 @@ import { useSettings } from "../data/settings";
 import { useHealth, useStorage } from "../data/stats";
 import { useTheme, type ThemeChoice } from "../data/theme";
 import type { SettingGroupId } from "../../core/app-settings";
+import type { SettingsSection } from "../search-params";
 
 /** A read-only field, with the reason it is read-only attached once per card. */
 function ReadOnly({ label, value }: { label: string; value: string }) {
@@ -596,7 +598,32 @@ function AuthCard() {
  * cards asking six times would each know only about themselves, and the
  * "two changes are waiting" line could not be written at all.
  */
+/**
+ * Where each `?section=` lands.
+ *
+ * 🔴 The router validated `section` and nothing read it, so "Configure in
+ * Settings → Plugins" opened the page at the top with Plugins a long scroll
+ * away in the third column. Each section is now an anchor, and arriving with
+ * one scrolls to it.
+ */
+function useScrollToSection(section: SettingsSection | undefined, ready: boolean): void {
+  useEffect(() => {
+    if (section === undefined || !ready) return;
+    document.getElementById(`settings-${section}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [section, ready]);
+}
+
+/** An anchor for `?section=`, offset so the sticky header does not cover it. */
+function Anchor({ section, children }: { section: SettingsSection; children: React.ReactNode }) {
+  return (
+    <div id={`settings-${section}`} className="scroll-mt-20">
+      {children}
+    </div>
+  );
+}
+
 export function Settings() {
+  const { section } = useSearch({ from: "/settings" });
   const settings = useSettings();
   const snapshot = settings.data ?? null;
   const rows = snapshot?.settings ?? [];
@@ -606,6 +633,8 @@ export function Settings() {
     const group = snapshot?.groups.find((candidate) => candidate.id === id);
     return group ? <SettingsGroupCard group={group} settings={rows} footer={footer} /> : null;
   };
+
+  useScrollToSection(section, !settings.isPending);
 
   return (
     <>
@@ -630,22 +659,36 @@ export function Settings() {
               </CardContent>
             </Card>
           ) : null}
-          {groupCard("downloads", <DefaultsFootnote />)}
+          <Anchor section="downloads">{groupCard("downloads", <DefaultsFootnote />)}</Anchor>
           {groupCard("server")}
           {groupCard("library")}
         </div>
         <div className="space-y-4">
           {groupCard("playback")}
           {groupCard("thumbnails")}
-          <PathsCard />
-          {groupCard("notifications")}
-          <NotificationsCard />
+          <Anchor section="storage">
+            <PathsCard />
+          </Anchor>
+          <Anchor section="notifications">
+            <div className="space-y-4">
+              {groupCard("notifications")}
+              <NotificationsCard />
+            </div>
+          </Anchor>
         </div>
         <div className="space-y-4">
-          <ThemeCard />
-          <SystemCard />
-          <CredentialsCard />
-          <PluginsCard />
+          <Anchor section="general">
+            <div className="space-y-4">
+              <ThemeCard />
+              <SystemCard />
+            </div>
+          </Anchor>
+          <Anchor section="security">
+            <CredentialsCard />
+          </Anchor>
+          <Anchor section="plugins">
+            <PluginsCard />
+          </Anchor>
           <AuthCard />
         </div>
       </div>
