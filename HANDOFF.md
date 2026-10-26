@@ -132,6 +132,12 @@ version does not. So the latest release is rebuilt with the newest yt-dlp under 
 overwritten with different bytes, and a combination that exists already is
 skipped.
 
+The project site, <https://me.xantiagoma.com/casatube/>, is `site/index.html`
+assembled with the logo and screenshots by `scripts/pages-build.sh` and deployed
+by `pages.yml` — only from a public repository, since Pages on a private one
+still publishes a public site. Owner, once: Settings → Pages → Source: GitHub
+Actions.
+
 To cut a release: bump `version` in `package.json` (the workflow refuses a tag
 that disagrees with it — `/api/health` reports that version), add a section to
 `CHANGELOG.md`, commit, then `git tag vX.Y.Z && git push --tags`.

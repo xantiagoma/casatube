@@ -1,0 +1,91 @@
+name: Pages
+
+# Publishes the project site (site/index.html plus the logo and screenshots
+# from docs/) to GitHub Pages:
+#
+#   https://me.xantiagoma.com/casatube/
+#
+# The site is assembled by scripts/pages-build.sh, so it can be checked locally
+# in dist/pages/ before it is pushed.
+#
+# Prerequisite (owner, once, after the repository is public):
+# Settings → Pages → Source: "GitHub Actions".
+#
+# 🔴 Deploys only from a public repository. Pages on a private one still
+# publishes a public site, which would put the project online before the
+# repository itself is.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - docs/brand/**
+      - docs/screenshots/**
+      - src/web/assets/**
+      - scripts/pages-build.sh
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time; never cancel one that is in progress.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble the site
+        run: sh scripts/pages-build.sh dist/pages
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/pages
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  verify:
+    # What is served must be what was built: the page, and every asset it
+    # references, byte for byte.
+    needs: deploy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch and compare every published file
+        run: |
+          sh scripts/pages-build.sh "$RUNNER_TEMP/site" >/dev/null
+          base=https://me.xantiagoma.com/casatube
+          cd "$RUNNER_TEMP/site"
+          for f in $(find . -type f ! -name .nojekyll | sort); do
+            url="$base/${f#./}"
+            # The query string skips the Pages CDN cache; the loop covers
+            # propagation right after the deployment.
+            ok=false
+            for attempt in 1 2 3 4 5 6; do
+              if curl -fsSL -o "$RUNNER_TEMP/fetched" "$url?run=$GITHUB_RUN_ID-$attempt" &&
+                cmp -s "$f" "$RUNNER_TEMP/fetched"; then
+                ok=true
+                break
+              fi
+              sleep 20
+            done
+            "$ok" || { echo "::error::$url is missing or differs from the built file"; exit 1; }
+            echo "ok $url"
+          done

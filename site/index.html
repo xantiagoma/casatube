@@ -1,0 +1,386 @@
+<!doctype html>
+<!-- The GitHub Pages site, at https://me.xantiagoma.com/casatube/.
+     Assembled by scripts/pages-build.sh, which copies the logo and the
+     screenshots in from docs/ so they are never duplicated in git.
+     No JavaScript, no external requests: the CSP below says so. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>CasaTube — self-hosted downloads that do not get lost</title>
+<meta name="description" content="A self-hosted media downloader with a real job queue on the server. yt-dlp and ffmpeg in one Docker image for amd64 and arm64. Files land in your media library named and tagged correctly.">
+<link rel="canonical" href="https://me.xantiagoma.com/casatube/">
+<link rel="icon" href="assets/icon-64.png" type="image/png">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<meta name="theme-color" content="#f8f7f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1b1c1f" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="CasaTube">
+<meta property="og:title" content="CasaTube — self-hosted downloads that do not get lost">
+<meta property="og:description" content="A real job queue on the server, yt-dlp and ffmpeg in one image, and files that land in your media library named and tagged correctly.">
+<meta property="og:url" content="https://me.xantiagoma.com/casatube/">
+<meta property="og:image" content="https://me.xantiagoma.com/casatube/assets/social.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  /* The app's tokens (src/web/styles.css), by meaning: graphite text, warm
+     white surfaces, the logo's red for the brand and the one main action. */
+  :root {
+    color-scheme: light dark;
+    --bg: #f8f7f6;
+    --surface: #ffffff;
+    --fg: #1d1e21;
+    --muted: #61646b;
+    --border: #e4e2df;
+    --brand: #d9131f;
+    --brand-fg: #ffffff;
+    --code-bg: #1d1e21;
+    --code-fg: #ecebe8;
+    --warn-bg: #fff7e6;
+    --warn-border: #f0d29a;
+    --warn-fg: #6b4a0b;
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1b1c1f;
+      --surface: #232427;
+      --fg: #ecebe8;
+      --muted: #a0a2a8;
+      --border: #34363a;
+      --brand: #e8232d;
+      --code-bg: #121315;
+      --code-fg: #ecebe8;
+      --warn-bg: #2b2414;
+      --warn-border: #5a4718;
+      --warn-fg: #f0d29a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  img { max-width: 100%; height: auto; display: block; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+  /* Grid children default to min-width: auto, so one long <pre> line widens
+     its column past a phone's screen. */
+  .why > *, .grid > *, .gallery > *, .install > * { min-width: 0; }
+
+  header.top {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px);
+    -webkit-backdrop-filter: saturate(1.4) blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  header.top .wrap { display: flex; align-items: center; gap: 12px; height: 60px; }
+  .mark { display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 650; }
+  .mark img { width: 30px; height: 30px; }
+  nav { margin-left: auto; display: flex; gap: 22px; font-size: 15px; }
+  nav a { text-decoration: none; color: var(--muted); }
+  nav a:hover { color: var(--fg); }
+  @media (max-width: 640px) { nav a.optional { display: none; } }
+
+  .hero { padding: 72px 0 32px; text-align: center; }
+  .hero .wordmark { width: min(440px, 80vw); margin: 0 auto 28px; }
+  .hero h1 { font-size: clamp(30px, 5vw, 48px); line-height: 1.12; letter-spacing: -0.02em; margin: 0 auto 16px; max-width: 18ch; }
+  .hero p.lead { font-size: clamp(17px, 2.2vw, 19px); color: var(--muted); max-width: 62ch; margin: 0 auto 28px; }
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 20px;
+    border-radius: 10px; font-weight: 600; font-size: 15px; text-decoration: none;
+    border: 1px solid var(--border); background: var(--surface);
+  }
+  .btn.primary { background: var(--brand); color: var(--brand-fg); border-color: transparent; }
+  .btn.primary:hover { filter: brightness(1.06); }
+  .chips { margin-top: 22px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+  .chips span { border: 1px solid var(--border); border-radius: 999px; padding: 3px 11px; background: var(--surface); }
+
+  .shot {
+    border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border);
+    background: var(--surface); box-shadow: 0 24px 60px -24px rgb(0 0 0 / 0.35);
+  }
+  .hero-shot { margin: 44px auto 0; max-width: 1080px; }
+
+  section { padding: 72px 0; }
+  section + section { border-top: 1px solid var(--border); }
+  h2 { font-size: clamp(24px, 3.4vw, 32px); letter-spacing: -0.015em; line-height: 1.2; margin: 0 0 12px; }
+  .section-lead { color: var(--muted); max-width: 64ch; margin: 0 0 36px; font-size: 17px; }
+
+  .why { display: grid; gap: 28px; grid-template-columns: 1.1fr 1fr; align-items: center; }
+  .why p { margin: 0 0 14px; }
+  .why strong { color: var(--fg); }
+  @media (max-width: 860px) { .why { grid-template-columns: 1fr; } }
+  .stages { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; font-size: 13px; }
+  .stages span { padding: 5px 11px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); font-weight: 550; }
+
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 920px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+
+  .gallery { display: grid; gap: 24px; grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 760px) { .gallery { grid-template-columns: 1fr; } }
+  figure { margin: 0; }
+  figcaption { margin-top: 10px; font-size: 14px; color: var(--muted); }
+  figcaption strong { color: var(--fg); }
+  .phones { display: flex; gap: 24px; justify-content: center; margin-top: 36px; flex-wrap: wrap; }
+  .phones .shot { width: 240px; border-radius: 22px; }
+
+  .install { display: grid; gap: 20px; grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 980px) { .install { grid-template-columns: 1fr; } }
+  .install h3 { margin: 0 0 8px; font-size: 17px; }
+  .install p { margin: 0 0 12px; color: var(--muted); font-size: 15px; }
+  pre {
+    margin: 0; padding: 16px 18px; border-radius: 12px; overflow-x: auto;
+    background: var(--code-bg); color: var(--code-fg);
+    font: 13.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }
+  p code, td code, li code { background: color-mix(in srgb, var(--muted) 14%, transparent); padding: 1px 6px; border-radius: 6px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 15px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  th { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+  .table-scroll { overflow-x: auto; }
+
+  .callout {
+    border: 1px solid var(--warn-border); background: var(--warn-bg); color: var(--warn-fg);
+    border-radius: var(--radius); padding: 18px 22px;
+  }
+  .callout h3 { margin: 0 0 6px; font-size: 17px; }
+  .callout p { margin: 0 0 8px; }
+  .callout p:last-child { margin: 0; }
+
+  .fine { color: var(--muted); font-size: 15px; max-width: 78ch; }
+  .fine li { margin-bottom: 8px; }
+
+  footer { border-top: 1px solid var(--border); padding: 36px 0 48px; color: var(--muted); font-size: 14px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; }
+  footer .links { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+  footer .small { flex-basis: 100%; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="mark" href="./"><img src="assets/icon-192.png" alt="" width="30" height="30">CasaTube</a>
+    <nav>
+      <a class="optional" href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a class="optional" href="#images">Images</a>
+      <a href="https://github.com/xantiagoma/casatube">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="assets/wordmark-on-dark.png">
+        <img class="wordmark" src="assets/wordmark-on-light.png" alt="CasaTube" width="1200" height="300">
+      </picture>
+      <h1>Self-hosted downloads that do not get lost</h1>
+      <p class="lead">
+        Paste a link, choose exactly the quality, audio tracks and subtitles that video has, and close
+        the tab. The queue lives on the server, survives restarts, and drops the file into your media
+        library named and tagged the way Jellyfin and Plex expect.
+      </p>
+      <div class="cta">
+        <a class="btn primary" href="#install">Install with Docker</a>
+        <a class="btn" href="https://github.com/xantiagoma/casatube">View on GitHub</a>
+      </div>
+      <div class="chips">
+        <span>amd64 · arm64</span>
+        <span>yt-dlp + ffmpeg inside</span>
+        <span>No telemetry</span>
+        <span>MIT</span>
+      </div>
+      <div class="shot hero-shot">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/dashboard-dark.png">
+          <img src="assets/screenshots/dashboard-light.png" alt="The CasaTube dashboard: a quick-download box, the live queue with three downloads in progress, storage and recent downloads" width="1440" height="900">
+        </picture>
+      </div>
+    </div>
+  </div>
+
+  <section id="why">
+    <div class="wrap why">
+      <div>
+        <h2>The browser only watches</h2>
+        <p>
+          Most self-hosted downloaders run the download inside your browser session, or forget it when
+          the container restarts. CasaTube is built around one requirement: <strong>a job survives the
+          browser closing and the service restarting.</strong>
+        </p>
+        <p>
+          Close the tab, lock the iPad, redeploy halfway through a film. The job carries on — or goes
+          back to the queue and resumes — and every stage it passes through is on screen, live, with its
+          own log for when something fails at 3 a.m.
+        </p>
+        <div class="stages" aria-label="The six stages of a job">
+          <span>validate</span><span>analyze</span><span>download</span><span>postprocess</span><span>metadata</span><span>move</span>
+        </div>
+      </div>
+      <div class="shot">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/queue-dark.png">
+          <img src="assets/screenshots/queue-light.png" alt="The queue: status counts and a table of jobs, some downloading with live progress and some done" width="1440" height="900" loading="lazy">
+        </picture>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <h2>What it does</h2>
+      <p class="section-lead">Built for one household and its media server, and careful about the details that make a library pleasant to use months later.</p>
+      <div class="grid">
+        <div class="card"><h3>Choose before you download</h3><p>The resolutions, codecs, audio tracks and subtitles that video actually has — with sizes — not a generic list that silently falls back to something else.</p></div>
+        <div class="card"><h3>Correct language tags</h3><p>Audio and subtitle languages are chosen independently and written into the file properly, so your media server shows the right names.</p></div>
+        <div class="card"><h3>Never overwrites</h3><p>Name the file yourself. A name that is taken is reported before anything is queued, and subtitles and thumbnails always follow the final name.</p></div>
+        <div class="card"><h3>A library with a player</h3><p>Browse downloads with thumbnails, play them in the browser with real seeking, switch audio and subtitles, download a bundle, or move things to a trash you can restore from.</p></div>
+        <div class="card"><h3>Subscriptions</h3><p>Follow channels and playlists. New uploads are queued on a schedule, without re-downloading the back catalogue.</p></div>
+        <div class="card"><h3>Beyond yt-dlp</h3><p>Everything yt-dlp supports, plus private Telegram channels through your own session and Google Drive files without the shared API key yt-dlp depends on.</p></div>
+        <div class="card"><h3>Plugins in TypeScript</h3><p>Written in an in-app editor and loaded without a restart: rewrite links, call a webhook, ask Jellyfin to scan when a file lands.</p></div>
+        <div class="card"><h3>Credentials, sealed</h3><p>Cookies, passwords, API keys and sessions for sites that need a login, encrypted at rest when you set a key — and never sent back to the browser.</p></div>
+        <div class="card"><h3>One image, no host setup</h3><p>The app, yt-dlp and ffmpeg in one container for amd64 and arm64. Runs on plain Docker, Compose or CasaOS, from a phone-friendly UI in light and dark.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="screens">
+    <div class="wrap">
+      <h2>A closer look</h2>
+      <p class="section-lead">Screenshots from a fresh instance, downloading Blender Studio's open movies.</p>
+      <div class="gallery">
+        <figure>
+          <div class="shot"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/download-form-dark.png"><img src="assets/screenshots/download-form-light.png" alt="Choosing a codec and a resolution ceiling, with the size of each" width="1440" height="900" loading="lazy"></picture></div>
+          <figcaption><strong>Choose before you download.</strong> Every codec and resolution this video offers, with what each one costs.</figcaption>
+        </figure>
+        <figure>
+          <div class="shot"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/download-tracks-dark.png"><img src="assets/screenshots/download-tracks-light.png" alt="Picking audio tracks and subtitle languages independently" width="1440" height="900" loading="lazy"></picture></div>
+          <figcaption><strong>Audio and subtitles</strong>, picked independently, authored subtitles preferred over automatic ones.</figcaption>
+        </figure>
+        <figure>
+          <div class="shot"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/library-dark.png"><img src="assets/screenshots/library-light.png" alt="The library: a grid of downloaded films with thumbnails" width="1440" height="900" loading="lazy"></picture></div>
+          <figcaption><strong>The library</strong>, read straight from the folders your media server uses.</figcaption>
+        </figure>
+        <figure>
+          <div class="shot"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/player-dark.png"><img src="assets/screenshots/player-light.png" alt="Playing a downloaded film in the browser, with its streams listed" width="1440" height="900" loading="lazy"></picture></div>
+          <figcaption><strong>Play it in the browser</strong>, with real seeking even for files a browser cannot open on its own.</figcaption>
+        </figure>
+      </div>
+      <div class="phones">
+        <div class="shot"><img src="assets/screenshots/mobile-download-form-dark.png" alt="The download form on a phone" width="390" height="844" loading="lazy"></div>
+        <div class="shot"><img src="assets/screenshots/mobile-downloads-dark.png" alt="Downloads in progress on a phone" width="390" height="844" loading="lazy"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <h2>Install</h2>
+      <p class="section-lead">One image with everything inside. Pick how you run containers; <a href="https://github.com/xantiagoma/casatube/blob/main/docs/DEPLOY.md">docs/DEPLOY.md</a> has every setting.</p>
+      <div class="install">
+        <div>
+          <h3>Docker Compose</h3>
+          <p>Downloads land in <code>./library</code>; settings go in a <code>.env</code> beside the file.</p>
+<pre>mkdir casatube &amp;&amp; cd casatube
+curl -fsSLO https://raw.githubusercontent.com/\
+xantiagoma/casatube/main/docker-compose.yml
+docker compose up -d</pre>
+        </div>
+        <div>
+          <h3>Docker</h3>
+          <p>Point <code>/library</code> at the folder your media server reads.</p>
+<pre>docker run -d --name casatube \
+  --restart unless-stopped \
+  -p 8520:8520 \
+  -e PUID=1000 -e PGID=1000 \
+  -v ./data:/data \
+  -v /mnt/media/videos:/library \
+  ghcr.io/xantiagoma/casatube:latest</pre>
+        </div>
+        <div>
+          <h3>CasaOS</h3>
+          <p>App Store → Custom Install → Import, then paste <a href="https://github.com/xantiagoma/casatube/blob/main/docker-compose.casaos.yml">docker-compose.casaos.yml</a> and adjust the two folders.</p>
+<pre>http://&lt;your-server&gt;:8520</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="images">
+    <div class="wrap">
+      <h2>Images</h2>
+      <p class="section-lead"><code>ghcr.io/xantiagoma/casatube</code>, for amd64 and arm64. yt-dlp is the part that rots — sites change and it follows them — so releases are rebuilt every week with the newest one.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Tag</th><th>What it is</th></tr></thead>
+          <tbody>
+            <tr><td><code>latest</code></td><td>The newest release, with the newest yt-dlp. Rebuilt weekly.</td></tr>
+            <tr><td><code>0.1</code>, <code>0.1.0</code></td><td>That release, with the newest yt-dlp. Rebuilt weekly.</td></tr>
+            <tr><td><code>0.1.0-ytdlp-2026.08.19</code></td><td>Exactly that app and that yt-dlp. Never changes — pin this to update on purpose.</td></tr>
+            <tr><td><code>main</code>, <code>sha-abc1234</code></td><td>The tip of the main branch, and one exact commit of it. Not releases.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="security">
+    <div class="wrap">
+      <div class="callout">
+        <h3>Put it behind something</h3>
+        <p>CasaTube has no login of its own. It is built for a private network, and anyone who can reach the port can use it — including the plugin editor, which runs code on the server by design. Reach it over a VPN such as Tailscale or WireGuard, or behind a reverse proxy that authenticates.</p>
+        <p>Set <code>CREDENTIALS_KEY</code> before storing a cookie, a password or a Telegram session; without it they are kept in plain text, and the app says so.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="disclaimer">
+    <div class="wrap">
+      <h2>Use it responsibly</h2>
+      <ul class="fine">
+        <li><strong>Your downloads are your responsibility.</strong> Use CasaTube only for media you have the right to download and keep: your own uploads, public-domain or openly licensed works, and content whose owner or platform terms allow it. Copyright law and site terms differ by country and by site, and many platforms forbid downloading outside their own features.</li>
+        <li><strong>No DRM circumvention.</strong> CasaTube does not decrypt or bypass DRM or other technical protection measures, and will not.</li>
+        <li><strong>As is, no commitments.</strong> A personal, non-commercial project, provided without warranty under the MIT licence, with no support agreement or SLA.</li>
+        <li><strong>Not affiliated.</strong> CasaTube is not a YouTube product and has no connection to YouTube, Google, Dailymotion, Vimeo, Telegram, Jellyfin, Plex, CasaOS or any other service named here; their names are trademarks of their owners, used only to describe compatibility.</li>
+      </ul>
+      <p class="fine">The full <a href="https://github.com/xantiagoma/casatube#disclaimer">disclaimer</a> and the <a href="https://github.com/xantiagoma/casatube/blob/main/NOTICE">NOTICE</a> — including the GPL software in the image — are in the repository.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <a class="mark" href="./"><img src="assets/icon-192.png" alt="" width="24" height="24">CasaTube</a>
+    <div class="links">
+      <a href="https://github.com/xantiagoma/casatube">GitHub</a>
+      <a href="https://github.com/xantiagoma/casatube/blob/main/docs/DEPLOY.md">Deploy guide</a>
+      <a href="https://github.com/xantiagoma/casatube/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://github.com/xantiagoma/casatube/blob/main/SECURITY.md">Security</a>
+      <a href="https://github.com/xantiagoma/casatube/blob/main/LICENSE">MIT licence</a>
+    </div>
+    <p class="small">Screenshots show Blender Studio's open movies, © Blender Foundation | studio.blender.org, under Creative Commons licences.</p>
+  </div>
+</footer>
+
+</body>
+</html>
