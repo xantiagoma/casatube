@@ -2,6 +2,41 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## A fixed clock against `Date.now()` is a test with an expiry date (2026-10-26)
+
+`src/api/notifications.test.ts` seeded a notification with a store whose clock
+was pinned to 2026-08-26, then asked the route to purge anything older than
+thirty days. The route measures age with the **real** clock. It passed for a
+month and then failed on its own, with no change anywhere — and would have been
+the first red mark on the repository's first public CI run.
+
+⚠️ To look for more of these, moving the clock is not enough on its own: Bun's
+`setSystemTime` also *freezes* it, which breaks tests that rely on two calls
+getting different timestamps. Run the suite twice — frozen at a far date, and
+frozen at today as the control — and only the failures that differ are dates:
+
+```bash
+echo 'import { setSystemTime } from "bun:test"; setSystemTime(new Date("2028-04-15T12:00:00Z"));' > /tmp/future.ts
+echo 'import { setSystemTime } from "bun:test"; setSystemTime(new Date());' > /tmp/frozen.ts
+bun test --preload /tmp/future.ts; bun test --preload /tmp/frozen.ts
+```
+
+📌 The rule: if the code under test reads `Date.now()`, the fixture is relative
+to `Date.now()` too, or the code takes the clock as a parameter.
+
+## A brand colour that also means "wrong" cannot be the colour of state (2026-10-26)
+
+The logo is red, so red became `primary` — and `primary` was what running
+stages, progress bars, selected cards, switches and disk bars were drawn in.
+Every in-progress download looked failed next to the green finished ones; a
+selected codec card looked like an invalid field. Nothing was broken; all of it
+read as broken.
+
+The fix was to give colours meanings before giving them a brand: `primary` is
+graphite, `brand` (red) is the mark and the one main action, `info` (blue) is
+work in progress, `destructive` is failure and deletion. ⚠️ When the brand
+changes again, change `--brand`, not `--primary`.
+
 ## A transform wired into one path makes the preview contradict the queue (2026-09-19)
 
 `url:resolve` was dispatched from `POST /api/jobs` and not from `POST /api/probe`.

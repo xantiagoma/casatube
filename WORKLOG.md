@@ -5,6 +5,84 @@ session with none of this context. Newest first.
 
 ---
 
+## 2026-10-26 — Getting ready to be public
+
+> «tenemos que preparar todo pa hacer pronto el repo public y ofrecer los build y todo el cuento»
+
+**1202 tests, 0 failures. `tsc` clean.** Nothing flipped to public yet: that,
+and the first release tag, are the maintainer's to do.
+
+### History first, because it cannot be taken back
+
+A public repository publishes every commit, not just `HEAD`. gitleaks over all
+68 commits found four hits, every one a test fixture
+(`0123456789abcdef…`, a yt-dlp format id). That only proves gitleaks did not
+recognise anything, so the real `CREDENTIALS_KEY` was also searched for
+directly in `git log -p` — zero. What *was* in `HEAD`: the tailnet hostname,
+`/home/santi/...` paths, the library mount, the backup list and a real shared
+Drive file id in a test. The deployment notes moved to the infrastructure
+repository (`media/casatube/OPERATIONS.md` there); the Drive id became a made-up
+one. The tailnet hostname stays in history — it resolves only inside the
+tailnet, and rewriting 68 commits for it was not worth the cost.
+
+### 🔴 A test with an expiry date
+
+The suite had one failure today that it did not have in September, with no code
+change in between. `DELETE /api/notifications?olderThanDays=30` measures age
+with `Date.now()`; the test seeded its notification with a clock fixed at
+2026-08-26. Thirty days later "ten minutes ago" was "older than a month". It
+would have been the first thing a public CI run showed.
+
+To find any others, the whole suite ran with `setSystemTime` at 2028 — and,
+because freezing the clock causes failures of its own (ties in "newest first"),
+again frozen at *today* as a control. Only the difference counts: this test was
+the only one.
+
+### Builds
+
+`ci.yml`: typecheck, tests, then build the real image, start it and run
+`scripts/smoke.sh` against it — on amd64 and arm64, each native.
+`release.yml`: tag → `X.Y.Z-ytdlp-<date>`, `X.Y.Z`, `X.Y`, `latest` and a
+GitHub release; `main` → `edge`; weekly → the latest release rebuilt with the
+newest yt-dlp under a new immutable tag. That last one is the reason for the
+shape: yt-dlp is the part of this image that rots.
+
+⚠️ Arm runners are free on public repositories only. Both workflows ask the API
+whether the repository is private — a scheduled run's event carries no
+repository object, so `github.event.repository.private` would read as "public"
+and queue arm64 jobs forever.
+
+`/api/health` now reads its version from `package.json`, and `release.yml`
+refuses a tag that disagrees with it.
+
+### Using it as a stranger would
+
+A throwaway instance with Blender's open films, driven by Playwright for the
+README screenshots, turned up what weeks of use by the people building it had
+not: internal requirement ids ("(R7)", "PLAN §18") in UI text, a thumbnail hint
+written over the duration badge, "youtube · youtube.com", a phone layout that
+clipped a tab and pushed the job list below the fold, an MP4 timecode track
+listed as a stream, and `Caminandes 3- Llamigos.mkv`. All fixed. The ones that
+were not — resolution labels, the unread settings deep link, the plugin-count
+badge, the status that lags the stage — are in `HANDOFF.md`.
+
+### Red is the brand, not the meaning
+
+The logo arrived mid-session — a red house with a white play button on a
+graphite tile — and the first pass made its red the UI's `primary`. The demo
+agent's review of the result was blunt and right: **every in-progress job looked
+failed.** Red was now the colour of a running download, a selected codec, a
+switch that is on, a 73% disk bar and a failure, all at once, and green
+"Done" rows beside red "Downloading" ones read as a list of problems.
+
+So the tokens split by meaning rather than by brand: `primary` is graphite (the
+tile), `brand` is the red and goes on the mark and on "Add to queue" only, a new
+`info` blue carries work in progress, and `destructive` keeps red for failure
+and deletion. 📌 A brand colour that is also the conventional colour for
+"wrong" cannot be the colour of state.
+
+---
+
 ## 2026-09-19 — Telegram, and a ceiling that refused every portrait video
 
 > «is casatube capable of downloading videos from a private telegram channel?»

@@ -26,7 +26,7 @@ every deploy, and CI runs it against every image it builds.
 
 ## State
 
-**1201 tests, 0 failures. `tsc` clean.**
+**1202 tests, 0 failures. `tsc` clean.**
 
 Working end to end: paste a URL → the form shows the resolutions, audio tracks
 and subtitles that video actually has → queue → six stages live over SSE → the
@@ -160,6 +160,39 @@ ticked to try anyway.
   hooks. Doing it properly means activating every valid plugin and gating
   dispatch on `enabled` — a change to the runtime's model, not a UI change.
 - `react-doctor` sits around 60/100, dominated by vendored Dice UI.
+
+- **Resolution labels are the shorter side**, so a 1920×800 film reads as
+  "800p" and a 2048×858 one as "858p". Coherent with the ceiling (which is why
+  portrait video works) and odd to read. YouTube's own label is in yt-dlp's
+  `format_note` and would be the better thing to show; the ceiling logic should
+  not change with it.
+- **`/settings?section=…` is validated by the router and read by nothing**, so
+  a deep link always opens at the top.
+- **"2 plugins apply to this download"** counts plugins that are loaded but
+  unconfigured ("doing nothing"), so every plain YouTube URL claims two.
+- **A job at 100% still says "Downloading"** while it post-processes.
+- **On a phone the job table is wider than the screen**: it scrolls sideways,
+  titles cut mid-word and Status/Progress start off-screen. A card layout below
+  `sm` is the fix.
+- A job still analysing shows on the dashboard as its raw URL with a blank
+  thumbnail.
+- **A cancelled job is counted under the Failed tab**, while the Failures stat
+  and the Queue's Failed tile say 0. Cancelling is not failing.
+- **A failed Analyze shows yt-dlp's raw error** — `HTTPSConnection`,
+  `Errno -2` and the rest — where a sentence ("could not reach youtube.com")
+  belongs. The mapping in `src/api/errors.ts` is where that would go.
+
+### Closed on 2026-10-26 (see `WORKLOG.md`)
+
+Preparing the repository to go public: no secrets in 68 commits of history
+(gitleaks, plus the real `CREDENTIALS_KEY` searched for directly); host-specific
+notes moved out; README, SECURITY, CONTRIBUTING, CHANGELOG, issue templates; CI
+and multi-arch releases to GHCR; the logo; a test that had started failing on
+its own because its clock was fixed in August; and seven UI fixes found by using
+a fresh demo instance as a stranger would. The UI now takes its colours from
+the logo, by meaning: graphite `primary`, red `brand` for the mark and the main
+action only, blue `info` for work in progress, `destructive` for failure. Red as
+primary was tried first and made every running job look broken.
 
 ### Closed on 2026-09-19 (see `WORKLOG.md`)
 
