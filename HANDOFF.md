@@ -151,6 +151,11 @@ starts, serves the bundle and runs its yt-dlp.
 
 ## Still open
 
+- 🔴 **`bun run dev` restarts in a loop** — `--watch` sees the plugin
+  runtime's shadow copy deleted after import (`docs/DISCOVERIES.md`). Use
+  `bun start` for now. The likely fix is keeping the shadow until the next load
+  sweeps it, which changes a rule `importThrough` states, so it was not done in
+  passing.
 - **Telegram: a single-format source still obeys the resolution ceiling.** A 4K
   Telegram video under a 1080 ceiling fails with `FormatUnavailable` rather than
   taking the only file that exists. Coherent with yt-dlp, and friction with no

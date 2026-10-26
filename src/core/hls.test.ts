@@ -34,6 +34,7 @@ import {
   sessionId,
   sessionKey,
   type HlsManager,
+  type HlsStats,
 } from "./hls";
 import type { MediaProbe, ProbeStream } from "./library";
 
@@ -424,6 +425,21 @@ function mkvProbe(calls?: { n: number }) {
   };
 }
 
+/**
+ * Stats once `ready` holds, or the last ones after five seconds. A fixed sleep
+ * for the fake ffmpeg is a race: on macOS a background process's 20 ms `sleep`
+ * can take 200.
+ */
+async function statsWhen(manager: HlsManager, ready: (stats: HlsStats) => boolean): Promise<HlsStats> {
+  const deadline = Date.now() + 5_000;
+  let stats = await manager.stats();
+  while (!ready(stats) && Date.now() < deadline) {
+    await Bun.sleep(25);
+    stats = await manager.stats();
+  }
+  return stats;
+}
+
 function manage(options: Parameters<typeof createHlsManager>[0]): HlsManager {
   // Silenced: the manager narrates every start, finish and eviction, which is
   // right in a server log and noise on top of a passing test run.
@@ -728,7 +744,7 @@ describe("createHlsManager", () => {
     });
 
     await manager.playlist("A.mkv");
-    await Bun.sleep(200);
+    await statsWhen(manager, (s) => s.sessions[0]?.state === "complete");
     const answered = await manager.playlist("B.mkv");
     expect(Result.isOk(answered)).toBe(true);
 
@@ -838,9 +854,8 @@ describe("createHlsManager", () => {
     });
 
     await manager.playlist("Film.mkv");
-    await Bun.sleep(250);
+    const stats = await statsWhen(manager, (s) => s.sessions[0]?.state === "complete");
 
-    const stats = await manager.stats();
     expect(stats.root).toContain(HLS_DIR);
     expect(stats.sessions).toHaveLength(1);
     expect(stats.sessions[0]?.segments).toBe(3);

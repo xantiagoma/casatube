@@ -2,6 +2,31 @@
 
 Things that cost time to find, written down so they cost it once.
 
+## On a Mac, a 20 ms `sleep` takes 200, and three HLS tests were races (2026-10-26)
+
+The first run of the suite on macOS failed one HLS test in three, a different
+one each time. The fake ffmpeg sleeps 20 ms per segment, and the tests waited a
+fixed 200–250 ms for it to finish. Measured on the Mac: `/bin/sleep 0.02`, and
+Perl's `sleep 0.02`, take 160–200 ms from a background process; `sleep 0` takes
+10. The three segments the test expected took ~600 ms, so the test only passed
+on a host where timers are precise.
+
+📌 Wait for the state, not for a time: `statsWhen` in `src/core/hls.test.ts`
+polls until the session is `complete`, with a deadline. A fixed sleep is a
+guess about the speed of the machine the test will run on.
+
+## `bun --watch` restarts for ever once a plugin is installed (2026-10-26)
+
+`importThrough` imports every plugin through a `.reload-*` copy and deletes the
+copy straight after. To `bun --watch`, that is an imported file disappearing, so
+it restarts — and the restarted process copies, imports and deletes again.
+`bun run dev` never reaches `listening`: 70 restarts in 8 seconds. A
+twenty-line reproduction (import a copy, `rm` it) restarts 329 times in 4
+seconds, and once if the copy is kept.
+
+Bundled plugins are installed on first start, so this affects every
+`bun run dev`. Use `bun start` until it is fixed (see HANDOFF, *Still open*).
+
 ## A fixed clock against `Date.now()` is a test with an expiry date (2026-10-26)
 
 `src/api/notifications.test.ts` seeded a notification with a store whose clock
