@@ -164,7 +164,9 @@ export function Downloads() {
       <PageHeader title="Downloads" description="What is running, what finished, and what is waiting to try again." />
 
       <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_28rem]">
-        <div className="min-w-0 space-y-4">
+        {/* A column with `gap`, not `space-y`, so the tiles can change place
+            with `order` on a phone — `space-y` margins follow source order. */}
+        <div className="flex min-w-0 flex-col gap-4">
           <div className="flex flex-wrap items-center gap-3">
             {/* Scrolls rather than clips: four tabs with counts are wider than
                 a phone, and the last one ("Scheduled") was simply cut off. */}
@@ -199,9 +201,10 @@ export function Downloads() {
               is where the numbers you check first go to be never seen: on a
               screen with twenty rows you have to scroll past the whole table to
               find out whether anything is moving at all. */}
-          {/* Two across even on a phone: stacked one per row, the four tiles
-              pushed every job below the fold of the screen that lists them. */}
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {/* Two across even on a phone, and on a phone *after* the list: above
+              it, four tiles and the filters left a row and a half of jobs above
+              the fold on the screen whose job is to list them. */}
+          <div className="order-last grid grid-cols-2 gap-3 sm:order-none lg:grid-cols-4">
             <StatTile
               label="Downloaded (24h)"
               value={formatBytes(analytics.data?.bytes)}

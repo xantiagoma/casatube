@@ -23,6 +23,7 @@
 import { Result } from "better-result";
 import { FormatUnavailable } from "./errors";
 import filenamify from "filenamify";
+import { resolutionOf } from "./resolution";
 import { VIDEO_CODECS } from "./types";
 import type {
   AudioTrack,
@@ -244,63 +245,9 @@ function pickBest<T>(items: readonly T[], compare: (a: T, b: T) => number): T | 
   return best;
 }
 
-/** The ladder video is labelled by. A computed class near one of these is that one. */
-const STANDARD_RESOLUTIONS = [144, 240, 360, 480, 720, 1080, 1440, 2160, 4320] as const;
-
-/** How far a computed class may sit from a ladder step and still be called by it. */
-const SNAP_TOLERANCE = 0.12;
-
-/**
- * What "1080p" means for one format: the **resolution class** a person would
- * call it by — the one YouTube's own labels use.
- *
- * Two readings that both turned out wrong, and why:
- *
- * 🔴 **Not the height.** A phone video is 720×1280 — 720p by any reading a
- * person would recognise — and judging it by height calls it *1280p* and
- * refuses it under a 1080 ceiling. Two Telegram downloads failed that way, and
- * a portrait YouTube Short would have too.
- *
- * 🔴 **Not the shorter side either.** That fixed portrait video and broke
- * cinema: a 1920×800 film is a 1080p film — it fills a 1080p screen's width —
- * and the shorter side labelled it "800p", with Tears of Steel offering "858p",
- * "534p" and "356p" rows in the form. Correct by arithmetic, unreadable.
- *
- * So: the larger of the shorter side and what the longer side would be in
- * 16:9 (`longer × 9/16`), snapped to the standard ladder when it is within
- * {@link SNAP_TOLERANCE} of a step. 720×1280 → 720; 1920×800 → 1080;
- * 4096×1714 → 2160; 1440×1080 → 1080; 854×358 → 480. For ordinary 16:9
- * landscape video every reading agrees, which is why each wrong one survived
- * until a video that was not ordinary came along.
- *
- * 📌 The ceiling uses the same number, so a row labelled 1080p is exactly what a
- * 1080 ceiling admits.
- *
- * ⚠️ `null` when neither side is known, and it stays distinct from `0`: a format
- * whose dimensions the provider never reported is a last resort, not a 0p video.
- * One known side is still enough to judge by.
- */
-export function resolutionOf(format: VideoFormat): number | null {
-  const width = typeof format.width === "number" && format.width > 0 ? format.width : null;
-  const height = typeof format.height === "number" && format.height > 0 ? format.height : null;
-  if (width === null && height === null) {
-    // Reported as 0 rather than absent: keep the old answer, which callers
-    // already treat as "no usable size".
-    return format.height ?? format.width ?? null;
-  }
-  // One side alone says too little to snap: an 800 could be 1920×800 or a
-  // 16:10 1280×800. It is reported as it is.
-  if (width === null || height === null) return (height ?? width)!;
-  const shorter = Math.min(width, height);
-  const longer = Math.max(width, height);
-  const raw = Math.max(shorter, (longer * 9) / 16);
-
-  let nearest: number = STANDARD_RESOLUTIONS[0];
-  for (const step of STANDARD_RESOLUTIONS) {
-    if (Math.abs(step - raw) < Math.abs(nearest - raw)) nearest = step;
-  }
-  return Math.abs(nearest - raw) / nearest <= SNAP_TOLERANCE ? nearest : Math.round(raw);
-}
+// `resolutionOf` lives in its own pure module so the browser can label formats
+// with the same rule the server selects by; re-exported for existing callers.
+export { resolutionOf } from "./resolution";
 
 /**
  * Lower is better.
@@ -430,7 +377,7 @@ export interface VideoCodecNotice {
 function codecsAtHeight(formats: readonly VideoFormat[], height: number): (VideoCodec | "unknown")[] {
   const families = new Set<VideoCodec | "unknown">();
   for (const format of formats) {
-    if (format.height === height) families.add(videoCodecFamily(format.codec));
+    if (resolutionOf(format) === height) families.add(videoCodecFamily(format.codec));
   }
   return [...families].sort((a, b) => codecRank(a, VIDEO_CODEC_PREFERENCE) - codecRank(b, VIDEO_CODEC_PREFERENCE));
 }
@@ -456,10 +403,10 @@ export function videoCodecNotice(
   if (!chosen) return null;
 
   const resolvedCodec = videoCodecFamily(chosen.codec);
-  const resolvedHeight = chosen.height ?? null;
+  const resolvedHeight = resolutionOf(chosen);
   // What the same ceiling would have reached with no codec opinion at all.
   const unrestricted = bestUnderCeiling(formats, preferences.maxResolution, VIDEO_CODEC_PREFERENCE);
-  const reachableHeight = unrestricted?.height ?? null;
+  const reachableHeight = unrestricted ? resolutionOf(unrestricted) : null;
 
   if (resolvedCodec !== requested) {
     const alternatives = reachableHeight === null ? [] : codecsAtHeight(formats, reachableHeight);
@@ -496,7 +443,12 @@ export function videoCodecNotice(
   return null;
 }
 
-/** The highest height a codec family reaches here, or `null` if it has none. */
+/**
+ * The highest resolution a codec family reaches here, or `null` if it has none.
+ *
+ * ⚠️ By `resolutionOf`, like everything else: it read `format.height`, so the
+ * codec cards said "up to 800p" beside resolution rows labelled 1080p.
+ */
 export function codecMaxHeight(
   formats: readonly VideoFormat[],
   codec: VideoCodec,
@@ -504,7 +456,8 @@ export function codecMaxHeight(
   let best: number | null = null;
   for (const format of formats) {
     if (videoCodecFamily(format.codec) !== codec) continue;
-    if (typeof format.height === "number" && (best === null || format.height > best)) best = format.height;
+    const resolution = resolutionOf(format);
+    if (resolution !== null && (best === null || resolution > best)) best = resolution;
   }
   return best;
 }

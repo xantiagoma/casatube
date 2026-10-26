@@ -8,13 +8,17 @@
  */
 import type { Job, JobStatus } from "../../../core/types";
 import { splitPath } from "../../data/format";
+import { resolutionOf } from "../../../core/resolution";
 
 /** What the plan says will be produced — never a guess when the plan is absent. */
 export function formatLabel(job: Job): string {
   const plan = job.plan;
   if (!plan) return "—";
   const parts: string[] = [];
-  if (plan.video?.height) parts.push(`${plan.video.height}p`);
+  // The same rule the form and the ceiling use: a 1920×800 film is 1080p here
+  // too, not the "800p" this column used to say beside a form that said 1080p.
+  const resolution = plan.video ? resolutionOf(plan.video) : null;
+  if (resolution) parts.push(`${resolution}p`);
   else if (plan.audio.length > 0) parts.push("audio");
   const codec = plan.video?.codec ?? plan.audio[0]?.codec;
   if (codec) parts.push(codec.split(".")[0]!.toUpperCase());

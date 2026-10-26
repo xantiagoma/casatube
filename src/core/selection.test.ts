@@ -534,6 +534,11 @@ describe("selectVideoFormat with a codec preference", () => {
 });
 
 describe("codecMaxHeight", () => {
+  test("🔴 by resolution class, so a codec card agrees with the rows beside it", () => {
+    // Tears of Steel's cards said "up to 800p" while its rows said 1080p.
+    expect(codecMaxHeight([{ id: "a", width: 1920, height: 800, codec: "avc1" }], "h264")).toBe(1080);
+  });
+
   test("how high each codec reaches in this video", () => {
     expect(codecMaxHeight(VIDEO_FORMATS, "h264")).toBe(1080);
     expect(codecMaxHeight(VIDEO_FORMATS, "av1")).toBe(2160);
