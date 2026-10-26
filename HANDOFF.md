@@ -161,6 +161,11 @@ starts, serves the bundle and runs its yt-dlp.
   dispatch on `enabled` — a change to the runtime's model, not a UI change,
   and one that would run the `setup` of plugins someone switched off, so "off"
   would stop meaning off. Left alone deliberately on 2026-10-26.
+- **Some PeerTube files have no format label.** yt-dlp reports their codec as
+  unknown, so video.blender.org downloads show "—" in the Format column and no
+  resolution rows in the form — the download itself still gets 1080p.
+- A job cancelled after a failure shows only "Cancelled"; why it had failed is
+  in its log, not in the row.
 - `react-doctor` sits around 60/100, dominated by vendored Dice UI.
 
 ### Closed on 2026-10-26 (see `WORKLOG.md`)
