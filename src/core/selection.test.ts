@@ -636,6 +636,12 @@ describe("toOutputName", () => {
     expect(toOutputName("C:\\Users\\santi")).not.toContain("\\");
   });
 
+  test("a subtitle colon becomes ' - ', not a dangling '- '", () => {
+    expect(toOutputName("Caminandes 3: Llamigos")).toBe("Caminandes 3 - Llamigos");
+    expect(toOutputName("Agent 327 : Operation Barbershop")).toBe("Agent 327 - Operation Barbershop");
+    expect(toOutputName("Live at 12:30")).toBe("Live at 12-30");
+  });
+
   test("Windows reserved names are defused — the naive version leaves them", () => {
     expect(toOutputName("CON")).not.toBe("CON");
     expect(toOutputName("NUL")).not.toBe("NUL");

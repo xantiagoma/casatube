@@ -632,7 +632,12 @@ export function cleanTitle(title: string): string {
  */
 export function toOutputName(title: string, fallback = ""): string {
   const cleaned = cleanTitle(title);
-  const base = cleaned.length > 0 ? cleaned : cleanTitle(fallback);
+  const base = (cleaned.length > 0 ? cleaned : cleanTitle(fallback))
+    // A title's colon is a subtitle separator, and filenamify would leave
+    // "Caminandes 3- Llamigos". " - " is what media servers write for the same
+    // thing. A colon without a space after it (12:30) is not this, and stays
+    // filenamify's to replace.
+    .replace(/\s*:\s+/gu, " - ");
   const safe = filenamify(base.length > 0 ? base : FALLBACK_OUTPUT_NAME, {
     replacement: "-",
     maxLength: MAX_OUTPUT_NAME_LENGTH,
