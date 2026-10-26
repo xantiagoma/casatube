@@ -11,7 +11,6 @@ import {
   ChevronLeft,
   Download,
   HardDrive,
-  House,
   LayoutGrid,
   Library as LibraryIcon,
   ListVideo,
@@ -21,6 +20,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import icon from "../../assets/icon-192.png";
 
 interface Item {
   to: string;
@@ -80,13 +80,9 @@ export function SidebarContent({
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       <div className={cn("flex items-center gap-2.5 px-4 py-4", collapsed && "justify-center px-2")}>
-        {/* A house, because the name is *Casa*Tube and this is the mark for the
-            whole app. A download arrow was one of the eight screens wearing the
-            badge of all of them — and it is the icon the Downloads item in the
-            nav below already uses. */}
-        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground">
-          <House className="size-4.5" aria-hidden />
-        </span>
+        {/* The app icon itself, so the sidebar, the browser tab and the
+            CasaOS tile are the same mark. Decorative: the name sits beside it. */}
+        <img src={icon} alt="" width={36} height={36} className="size-9 shrink-0" />
         {!collapsed && (
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-semibold text-foreground">CasaTube</span>

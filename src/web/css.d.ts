@@ -5,3 +5,9 @@
  * the module exists at all, or the entrypoint does not compile.
  */
 declare module "*.css";
+
+/** An image import is its URL: the bundler emits the file under /assets. */
+declare module "*.png" {
+  const url: string;
+  export default url;
+}
