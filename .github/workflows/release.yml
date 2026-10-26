@@ -215,25 +215,27 @@ jobs:
       contents: read
       packages: write
     steps:
+      # ⚠️ Restored to the same path they were saved from: the path is part of
+      # a cache entry's version, so restoring arm64 to another directory was a
+      # silent miss ("planned 2, found 1"). Two restores into one directory
+      # simply merge.
       - uses: actions/cache/restore@v4
         with:
           path: /tmp/digests
           key: digests-${{ github.run_id }}-${{ github.run_attempt }}-amd64
           fail-on-cache-miss: true
 
-      # arm64 only exists when the plan built it, so a miss is not an error
-      # here — but the count below checks that every planned architecture came.
       - uses: actions/cache/restore@v4
         with:
-          path: /tmp/digests-arm64
+          path: /tmp/digests
           key: digests-${{ github.run_id }}-${{ github.run_attempt }}-arm64
+          fail-on-cache-miss: true
 
       - name: Every planned architecture is here
         env:
           MATRIX: ${{ needs.plan.outputs.matrix }}
         run: |
           set -euo pipefail
-          [ -d /tmp/digests-arm64 ] && cp /tmp/digests-arm64/* /tmp/digests/
           planned=$(jq length <<<"$MATRIX")
           found=$(find /tmp/digests -type f | wc -l)
           echo "planned $planned, found $found"
@@ -261,7 +263,7 @@ jobs:
           docker buildx imagetools create "${args[@]}" \
             --annotation "index:org.opencontainers.image.description=Self-hosted media downloader that does not lose your work" \
             --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
-            --annotation "index:org.opencontainers.image.licenses=MIT" \
+            --annotation "index:org.opencontainers.image.licenses=MIT AND GPL-3.0-or-later AND GPL-2.0-or-later AND LGPL-2.1-or-later" \
             $(printf "$IMAGE@sha256:%s " *)
 
       - name: Inspect

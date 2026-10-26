@@ -1,0 +1,84 @@
+CasaTube
+Copyright (c) 2026 Santiago Montoya A.
+Licensed under the MIT License (see LICENSE).
+
+CasaTube is an independent project. It is not affiliated with, endorsed by or
+sponsored by Google, YouTube, Telegram, Vimeo, Vidarro, Voomly, Jellyfin, Plex,
+IceWhale (CasaOS), Tailscale, the Blender Foundation, the yt-dlp project, the
+FFmpeg project or any other company or project named in this repository. Their
+names are trademarks of their respective owners and are used only to describe
+compatibility.
+
+
+Name and logo
+-------------
+
+The name "CasaTube" and the logo files in docs/brand/ and src/web/assets/
+identify this project. They are not covered by the MIT License: you may use
+them to refer to CasaTube, but not as the name or branding of another project
+or service, or in a way that suggests endorsement.
+
+
+Third-party software in the Docker image
+----------------------------------------
+
+The published image (ghcr.io/xantiagoma/casatube) is a combined distribution.
+This file and LICENSE are in it at /usr/share/licenses/casatube/. CasaTube's
+own code is MIT; the image also contains, unmodified:
+
+yt-dlp (release binary yt-dlp_musllinux / yt-dlp_musllinux_aarch64)
+  https://github.com/yt-dlp/yt-dlp
+  yt-dlp's source is released under the Unlicense, but the release binaries
+  bundle code under other licences and, as a combined work, are licensed under
+  the GNU General Public License v3.0 or later. The exact release is in the
+  image tag and in the label io.casatube.ytdlp.version; its source and its
+  THIRD_PARTY_LICENSES.txt are on that release's GitHub page:
+  https://github.com/yt-dlp/yt-dlp/releases
+
+FFmpeg, x264 and the other Alpine Linux packages
+  https://ffmpeg.org, https://www.videolan.org/developers/x264.html
+  Installed from the Alpine Linux package repositories. FFmpeg as built by
+  Alpine is licensed GPL-2.0-or-later AND LGPL-2.1-or-later; x264 is
+  GPL-2.0-or-later. Every package's name, version and licence can be listed
+  from inside the image with:
+    docker run --rm --entrypoint apk ghcr.io/xantiagoma/casatube list -I
+  The corresponding source code for every Alpine package, including the build
+  recipe used, is published by Alpine Linux at https://gitlab.alpinelinux.org/alpine/aports
+  (the branch matching the image's Alpine release, see ALPINE_VERSION in the
+  Dockerfile) and https://dl-cdn.alpinelinux.org/alpine/.
+
+  Some codecs FFmpeg supports (H.264, HEVC, AAC and others) may be covered by
+  patents in some countries. Whether a licence is needed for your use is your
+  responsibility.
+
+Bun
+  https://bun.sh, MIT License. Bun statically links JavaScriptCore (WebKit,
+  LGPL-2.1 / BSD) and other components listed at
+  https://bun.sh/docs/project/license
+
+JavaScript dependencies
+  Installed from npm into /app/node_modules, each with its own licence file
+  there. The direct dependencies are MIT, Apache-2.0 or ISC licensed;
+  package.json lists them.
+
+The source code for anything in the image that requires it is available at the
+locations above. If you cannot obtain it there, open an issue in this
+repository and it will be provided.
+
+
+Material in this repository not covered by the MIT License
+----------------------------------------------------------
+
+docs/screenshots/
+  The screenshots show Blender Studio's open movies, which are licensed under
+  Creative Commons Attribution licences by the Blender Foundation
+  (https://studio.blender.org/films/): Big Buck Bunny (c) 2008, Elephants
+  Dream (c) 2006, Sintel (c) 2010, Tears of Steel (c) 2012, Cosmos Laundromat
+  (c) 2015, Caminandes 3: Llamigos (c) 2016, Agent 327: Operation Barbershop
+  (c) 2017, Spring (c) 2019, Coffee Run (c) 2020, Sprite Fright (c) 2021,
+  Charge (c) 2022, Wing It! (c) 2023 and Glass Half (c) 2015, Blender
+  Foundation | studio.blender.org. Thumbnails and stills from them are shown
+  unmodified, apart from scaling.
+
+docs/brand/ and src/web/assets/
+  The CasaTube logo; see "Name and logo" above.

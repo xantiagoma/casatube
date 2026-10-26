@@ -87,7 +87,7 @@ ARG YTDLP_VERSION
 LABEL org.opencontainers.image.title="CasaTube" \
       org.opencontainers.image.description="Self-hosted media downloader that does not lose your work" \
       org.opencontainers.image.source="https://github.com/xantiagoma/casatube" \
-      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.licenses="MIT AND GPL-3.0-or-later AND GPL-2.0-or-later AND LGPL-2.1-or-later" \
       io.casatube.ytdlp.version="${YTDLP_VERSION}"
 
 # ffmpeg is the real thing from the Alpine repository (remux, embed subtitles,
@@ -118,6 +118,10 @@ COPY --from=ytdlp     /yt-dlp            /opt/yt-dlp/yt-dlp.pinned
 WORKDIR /app
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json ./
+# The image is itself a distribution — of CasaTube (MIT) and of GPL software
+# (yt-dlp's release binary, ffmpeg, x264) — so the licence and the notice that
+# says where those sources are travel with it.
+COPY LICENSE NOTICE /usr/share/licenses/casatube/
 COPY drizzle ./drizzle
 COPY src ./src
 

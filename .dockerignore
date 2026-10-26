@@ -16,7 +16,8 @@ node_modules/
 # Docs, plans and design assets (docs/mockups alone is several MB of PNG)
 docs/
 *.md
-LICENSE
+# LICENSE and NOTICE are not ignored: they ship in the image, because the image
+# is a copy of the software and a distribution of the GPL code inside it.
 
 # Local state — never bake a database or a download into an image
 data/

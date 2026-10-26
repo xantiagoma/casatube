@@ -203,13 +203,63 @@ current state. [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
 Built with Bun, Elysia, Drizzle + SQLite, bunqueue, React, TanStack Router and
 Query, Radix/shadcn, Tailwind and media-chrome.
 
-## Use responsibly
+## Disclaimer
 
-CasaTube is a tool for downloading media **you have the right to download** —
-your own uploads, freely licensed work, content whose terms allow it. Respect
-copyright and the terms of the sites you use. The authors are not responsible
-for how it is used.
+CasaTube is a personal, non-commercial project. Its author built it for their own household and
+publishes it in case it is useful to others. It is not a company or a product, and it is not meant
+to compete with or replace any service it works with. Nothing here is legal advice; if you are
+unsure whether something is allowed where you live, ask someone qualified to answer.
 
-## License
+- **Your downloads are your responsibility.** CasaTube is a tool, like a browser or a video
+  recorder. Use it only for media you have the right to download and keep: your own uploads,
+  works in the public domain or under a licence that allows it (Creative Commons, for example),
+  and content whose owner or whose platform's terms permit downloading. Copyright law, private-copy
+  exceptions and the terms of service of each site differ by country and by site, and **you** are
+  the one who has to comply with them. Many platforms — YouTube among them — forbid downloading
+  in their terms except through features they provide. Do not redistribute what you download
+  unless its licence lets you.
+- **No DRM circumvention.** CasaTube does not decrypt, bypass or remove DRM or any other
+  technical protection measure, and will not. Content protected that way is refused. Feature
+  requests or pull requests for circumventing such measures will be closed.
+- **Your accounts, your risk.** Cookies, passwords, API keys and Telegram sessions you add are
+  used to act as *you*, under the terms of those services. Automated access through your account
+  can break those terms and get it rate-limited, suspended or banned. A Telegram session in
+  particular is full access to your account. Whether to add one is your call.
+- **Sources change without notice.** Downloads depend on yt-dlp and on how each site works today.
+  The Google Drive and Telegram providers and the Vidarro plugin read services that publish no
+  stable API for this, and any of them can stop working at any time. Nothing is guaranteed to
+  keep downloading.
+- **Provided as is.** The software comes "as is", without warranty of any kind, as the
+  [MIT licence](LICENSE) states. You use it at your own risk, and you are responsible for how you
+  deploy and operate it: security (it has **no login of its own**, see above), storage, backups,
+  bandwidth, and the data that passes through it, including any personal data protected by laws
+  such as the GDPR.
+- **No commitments.** There is no support agreement, no SLA and no guaranteed roadmap. Fixes,
+  features and releases happen on a best-effort basis ([SUPPORT.md](SUPPORT.md)). Before 1.0, any
+  minor release may include breaking changes.
+- **Third-party software.** The Docker image bundles third-party software under its own licences,
+  including GPL-licensed components (the yt-dlp release binary, ffmpeg and x264) and codecs that
+  may be covered by patents in some countries (H.264, HEVC, AAC). [NOTICE](NOTICE) lists them and
+  where their source code is. Checking that they suit your use is your responsibility.
+- **No telemetry.** CasaTube sends nothing to its author or anyone else. The server contacts only
+  the sites you ask it to download from, the services you configure (Telegram, Jellyfin,
+  webhooks and anything a plugin you install calls), and GitHub if you turn on yt-dlp
+  self-updates. Your browser loads thumbnails straight from the source site while you browse.
+- **Trademarks.** YouTube, Google Drive, Telegram, Vimeo, Vidarro, Voomly, Jellyfin, Plex,
+  CasaOS, Tailscale, Blender and the other names in this repository are trademarks of their
+  respective owners. They appear only to describe compatibility. CasaTube is not affiliated with,
+  endorsed by or sponsored by any of them, nor by the yt-dlp or FFmpeg projects. The films in the
+  screenshots are [Blender Studio's open movies](https://studio.blender.org/films/), used under
+  their Creative Commons licences ([NOTICE](NOTICE)).
 
-[MIT](LICENSE)
+## Contributing, security and licence
+
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the setup, the
+checks CI runs and how this codebase works. Report vulnerabilities privately, as
+[SECURITY.md](SECURITY.md) explains, never in a public issue. Questions go where
+[SUPPORT.md](SUPPORT.md) says. Everyone taking part follows the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+The code is MIT licensed ([LICENSE](LICENSE)). [NOTICE](NOTICE) credits the third-party software
+in the Docker image and the material in this repository that is not covered by the MIT licence,
+including the name and logo.

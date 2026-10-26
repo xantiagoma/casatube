@@ -3,6 +3,21 @@
 Issues and pull requests are welcome. For anything larger than a fix, open an
 issue first so the approach can be agreed before the work is done.
 
+## What will not be merged
+
+- Anything that decrypts, bypasses or removes DRM or another technical
+  protection measure.
+- Providers or plugins whose purpose is getting past a site's paywall, login
+  or access controls for content the user is not entitled to.
+- Telemetry, analytics or any call home.
+- Bundled credentials, API keys or accounts of any kind (yt-dlp's shared Drive
+  key is the cautionary tale — see `docs/DISCOVERIES.md`).
+
+See the [disclaimer](README.md#disclaimer) for why.
+
+By contributing you agree that your contribution is licensed under the
+[MIT License](LICENSE), the same as the rest of the code.
+
 ## Setting up
 
 ```bash
