@@ -239,6 +239,10 @@ describe("DELETE /api/notifications", () => {
   });
 
   test("recent notifications are not old, whatever the broom is told", async () => {
+    // ⚠️ Ten minutes before the *real* now, not the fixed clock: the route
+    // measures age with `Date.now()`, so a fixed date here turned into "old" the
+    // day the calendar passed it by thirty days — a test with an expiry date.
+    at(new Date(Date.now() - 10 * 60_000).toISOString());
     const seeder = store();
     const written = await seeder.create({ title: "from ten minutes ago" });
     await seeder.markRead(written.id);

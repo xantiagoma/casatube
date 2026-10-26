@@ -417,7 +417,9 @@ describe("enforceRetention", () => {
 
     expect(outcome.byCap).toBe(1_190);
     expect(await store.unreadCount()).toBe(10);
-  });
+    // ⚠️ 1,200 committed inserts take ~1.5 s here and 7 s on a loaded box, past
+    // the 5 s default — a timeout that would read as a broken sweep.
+  }, 30_000);
 });
 
 describe("describeRetention", () => {
