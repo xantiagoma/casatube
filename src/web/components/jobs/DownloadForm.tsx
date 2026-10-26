@@ -352,13 +352,14 @@ function AnalyzedRow({
           title={analyzed.info.title}
           duration={analyzed.info.duration}
           kind={analyzed.options.resolutions.length === 0 ? "audio" : "video"}
-          unplayableHint="Preview only — the source hands out no playable URL."
+          unplayableHint="Preview only"
         />
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-semibold">{analyzed.info.title}</p>
         <p className="truncate text-xs text-muted-foreground">
-          {[analyzed.info.uploader, analyzed.info.source, hostOf(url)].filter(Boolean).join(" · ")}
+          {/* Not `info.source` as well: for most links it is the host again ("youtube · youtube.com"). */}
+          {[analyzed.info.uploader, hostOf(url)].filter(Boolean).join(" · ")}
           {analyzed.info.duration ? ` · ${formatDuration(analyzed.info.duration)}` : ""}
         </p>
         <p className="mt-1.5 truncate text-xs font-medium tabular-nums">{summary}</p>
@@ -736,7 +737,7 @@ function OptionsPanel(props: {
             title={analyzed.info.title}
             duration={analyzed.info.duration}
             kind={hasVideo ? "video" : "audio"}
-            unplayableHint="Preview only — the source hands out no playable URL."
+            unplayableHint="Preview only"
           />
           <dl className="grid grid-cols-2 content-start gap-y-1.5 text-xs">
             <dt className="text-muted-foreground">Provider</dt>
@@ -767,7 +768,7 @@ function OptionsPanel(props: {
           />
         </Step>
 
-        <Step index={next()} title="Subtitles" hint="Independent of the audio (R7). Authored subtitles win when a language has both.">
+        <Step index={next()} title="Subtitles" hint="Independent of the audio. Authored subtitles win when a language has both.">
           <SubtitlePicker
             options={analyzed.options.subtitles}
             subtitleTags={choices.subtitleTags}

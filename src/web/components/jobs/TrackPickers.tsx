@@ -454,7 +454,7 @@ export function AudioPicker({
           onSelect={() => onChange({ originalOnly: false })}
           label="Choose languages"
           badges={options.length > 1 ? [{ text: `${options.length} available` }] : []}
-          implication="Keep one or more dubs. Independent of subtitles (R7)."
+          implication="Keep one or more dubs. Independent of subtitles."
         />
       </div>
 

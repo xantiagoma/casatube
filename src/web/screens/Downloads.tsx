@@ -157,7 +157,13 @@ export function Downloads() {
       <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_28rem]">
         <div className="min-w-0 space-y-4">
           <div className="flex flex-wrap items-center gap-3">
-            <Tabs value={search.tab} onValueChange={(next) => patch({ tab: next as DownloadTab })}>
+            {/* Scrolls rather than clips: four tabs with counts are wider than
+                a phone, and the last one ("Scheduled") was simply cut off. */}
+            <Tabs
+              className="max-w-full overflow-x-auto"
+              value={search.tab}
+              onValueChange={(next) => patch({ tab: next as DownloadTab })}
+            >
               <TabsList>
                 {DOWNLOAD_TABS.map((tab) => (
                   <TabsTrigger key={tab} value={tab} className="gap-1.5">
@@ -181,7 +187,9 @@ export function Downloads() {
               is where the numbers you check first go to be never seen: on a
               screen with twenty rows you have to scroll past the whole table to
               find out whether anything is moving at all. */}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {/* Two across even on a phone: stacked one per row, the four tiles
+              pushed every job below the fold of the screen that lists them. */}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatTile
               label="Downloaded (24h)"
               value={formatBytes(analytics.data?.bytes)}

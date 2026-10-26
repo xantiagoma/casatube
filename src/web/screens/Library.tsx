@@ -478,6 +478,9 @@ function DetailPanel({
    * stream index the probe reports.
    */
   const audioTracks = (probe?.streams ?? []).filter((stream) => stream.kind === "audio");
+  // Data tracks — an MP4's timecode, "other · eng · bin_data" — are real
+  // streams and mean nothing to anyone choosing what to watch.
+  const mediaStreams = (probe?.streams ?? []).filter((stream) => stream.kind !== "other");
   const src =
     baseSrc !== null && isHls && audio !== null ? `${baseSrc}&audio=${audio}` : baseSrc;
   // The server's sentence when it has one: it names the real obstacle
@@ -598,11 +601,11 @@ function DetailPanel({
           ))}
         </dl>
 
-        {probe && probe.streams.length > 0 ? (
+        {mediaStreams.length > 0 ? (
           <div>
             <p className="mb-1.5 text-xs font-medium">Streams</p>
             <ul className="space-y-1">
-              {probe.streams.map((stream) => (
+              {mediaStreams.map((stream) => (
                 <li key={stream.index} className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs">
                   <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[10px]">
                     {stream.kind}

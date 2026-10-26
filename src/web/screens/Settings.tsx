@@ -164,7 +164,7 @@ function DefaultsFootnote() {
   return (
     <ServerOwned>
       These are the starting point, not a cage: the download form sends whatever it is showing, so a per-download
-      choice still wins. Audio and subtitle languages stay independent (R7), and the codec is a preselection — a
+      choice still wins. Audio and subtitle languages stay independent, and the codec is a preselection — a
       named one gives up resolution rather than being swapped for another codec behind your back.
     </ServerOwned>
   );
@@ -559,10 +559,9 @@ function AuthCard() {
         <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning">
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
           <span>
-            <strong>Anyone on this network can enqueue downloads and browse the library.</strong> PLAN §18 defers
-            authentication deliberately — it is not a blocker for a self-hosted LAN tool, and it becomes blocking
-            the moment CasaTube is reachable from outside. This section is shown, and disabled, so the decision
-            stays visible.
+            <strong>Anyone who can reach this port can enqueue downloads, browse the library and edit plugins.</strong>{" "}
+            CasaTube has no login of its own yet. That is fine on a private network or a VPN; anywhere else, put it
+            behind a reverse proxy that authenticates. This section is shown, and disabled, so that stays visible.
           </span>
         </p>
 
