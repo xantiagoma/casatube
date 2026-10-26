@@ -8,13 +8,14 @@
 
 services:
   casatube:
-    # ⚠️ The tag carries the yt-dlp release date as well as the app version
-    # (PLAN §14). Pinning only the app version silently pins a stale yt-dlp,
-    # and a stale yt-dlp is a downloader that stops working when YouTube moves.
-    # Build the tag with scripts in docs/DEPLOY.md § Building the image.
-    image: casatube:${CASATUBE_VERSION:-0.1.0}-ytdlp-${YTDLP_VERSION:-2026.08.19}
+    # The published image, amd64 and arm64. `latest` is rebuilt weekly with the
+    # newest yt-dlp; to pin, use the immutable tag instead — the app version and
+    # the yt-dlp release baked in, e.g. `0.1.0-ytdlp-2026.08.19` (PLAN §14).
+    # Tags: https://github.com/xantiagoma/casatube/pkgs/container/casatube
+    image: ghcr.io/xantiagoma/casatube:${CASATUBE_TAG:-latest}
 
-    # Remove the `build:` block when pulling a published image instead.
+    # Only used by `docker compose build` (or `up --build`), for running a
+    # local checkout instead of the published image.
     build:
       context: .
       dockerfile: Dockerfile
@@ -34,7 +35,7 @@ services:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       UMASK: ${UMASK:-022}
-      TZ: ${TZ:-America/Bogota}
+      TZ: ${TZ:-Etc/UTC}
 
       # ── Paths inside the container. Change the volumes below, not these.
       DATA_DIR: /data

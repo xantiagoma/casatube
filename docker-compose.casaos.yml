@@ -1,0 +1,59 @@
+# CasaTube for CasaOS: App Store → Custom Install → Import, paste this file.
+#
+# Adjust the two volume sources — where CasaTube keeps its database, and the
+# media library your media server reads — and PUID/PGID to the owner of that
+# library. Everything else has a sensible default. docs/DEPLOY.md § CasaOS has
+# the details, including a library on an rclone or SSHFS mount.
+#
+# ⚠️ Set CREDENTIALS_KEY (Settings in the CasaOS app editor, or an env_file)
+# before storing any cookie, password or Telegram session: without it they are
+# kept in plain text, and the app says so on every start.
+name: casatube
+services:
+  app:
+    container_name: casatube
+    image: ghcr.io/xantiagoma/casatube:latest
+    restart: unless-stopped
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      UMASK: "022"
+      TZ: Etc/UTC
+      PORT: "8520"
+      DATA_DIR: /data
+      TEMP_DIR: /data/tmp
+      LIBRARY_DIR: /library
+      MAX_CONCURRENT_DOWNLOADS: "3"
+      LOG_LEVEL: info
+      # Generate with: openssl rand -base64 48 — and keep a copy; losing it
+      # means re-entering every stored credential.
+      CREDENTIALS_KEY: ""
+    ports:
+      - target: 8520
+        published: "8520"
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: /DATA/AppData/casatube/data
+        target: /data
+      - type: bind
+        source: /DATA/Media/Videos
+        target: /library
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main: app
+  author: xantiagoma
+  developer: xantiagoma
+  category: Media
+  icon: https://cdn.jsdelivr.net/gh/xantiagoma/casatube@main/docs/brand/icon.png
+  index: /
+  port_map: "8520"
+  scheme: http
+  tagline:
+    en_us: Downloads that do not get lost
+  description:
+    en_us: Self-hosted video downloader with a real job queue that survives restarts and closed tabs. Pick resolution, audio tracks and subtitles per video, and files land in your media library named and tagged the way Jellyfin and Plex expect.
+  title:
+    en_us: CasaTube

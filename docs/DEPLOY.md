@@ -20,8 +20,12 @@ and CasaOS.
 
 ### Docker Compose (recommended)
 
+Images are published to GHCR for **amd64 and arm64**:
+`ghcr.io/xantiagoma/casatube`. Nothing needs cloning or building:
+
 ```bash
-git clone https://github.com/xantiagoma/casatube && cd casatube
+mkdir casatube && cd casatube
+curl -fsSLO https://raw.githubusercontent.com/xantiagoma/casatube/main/docker-compose.yml
 docker compose up -d
 docker compose logs -f
 ```
@@ -33,13 +37,14 @@ to it is the whole configuration:
 
 ```dotenv
 # .env
-CASATUBE_VERSION=0.1.0
-YTDLP_VERSION=2026.08.19
+# `latest` is rebuilt weekly with the newest yt-dlp. Pin the immutable tag
+# instead if you would rather update on purpose: 0.1.0-ytdlp-2026.08.19
+CASATUBE_TAG=latest
 
 PUID=1000
 PGID=1000
 UMASK=022
-TZ=America/Bogota
+TZ=Etc/UTC
 
 CASATUBE_PORT=8520
 CASATUBE_DATA=./data
@@ -55,6 +60,22 @@ CREDENTIALS_KEY=change-me-to-a-long-random-string
 nowhere else — not in the repository, and not in the backup that gets emailed
 around. `.gitignore` already covers it.
 
+To run a local checkout instead of the published image, clone the repository
+and `docker compose up -d --build`.
+
+### Image tags
+
+| tag | what it is |
+|---|---|
+| `0.1.0-ytdlp-2026.08.19` | **Immutable.** One app version with one yt-dlp release. Never rebuilt. |
+| `0.1.0`, `0.1` | That version with the newest yt-dlp; moves weekly. |
+| `latest` | The newest release with the newest yt-dlp; moves weekly. |
+| `edge` | The tip of `main`. Not a release. |
+
+The weekly rebuild exists because **yt-dlp is the part that rots**: sites
+change and yt-dlp follows them, so an image is only as current as the yt-dlp
+inside it. See [Why the tag carries a yt-dlp date](#why-the-tag-carries-a-yt-dlp-date).
+
 ### Plain Docker
 
 ```bash
@@ -62,17 +83,23 @@ docker run -d \
   --name casatube \
   --restart unless-stopped \
   -p 8520:8520 \
-  -e PUID=1000 -e PGID=1000 -e UMASK=022 -e TZ=America/Bogota \
+  -e PUID=1000 -e PGID=1000 -e UMASK=022 -e TZ=Etc/UTC \
   -e CREDENTIALS_KEY="$(openssl rand -base64 48)" \
   -v /srv/casatube:/data \
   -v /mnt/media/youtube:/library \
-  casatube:0.1.0-ytdlp-2026.08.19
+  ghcr.io/xantiagoma/casatube:latest
 ```
+
+⚠️ That `CREDENTIALS_KEY` is generated once and then lost with the shell. Fine
+for a try; for keeps, store it somewhere — without it, credentials sealed with
+it cannot be read again.
 
 ### CasaOS
 
 CasaOS installs from a Compose file: **App Store → Custom Install → Import**,
-paste `docker-compose.yml`, and adjust the volume paths and `PUID`/`PGID`. From
+paste [`docker-compose.casaos.yml`](../docker-compose.casaos.yml) — the
+published image plus the `x-casaos` menu entry — and adjust the volume paths
+and `PUID`/`PGID`. From
 a shell it is `casaos-cli app-management install -f <compose>`, and an
 `x-casaos:` block in the file supplies the menu entry — title, icon, category,
 `port_map` and `index: /`.
@@ -86,9 +113,9 @@ Three things to set so it behaves like the rest of a CasaOS box:
   them.
 - **Point the library at the same share the media server reads**, not at a
   private CasaOS volume, or nothing will ever see the downloads.
-- **`pull_policy: missing`**, for an image built on the box. Without it CasaOS
-  tries to pull `casatube:latest`, which exists in no registry, and the install
-  fails on an image that is already there.
+- **`pull_policy: missing`**, only for an image built on the box rather than
+  pulled from GHCR. Without it CasaOS tries to pull a local-only tag from a
+  registry and the install fails on an image that is already there.
 
 🔴 **Once CasaOS manages the app, stop using `docker run` and `docker compose`
 on it.** Recreating the container by hand leaves CasaOS's record pointing at a
@@ -96,7 +123,7 @@ container that no longer exists, and the menu entry stops matching the thing
 that is running. Redeploy through CasaOS instead:
 
 ```bash
-docker build --build-arg YTDLP_VERSION=2026.08.19 -t casatube:latest .
+# bump the image tag in your compose, then:
 casaos-cli app-management apply casatube -f <your-compose>   # appid, then -f
 ./scripts/smoke.sh
 ```
@@ -131,11 +158,11 @@ inside:
 ```yaml
 volumes:
   - type: bind
-    source: /mnt/mailmedia          # the parent, not /mnt/mailmedia/videos
-    target: /mnt/mailmedia
+    source: /mnt/media          # the parent, not /mnt/media/videos
+    target: /mnt/media
     bind: { propagation: rshared }
 environment:
-  LIBRARY_DIR: /mnt/mailmedia/videos
+  LIBRARY_DIR: /mnt/media/videos
 ```
 
 📌 The image declares `EXPOSE 8520` and `VOLUME /data`, so CasaOS picks up the
@@ -213,9 +240,10 @@ docker buildx build --platform linux/amd64,linux/arm64 \
   -t casatube:0.1.0-ytdlp-2026.08.19 --push .
 ```
 
-> Only `linux/amd64` has been built and run so far. `arm64` selects
-> `yt-dlp_musllinux_aarch64`, which exists in the same release, but it has not
-> been exercised.
+Published images are built this way by `.github/workflows/release.yml` — each
+architecture natively on its own runner, then joined under one tag — and CI
+builds and smoke-tests both on every change. `arm64` selects
+`yt-dlp_musllinux_aarch64` from the same yt-dlp release.
 
 ---
 
@@ -782,9 +810,11 @@ and unhappy.
 docker exec casatube yt-dlp -U && docker restart casatube
 ```
 
-Then rebuild with the new `YTDLP_VERSION` so the tag matches reality again —
-otherwise the fix disappears on the next recreate (see
-[Updating yt-dlp](#updating-yt-dlp)).
+That fix disappears on the next recreate (see
+[Updating yt-dlp](#updating-yt-dlp)). The lasting one is a newer image: on
+`latest` or a bare version tag, `docker compose pull && docker compose up -d`
+picks up the weekly rebuild with the newest yt-dlp. A build of your own takes
+the new `YTDLP_VERSION` as a build argument.
 
 ### `Sign in to confirm you're not a bot`
 
